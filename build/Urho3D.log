@@ -1,0 +1,4 @@
+[Mon Sep 21 00:17:07 2026] INFO: Opened log file Urho3D.log
+[Mon Sep 21 00:17:07 2026] INFO: Created 5 worker threads
+[Mon Sep 21 00:17:07 2026] INFO: Added resource path /home/larp/MyShooter/build/Data/
+[Mon Sep 21 00:17:07 2026] ERROR: Failed to add resource path 'CoreData', check the documentation on how to set the 'resource prefix path'
