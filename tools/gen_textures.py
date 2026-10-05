@@ -7,7 +7,7 @@
 import math, os, random, struct, sys
 
 random.seed(1337)
-S = 512  # размер текстур
+S = 1024  # размер текстур (HD v2)
 
 def clamp(v): return 0 if v < 0 else (255 if v > 255 else int(v))
 
@@ -28,6 +28,19 @@ def save_bmp(path, pixels):
     dib = struct.pack('<IiiHHIIiiII', 40, w, h, 1, 24, 0, len(data), 2835, 2835, 0, 0)
     with open(path, 'wb') as f:
         f.write(header + dib + data)
+
+
+def save_png(path, pixels):
+    """PNG через PIL если есть; иначе BMP."""
+    try:
+        from PIL import Image
+        im = Image.new('RGB', (len(pixels[0]), len(pixels)))
+        im.putpixels if False else None
+        im = Image.frombytes('RGB', (len(pixels[0]), len(pixels)), b''.join(bytes((clamp(r),clamp(g),clamp(b))) for row in pixels for (r,g,b) in row))
+        im.save(path, optimize=True)
+        return True
+    except Exception:
+        return False
 
 def height_to_normal(hf, strength=2.0):
     """hf[y][x] float 0..1 -> normal map pixels."""
@@ -211,11 +224,18 @@ def main():
         'CrateWood': crate_wood(),
         'BrushedMetal': metal(),
     }
+    ok_png = save_png(os.path.join(out, '_probe.png'), [[(0,0,0)]*4]*4)
+    if os.path.exists(os.path.join(out, '_probe.png')): os.remove(os.path.join(out, '_probe.png'))
+    ext = '.png' if ok_png else '.bmp'
+    def save(name, px):
+        p = os.path.join(out, name + ext)
+        if not (ok_png and save_png(p, px)):
+            save_bmp(os.path.join(out, name + '.bmp'), px)
     for name, (diff, norm) in jobs.items():
-        save_bmp(os.path.join(out, name + 'Diffuse.bmp'), diff)
-        save_bmp(os.path.join(out, name + 'Normal.bmp'), norm)
-        print('OK', name)
-    save_bmp(os.path.join(out, 'SkyDay.bmp'), sky_day())
+        save(name + 'Diffuse', diff)
+        save(name + 'Normal', norm)
+        print('OK', name, ext)
+    save('SkyDay', sky_day())
     print('Done ->', out)
 
 if __name__ == '__main__':

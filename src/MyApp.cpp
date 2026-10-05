@@ -37,6 +37,8 @@
 #include <Urho3D/Graphics/ParticleEffect.h>
 #include <Urho3D/Graphics/Octree.h>
 #include <Urho3D/Graphics/DebugRenderer.h>
+#include <Urho3D/Graphics/Skybox.h>
+#include <Urho3D/Graphics/RenderPath.h>
 
 #include <Urho3D/Scene/Scene.h>
 #include <Urho3D/Graphics/Zone.h>
@@ -136,8 +138,9 @@ namespace GameConstants {
     constexpr int NUM_TARGETS = 10;
     
     // Настройки уровня
-    constexpr int ARENA_SIZE = 50;
-    constexpr float TILE_SIZE = 2.0f;
+    constexpr int ARENA_SIZE = 48;      // тайлов на сторону (было 50)
+    constexpr float TILE_SIZE = 4.0f;   // крупнее тайл -> арена 192x192 м вместо 100x100
+    constexpr float FLOOR_TILE_UV_SCALE = 6.0f; // сколько раз тайл-текстура ложится на плиту пола
 }
 
 // ============================================================================
@@ -447,10 +450,13 @@ private:
         graphics->SetSRGB(true);
         
         // Настройки рендерера
-        renderer->SetShadowMapSize(2048);
+        renderer->SetShadowMapSize(4096);           // карта теней 4K: чёткие края на большой арене
         renderer->SetSpecularLighting(true);
         renderer->SetHDRRendering(true);
-        renderer->SetNumOccluderTriangles(16384);   // больше теней от мелкой геометрии
+        renderer->SetGlowThreshold(0.6f);            // HDR-свечение яркого (неон, вспышки, маяки)
+        renderer->SetGlowBias(0.05f);
+        renderer->SetGlowBlur(BLEUR_TWICE);          // мягкий размытый bloom
+        renderer->SetNumOccluderTriangles(65536);   // больше теней от мелкой геометрии
         renderer->SetNumLights(8);                  // неоновые маяки и подсветка арены
         
         // Настройка окна
@@ -523,8 +529,13 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
      {
          Material* anisoMats[] = { hdStone_, hdFloor_, hdPanel_, hdMetal_, hdCrate_ };
          for (Material* m : anisoMats) {
-             if (m) m->SetParameter(MAT_ANISOTROPY, Variant(4.0f));
+             if (m) m->SetParameter(MAT_ANISOTROPY, Variant(8.0f)); // 8x анизотропия: чёткий пол под острым углом
          }
+         // Компенсация увеличенных плит пола: текстура кладётся тем же плотным узором
+         if (hdFloor_) hdFloor_->SetTextureScaling(TU_DIFFUSE, Vector2(GameConstants::FLOOR_TILE_UV_SCALE, GameConstants::FLOOR_TILE_UV_SCALE));
+         if (hdFloor_) hdFloor_->SetTextureScaling(TU_NORMAL, Vector2(GameConstants::FLOOR_TILE_UV_SCALE, GameConstants::FLOOR_TILE_UV_SCALE));
+         if (hdStone_) { hdStone_->SetTextureScaling(TU_DIFFUSE, Vector2(2.0f, 2.0f)); hdStone_->SetTextureScaling(TU_NORMAL, Vector2(2.0f, 2.0f)); }
+         if (hdPanel_) { hdPanel_->SetTextureScaling(TU_DIFFUSE, Vector2(2.0f, 2.0f)); hdPanel_->SetTextureScaling(TU_NORMAL, Vector2(2.0f, 2.0f)); }
      }
      // Материалы оружия под текущий скин
      RefreshWeaponMaterials();
@@ -620,21 +631,36 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
 
         // Создаем освещение
         CreateLighting();
+
+        // Зона рендеринга: ambient + дымка по дальности (ощущение масштаба арены)
+        CreateZone();
+    }
+
+    void CreateZone() {
+        Node* zoneNode = scene_->CreateChild("Zone");
+        Zone* zone = zoneNode->CreateComponent<Zone>();
+        zone->SetBoundingBox(BoundingBox(-700.0f, 700.0f));
+        // Мягкий холодный ambient — нет чёрных провалов, но контраст теней сохраняется
+        zone->SetAmbientColor(Color(0.30f, 0.34f, 0.44f));
+        zone->SetFogColor(Color(0.60f, 0.70f, 0.84f));
+        zone->SetFogStart(80.0f);
+        zone->SetFogEnd(260.0f);
+        zone->SetVisibleDistance(500.0f);
     }
 
     void CreateSky() {
+        // Небо через Skybox: рисуется до сцены на бесконечности — не мерцает с геометрией
         Node* skyNode = scene_->CreateChild("Sky");
-        skyNode->SetPosition(Vector3(0, 0, 0));
         skyMaterial_ = new Material(context_);
         skyMaterial_->SetTechnique(0, GetSubsystem<ResourceCache>()->GetResource<Technique>("Techniques/DiffUnlit.xml"));
         if (skyTexture_) skyMaterial_->SetTexture(TU_DIFFUSE, skyTexture_);
-        skyMaterial_->SetDiffuseColor(Color(120, 160, 220));
+        skyMaterial_->SetDiffuseColor(Color(150, 185, 235));
         skyMaterial_->SetCullMode(CULL_NONE);
-        StaticModel* sky = skyNode->CreateComponent<StaticModel>();
-        sky->SetModel(cache_GetSphere());
+        skyMaterial_->SetGlowEnabled(true); // облака чуть светятся в HDR
+        Skybox* sky = skyNode->CreateComponent<Skybox>();
+        sky->SetModel(boxModel_);
         sky->SetMaterial(skyMaterial_);
-        skyNode->SetScale(400.0f);
-        sky->SetCastShadows(false);
+        sky->SetDrawDistance(900.0f);
     }
 
     Model* cache_GetSphere() {
@@ -807,8 +833,8 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     }
     
     void CreateWalls() {
-        const float wallHeight = 5.0f;
-        const float wallThickness = 1.0f;
+        const float wallHeight = 8.0f;    // выше: арена 192x192 м выглядит «стадионом»
+        const float wallThickness = 2.0f;
         const float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
         
         // Северная стена
@@ -819,6 +845,22 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         CreateWall(Vector3(-arenaSize, wallHeight/2, 0), Vector3(wallThickness, wallHeight, arenaSize));
         // Восточная стена
         CreateWall(Vector3(arenaSize, wallHeight/2, 0), Vector3(wallThickness, wallHeight, arenaSize));
+
+        // Верхний светящийся пояс по периметру (без физики — только красота в тумане)
+        SharedPtr<Material> neonStrip = MakeTinted(nullptr, nullptr, Color(60, 220, 255));
+        const float topY = wallHeight - 0.4f;
+        Node* sN = scene_->CreateChild("TrimN"); sN->SetPosition(Vector3(0, topY, -arenaSize + 0.6f)); sN->SetScale(Vector3(arenaSize*2, 0.25f, 0.15f));
+        Node* sS = scene_->CreateChild("TrimS"); sS->SetPosition(Vector3(0, topY,  arenaSize - 0.6f)); sS->SetScale(Vector3(arenaSize*2, 0.25f, 0.15f));
+        Node* sW = scene_->CreateChild("TrimW"); sW->SetPosition(Vector3(-arenaSize + 0.6f, topY, 0)); sW->SetScale(Vector3(0.15f, 0.25f, arenaSize*2));
+        Node* sE = scene_->CreateChild("TrimE"); sE->SetPosition(Vector3( arenaSize - 0.6f, topY, 0)); sE->SetScale(Vector3(0.15f, 0.25f, arenaSize*2));
+        Node* trims[4] = { sN, sS, sW, sE };
+        for (Node* t : trims) {
+            StaticModel* sm = t->CreateComponent<StaticModel>();
+            sm->SetModel(boxModel_);
+            sm->SetMaterial(neonStrip);
+            sm->SetCastShadows(false);
+            decoNodes_.Push(t);
+        }
     }
     
     void CreateWall(const Vector3& position, const Vector3& scale) {
@@ -1044,12 +1086,18 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         // Основной направленный свет (солнце)
         Node* sunNode = scene_->CreateChild("Sun");
         sunNode->SetPosition(Vector3(0, 20, 10));
-        sunNode->SetDirection(Vector3(-1, -1, -1).Normalized());
+        sunNode->SetDirection(Vector3(-0.55f, -0.62f, -0.56f).Normalized());
         
         Light* sunLight = sunNode->CreateComponent<Light>();
         sunLight->SetLightType(LIGHT_DIRECTIONAL);
-        sunLight->SetColor(Color(1.0f, 0.95f, 0.8f, 1.0f));
+        sunLight->SetColor(Color(1.0f, 0.92f, 0.74f, 1.0f)); // «золотой час»: тёплый свет, длинные тени
+        sunLight->SetBrightness(0.9f);
         sunLight->SetCastShadows(true);
+        sunLight->SetShadowDistance(140.0f);   // 4K-карта покрывает 140 м вокруг игрока — края арены в дымке
+        sunLight->SetOrthographicExtent(70.0f);
+        sunLight->SetCascadeCount(3);          // каскады: резкие тени вблизи, мягкие вдали
+        sunLight->SetShadowBias(0.0025f);
+        sunLight->SetVarianceShadowWidth(1.0f);
         // Точечные источники света
         float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
         
@@ -1059,9 +1107,11 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         
         Light* pl1 = pointLight1->CreateComponent<Light>();
         pl1->SetLightType(LIGHT_POINT);
-        pl1->SetColor(Color(0.8f, 0.8f, 1.0f, 1.0f));
-        pl1->SetRange(20.0f);
+        pl1->SetColor(Color(0.8f, 0.85f, 1.0f, 1.0f));
+        pl1->SetBrightness(1.25f);
+        pl1->SetRange(30.0f);
         pl1->SetCastShadows(true);
+        pl1->SetShadowDistance(35.0f);
         
         // Дополнительные точечные светильники по углам
         Vector3 lightPositions[] = {
@@ -1078,8 +1128,9 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             Light* pl = lightNode->CreateComponent<Light>();
             pl->SetLightType(LIGHT_POINT);
             pl->SetColor(Color(1.0f, 0.9f, 0.7f, 1.0f));
-            pl->SetRange(15.0f);
-            pl->SetCastShadows(true);
+            pl->SetBrightness(1.15f);
+            pl->SetRange(30.0f);
+            pl->SetCastShadows(false); // экономия: дорогие кубические тени только у солнца и центра
         }
         
         // ambient light
