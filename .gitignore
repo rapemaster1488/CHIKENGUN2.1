@@ -1,0 +1,3 @@
+build/
+bin/Urho3D.log
+*.o
