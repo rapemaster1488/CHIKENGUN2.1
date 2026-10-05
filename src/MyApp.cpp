@@ -74,6 +74,14 @@
 #include <Urho3D/Math/MathDefs.h>
 #include <Urho3D/Math/Vector3.h>
 #include <Urho3D/Math/Quaternion.h>
+#include <Urho3D/Math/Color.h>
+
+#include <Urho3D/Graphics/CustomGeometry.h>
+#include <Urho3D/UI/Button.h>
+#include <Urho3D/UI/Window.h>
+#include <Urho3D/UI/ScrollView.h>
+#include <Urho3D/UI/MenuBar.h>
+#include <Urho3D/UI/Menu.h>
 
 using namespace Urho3D;
 
@@ -126,8 +134,66 @@ struct TargetData {
     TargetData() : health_(GameConstants::TARGET_HEALTH), isActive_(true), scoreValue_(100) {}
 };
 
+enum GameMode {
+    MODE_RANGE = 0,   // тир с мишенями
+    MODE_ARENA,       // бесконечные волны роботов
+    MODE_COUNT
+};
+
+enum WeaponType {
+    W_PISTOL = 0,
+    W_SMG,
+    W_RIFLE,
+    W_SHOTGUN,
+    W_SNIPER,
+    W_MINIGUN,
+    W_LAUNCHER,
+    WEAPON_COUNT
+};
+
+struct WeaponDef {
+    const char* name;
+    float damage;
+    float fireRate;      // сек между выстрелами
+    int   magSize;
+    int   reserveMax;
+    float spread;        // радианы
+    float reloadTime;
+    int   pellets;       // дробь
+    Color tint;          // базовый цвет модели
+};
+
+static const WeaponDef WEAPON_DEFS[WEAPON_COUNT] = {
+    { "PISTOL",  34.0f, 0.22f, 12,  96, 0.012f, 1.4f, 1, Color(120,120,130) },
+    { "SMG",     18.0f, 0.075f, 30, 180, 0.030f, 2.0f, 1, Color( 90, 95,105) },
+    { "RIFLE",   26.0f, 0.10f, 30, 150, 0.018f, 2.4f, 1, Color( 70, 80, 70) },
+    { "SHOTGUN", 12.0f, 0.85f,  6,  48, 0.060f, 2.8f, 8, Color(100, 70, 40) },
+    { "SNIPER", 110.0f,1.20f,   5,  30, 0.002f, 3.2f, 1, Color( 60, 60, 66) },
+    { "MINIGUN", 14.0f, 0.045f, 120, 400, 0.045f, 4.2f, 1, Color(110, 85, 60) },
+    { "LAUNCHER",150.0f,1.50f,   4,  20, 0.020f, 3.6f, 1, Color( 70, 95, 70) },
+};
+
+struct SkinDef {
+    const char* name;
+    Color color;
+    bool  emissive;
+};
+
+static const SkinDef SKIN_DEFS[] = {
+    { "DEFAULT",   Color(150,150,160), false },
+    { "GOLD",      Color(255,190, 60), false },
+    { "NEON",      Color( 40,255,160), true  },
+    { "CRIMSON",   Color(200, 30, 40), false },
+    { "ARCTIC",    Color(210,235,255), false },
+    { "OCEAN",     Color( 40,140,255), true  },
+    { "VOID",      Color(120, 40,200), true  },
+    { "TOXIC",     Color(160,255, 40), true  },
+};
+constexpr int SKIN_COUNT = 8;
+
 struct WeaponState {
     int currentAmmo_;
+    int weaponType_;
     int reserveAmmo_;
     bool isReloading_;
     float reloadTimer_;
@@ -145,6 +211,7 @@ struct WeaponState {
         , recoilX_(0.0f)
         , recoilY_(0.0f)
         , weaponBobPhase_(0.0f)
+        , weaponType_(W_RIFLE)
     {}
 };
 
@@ -229,6 +296,23 @@ private:
     float damageFlashTimer_ = 0.0f;
     float timeAcc_ = 0.0f;
     Vector<PendingRemove> pendingRemoves_;
+
+    // Новый контент: режимы, оружие, скины, арена
+    GameMode gameMode_ = MODE_RANGE;
+    int currentWeapon_ = W_RIFLE;
+    int currentSkin_ = 0;
+    Vector<Node*> robotNodes_;
+    float waveSpawnTimer_ = 0.0f;
+    int waveNumber_ = 0;
+    Vector<SharedPtr<Node>> decoNodes_;
+    SharedPtr<Text> weaponNameText_;
+    bool armoryOpen_ = false;
+    SharedPtr<UIElement> armoryPanel_;
+    Vector<SharedPtr<Text>> armoryWeaponRows_;
+    Vector<SharedPtr<Text>> armorySkinRows_;
+    float autoFireTimer_ = 0.0f;
+    SharedPtr<UIElement> hudPanelBg_;
+    SharedPtr<BorderImage> healthBarFill_;
     
     // Ресурсы
     Model* boxModel_ = nullptr;
@@ -240,6 +324,14 @@ private:
     Material* targetHitMaterial_ = nullptr;
     Material* floorMaterialLight_ = nullptr;
     Material* floorMaterialDark_ = nullptr;
+    Material* hdStone_ = nullptr;
+    Material* hdFloor_ = nullptr;
+    Material* hdPanel_ = nullptr;
+    Material* hdMetal_ = nullptr;
+    Material* hdCrate_ = nullptr;
+    Material* skyMaterial_ = nullptr;
+    Texture* skyTexture_ = nullptr;
+    Vector<SharedPtr<Material>> weaponTintMats_;
     ParticleEffect* sparkEffect_ = nullptr;
     ParticleEffect* smokeEffect_ = nullptr;
     Font* font_ = nullptr;
@@ -253,6 +345,14 @@ private:
 
 public:
     MyApp(Context* context) : Application(context) {}
+
+    // Предварительные объявления методов, используемых до определения
+    void ToggleArmory();
+    void CreateArmoryMenu();
+    void HandleArmoryClick(bool left);
+    void CycleSkin(int dir);
+    void ApplyExplosionDamage(const Vector3& center, float damage);
+    void UpdateArmoryHighlight();
 
     void Start() override {
         // Инициализация случайных чисел
@@ -286,8 +386,11 @@ public:
         // Подписка на события
         SubscribeToEvents();
         
+        // Применение выбранного оружия/скина
+        EquipWeapon(currentWeapon_, true);
+
         // Показ сообщения о начале игры
-        ShowMessage("Добро пожаловать в FPS Demo!\nWASD - движение, ЛКМ - огонь, R - перезарядка, Shift - бег, Esc - выход");
+        ShowMessage("CHIKENGUN 2.1 | WASD - движение, ЛКМ - огонь, R - перезарядка\n1-5 оружие, TAB меню оружейной, F режим, Esc выход");
     }
 
 private:
@@ -306,6 +409,9 @@ private:
         // Настройки рендерера
         renderer->SetShadowMapSize(2048);
         renderer->SetSpecularLighting(true);
+        renderer->SetHDRRendering(true);
+        renderer->SetNumOccluderTriangles(16384);   // больше теней от мелкой геометрии
+        renderer->SetNumLights(8);                  // неоновые маяки и подсветка арены
         
         // Настройка окна
     }
@@ -343,19 +449,65 @@ private:
         return true;
     }
     
+SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<Texture>& norm, const Color& c) {
+        auto* cache = GetSubsystem<ResourceCache>();
+        SharedPtr<Material> m = new Material(context_);
+        m->SetTechnique(0, cache->GetResource<Technique>("Techniques/DiffUnlit.xml"));
+        if (diff) { m->SetTexture(TU_DIFFUSE, diff); }
+        m->SetDiffuseColor(c);
+        return m;
+    }
+
  void CreateMaterials() {
      auto* cache = GetSubsystem<ResourceCache>();
-     stoneMaterial_ = cache->GetResource<Material>("Materials/Stone.xml");
-     if (!stoneMaterial_) stoneMaterial_ = cache->GetResource<Material>("DefaultGrey.xml");
+     // --- HD текстуры (сгенерированы tools/gen_textures.py) ---
+     hdStone_  = cache->GetResource<Material>("Materials/Game/StoneHD.xml");
+     hdFloor_  = cache->GetResource<Material>("Materials/Game/FloorTile.xml");
+     hdPanel_  = cache->GetResource<Material>("Materials/Game/MetalPanel.xml");
+     hdMetal_  = cache->GetResource<Material>("Materials/Game/BrushedMetal.xml");
+     hdCrate_  = cache->GetResource<Material>("Materials/Game/CrateWood.xml");
+     skyTexture_ = cache->GetResource<Texture2D>("Textures/SkyDay.png");
+
+     stoneMaterial_ = hdStone_ ? hdStone_ : cache->GetResource<Material>("Materials/Stone.xml");
      if (!stoneMaterial_) stoneMaterial_ = new Material(context_);
-     metalMaterial_ = cache->GetResource<Material>("Materials/Metal.xml");
-     if (!metalMaterial_) metalMaterial_ = stoneMaterial_;
-     targetMaterial_ = stoneMaterial_;
-     targetHitMaterial_ = stoneMaterial_;
-     floorMaterialLight_ = stoneMaterial_;
-     floorMaterialDark_ = stoneMaterial_;
-     URHO3D_LOGINFO(stoneMaterial_ ? "Base material OK" : "Base material NULL");
+     metalMaterial_ = hdMetal_ ? hdMetal_ : stoneMaterial_;
+     // Мишени: яркие процедурные unlit-материалы, чтобы были видны всегда
+     {
+         SharedPtr<Texture> white;
+         targetMaterial_ = MakeTinted(white, nullptr, Color(230, 60, 60));
+         targetHitMaterial_ = MakeTinted(white, nullptr, Color(255, 220, 120));
+     }
+     floorMaterialLight_ = hdFloor_ ? hdFloor_ : stoneMaterial_;
+     floorMaterialDark_  = hdPanel_ ? hdPanel_ : stoneMaterial_;
+     // Анизотропная фильтрация: пол/стены не мылятся под углом
+     {
+         Material* anisoMats[] = { hdStone_, hdFloor_, hdPanel_, hdMetal_, hdCrate_ };
+         for (Material* m : anisoMats) {
+             if (m) m->SetParameter(MAT_ANISOTROPY, Variant(4.0f));
+         }
+     }
+     // Материалы оружия под текущий скин
+     RefreshWeaponMaterials();
+     URHO3D_LOGINFO(stoneMaterial_ ? "Base material OK (HD)" : "Base material NULL");
  }
+
+    void RefreshWeaponMaterials() {
+        weaponTintMats_.Clear();
+        const SkinDef& skin = SKIN_DEFS[currentSkin_];
+        for (int w = 0; w < WEAPON_COUNT; ++w) {
+            Color base = WEAPON_DEFS[w].tint;
+            Color c(base.r_ * 0.45f + skin.color.r_ * 0.55f,
+                    base.g_ * 0.45f + skin.color.g_ * 0.55f,
+                    base.b_ * 0.45f + skin.color.b_ * 0.55f);
+            c = ClampColor(c);
+            weaponTintMats_.Push(MakeTinted(nullptr, nullptr, c));
+        }
+    }
+
+    static Color ClampColor(Color c) {
+        if (c.r_ > 1) c.r_ = 1; if (c.g_ > 1) c.g_ = 1; if (c.b_ > 1) c.b_ = 1;
+        return c;
+    }
     
     void CreateParticleEffects() {
         auto* cache = GetSubsystem<ResourceCache>();
@@ -422,8 +574,165 @@ private:
         CreateObstacles();
         CreateTargets();
         
+        // Небо и декорации новой арены
+        CreateSky();
+        CreateArenaDecor();
+
         // Создаем освещение
         CreateLighting();
+    }
+
+    void CreateSky() {
+        Node* skyNode = scene_->CreateChild("Sky");
+        skyNode->SetPosition(Vector3(0, 0, 0));
+        skyMaterial_ = new Material(context_);
+        skyMaterial_->SetTechnique(0, GetSubsystem<ResourceCache>()->GetResource<Technique>("Techniques/DiffUnlit.xml"));
+        if (skyTexture_) skyMaterial_->SetTexture(TU_DIFFUSE, skyTexture_);
+        skyMaterial_->SetDiffuseColor(Color(120, 160, 220));
+        skyMaterial_->SetCullMode(CULL_NONE);
+        StaticModel* sky = skyNode->CreateComponent<StaticModel>();
+        sky->SetModel(cache_GetSphere());
+        sky->SetMaterial(skyMaterial_);
+        skyNode->SetScale(400.0f);
+        sky->SetCastShadows(false);
+    }
+
+    Model* cache_GetSphere() {
+        return sphereModel_ ? sphereModel_ : boxModel_;
+    }
+
+    void CreateArenaDecor() {
+        auto* cache = GetSubsystem<ResourceCache>();
+        SharedPtr<Material> glowRed   = MakeTinted(nullptr, nullptr, Color(255, 40, 40));
+        SharedPtr<Material> glowCyan  = MakeTinted(nullptr, nullptr, Color(40, 220, 255));
+        SharedPtr<Material> glowGreen = MakeTinted(nullptr, nullptr, Color(60, 255, 120));
+        const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
+
+        // Светящиеся неоновые полосы вдоль стен
+        for (int side = 0; side < 4; ++side) {
+            for (int seg = 0; seg < 6; ++seg) {
+                Node* strip = scene_->CreateChild("NeonStrip");
+                float t = -half + (half * 2.0f) * (seg / 5.0f);
+                if (side == 0) { strip->SetPosition(Vector3(t, 0.15f, -half + 0.6f)); strip->SetScale(Vector3(half/3.2f, 0.06f, 0.12f)); }
+                else if (side == 1) { strip->SetPosition(Vector3(t, 0.15f, half - 0.6f)); strip->SetScale(Vector3(half/3.2f, 0.06f, 0.12f)); }
+                else if (side == 2) { strip->SetPosition(Vector3(-half + 0.6f, 0.15f, t)); strip->SetScale(Vector3(0.12f, 0.06f, half/3.2f)); }
+                else { strip->SetPosition(Vector3(half - 0.6f, 0.15f, t)); strip->SetScale(Vector3(0.12f, 0.06f, half/3.2f)); }
+                StaticModel* sm = strip->CreateComponent<StaticModel>();
+                sm->SetModel(boxModel_);
+                sm->SetMaterial((seg % 2) ? glowCyan : glowGreen);
+                decoNodes_.Push(strip);
+            }
+        }
+
+        // Ящики-укрытия с деревянной HD текстурой
+        const Vector3 cratePos[] = {
+            Vector3(14, 1, 14), Vector3(-16, 1, 10), Vector3(12, 1, -18),
+            Vector3(-14, 1, -14), Vector3(22, 1, 4), Vector3(-24, 1, -2)
+        };
+        for (const auto& pos : cratePos) {
+            Node* crate = scene_->CreateChild("Crate");
+            crate->SetPosition(pos);
+            crate->SetScale(Vector3(2.0f, 2.0f, 2.0f));
+            crate->SetRotation(Quaternion(0, (float)(rand() % 90 - 45), 0));
+            StaticModel* cm = crate->CreateComponent<StaticModel>();
+            cm->SetModel(boxModel_);
+            SharedPtr<Material> tintedWood = MakeTinted(nullptr, nullptr,
+                Color(180 + (rand()%50), 140 + (rand()%40), 90 + (rand()%30)));
+            cm->SetMaterial(hdCrate_ ? hdCrate_ : tintedWood.Raw());
+            RigidBody* rb = crate->CreateComponent<RigidBody>();
+            rb->SetFriction(0.8f);
+            CollisionShape* cs = crate->CreateComponent<CollisionShape>();
+            cs->SetBox(Vector3::ONE);
+        }
+
+        // Бочки с металлической HD-текстурой (укрытия в центре)
+        const Vector3 barrelPos[] = {
+            Vector3(5, 0.9f, -6), Vector3(-7, 0.9f, 5), Vector3(9, 0.9f, 9),
+            Vector3(-4, 0.9f, -11), Vector3(14, 0.9f, -6), Vector3(-12, 0.9f, -8)
+        };
+        for (const auto& bp : barrelPos) {
+            Node* barrel = scene_->CreateChild("Barrel");
+            barrel->SetPosition(bp);
+            barrel->SetScale(Vector3(1.1f, 1.8f, 1.1f));
+            StaticModel* bm2 = barrel->CreateComponent<StaticModel>();
+            Model* cylM = cache->GetResource<Model>("Models/Cylinder.mdl");
+            bm2->SetModel(cylM ? cylM : boxModel_);
+            SharedPtr<Material> barrelTint = MakeTinted(nullptr, nullptr,
+                Color(60 + (rand()%40), 90 + (rand()%60), 110 + (rand()%50)));
+            bm2->SetMaterial(hdMetal_ ? hdMetal_ : barrelTint.Raw());
+            RigidBody* rb = barrel->CreateComponent<RigidBody>();
+            rb->SetMass(40.0f);
+            rb->SetFriction(0.7f);
+            CollisionShape* cs = barrel->CreateComponent<CollisionShape>();
+            cs->SetBox(Vector3(1.0f, 1.6f, 1.0f));
+        }
+
+        // Фонари вдоль дорожек — тёплый свет
+        const Vector3 lampPos[] = {
+            Vector3(18, 0, 0), Vector3(-18, 0, 0), Vector3(0, 0, 18), Vector3(0, 0, -18)
+        };
+        for (const auto& lp : lampPos) {
+            Node* pole = scene_->CreateChild("LampPole");
+            pole->SetPosition(lp + Vector3(0, 2.5f, 0));
+            pole->SetScale(Vector3(0.2f, 5.0f, 0.2f));
+            StaticModel* pm = pole->CreateComponent<StaticModel>();
+            pm->SetModel(boxModel_);
+            pm->SetMaterial(metalMaterial_);
+            Node* head = scene_->CreateChild("LampHead");
+            head->SetPosition(lp + Vector3(0, 5.1f, 0));
+            head->SetScale(0.6f);
+            StaticModel* hm = head->CreateComponent<StaticModel>();
+            hm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
+            hm->SetMaterial(MakeTinted(nullptr, nullptr, Color(255, 230, 160)).Raw());
+            Node* ln2 = scene_->CreateChild("LampLight");
+            ln2->SetPosition(lp + Vector3(0, 5.0f, 0));
+            Light* l2 = ln2->CreateComponent<Light>();
+            l2->SetLightType(LIGHT_POINT);
+            l2->SetColor(Color(1.0f, 0.85f, 0.55f));
+            l2->SetRange(14.0f);
+            l2->SetBrightness(0.9f);
+            decoNodes_.Push(pole); decoNodes_.Push(head); decoNodes_.Push(ln2);
+        }
+
+        // Дополнительные ящики-пирамидки
+        const Vector3 stackPos[] = { Vector3(20, 1, 20), Vector3(-20, 1, -20), Vector3(20, 3, 20) };
+        for (const auto& sp : stackPos) {
+            Node* crate2 = scene_->CreateChild("CrateStack");
+            crate2->SetPosition(sp);
+            crate2->SetScale(Vector3(1.4f, 1.4f, 1.4f));
+            crate2->SetRotation(Quaternion(0, (float)(rand() % 90), 0));
+            StaticModel* cm2 = crate2->CreateComponent<StaticModel>();
+            cm2->SetModel(boxModel_);
+            cm2->SetMaterial(hdCrate_ ? hdCrate_ : stoneMaterial_);
+            RigidBody* rb2 = crate2->CreateComponent<RigidBody>();
+            rb2->SetFriction(0.8f);
+            CollisionShape* cs2 = crate2->CreateComponent<CollisionShape>();
+            cs2->SetBox(Vector3::ONE);
+        }
+
+        // Антенны-вышки по углам с красными маяками
+        const float off = half - 4.0f;
+        const Vector3 towers[] = { Vector3(off,0,off), Vector3(-off,0,off), Vector3(off,0,-off), Vector3(-off,0,-off) };
+        for (const auto& tp : towers) {
+            Node* mast = scene_->CreateChild("Mast");
+            mast->SetPosition(tp + Vector3(0, 6, 0));
+            mast->SetScale(Vector3(0.35f, 12.0f, 0.35f));
+            StaticModel* mm = mast->CreateComponent<StaticModel>();
+            mm->SetModel(boxModel_);
+            mm->SetMaterial(metalMaterial_);
+            Node* beacon = scene_->CreateChild("Beacon");
+            beacon->SetPosition(tp + Vector3(0, 12.4f, 0));
+            beacon->SetScale(0.5f);
+            StaticModel* bm = beacon->CreateComponent<StaticModel>();
+            bm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
+            bm->SetMaterial(glowRed);
+            Node* ln = scene_->CreateChild("BeaconLight");
+            ln->SetPosition(tp + Vector3(0, 12.4f, 0));
+            Light* l = ln->CreateComponent<Light>();
+            l->SetLightType(LIGHT_POINT);
+            l->SetColor(Color(1.0f, 0.15f, 0.15f));
+            l->SetRange(8.0f);
+        }
     }
     
     void CreateFloor() {
@@ -772,13 +1081,7 @@ private:
         
         // Модель оружия (используем коробку как временную модель)
         weaponModelNode_ = weaponNode_->CreateChild("WeaponModel");
-        weaponModelNode_->SetPosition(Vector3(0, 0, 0));
-        weaponModelNode_->SetScale(Vector3(0.1f, 0.1f, 0.4f));
-        weaponModelNode_->SetRotation(Quaternion(-90, 0, 0));
-        
-        StaticModel* weaponModel = weaponModelNode_->CreateComponent<StaticModel>();
-        weaponModel->SetModel(boxModel_);
-        weaponModel->SetMaterial(metalMaterial_);
+        BuildWeaponModel(currentWeapon_);
         
         // Дуло оружия (для визуализации выстрела)
         Node* muzzleNode = weaponNode_->CreateChild("Muzzle");
@@ -796,6 +1099,120 @@ private:
         
         muzzleLight_ = muzzleLight;
         muzzleLightNode_ = muzzleLightNode;
+    }
+
+    // =========================================================================
+    // Процедурные модели оружия и экипировка
+    // =========================================================================
+
+    Node* AddPart(Node* parent, const Vector3& pos, const Vector3& scale, Material* mat, Model* model = nullptr) {
+        Node* n = parent->CreateChild("Part");
+        n->SetPosition(pos);
+        n->SetScale(scale);
+        StaticModel* sm = n->CreateComponent<StaticModel>();
+        sm->SetModel(model ? model : boxModel_);
+        sm->SetMaterial(mat);
+        sm->SetCastShadows(false);
+        return n;
+    }
+
+    void BuildWeaponModel(int type) {
+        if (!weaponModelNode_) return;
+        weaponModelNode_->RemoveAllChildren();
+        weaponModelNode_->SetPosition(Vector3::ZERO);
+        weaponModelNode_->SetRotation(Quaternion::IDENTITY);
+        weaponModelNode_->SetScale(Vector3::ONE);
+
+        Material* gunMat = weaponTintMats_.Size() ? weaponTintMats_[type] : metalMaterial_;
+        SharedPtr<Material> dark = MakeTinted(nullptr, nullptr, Color(35, 35, 40));
+        SharedPtr<Material> accent = SKIN_DEFS[currentSkin_].emissive
+            ? MakeTinted(nullptr, nullptr, Color(60, 255, 170))
+            : MakeTinted(nullptr, nullptr, Color(25, 25, 28));
+        Model* cyl = GetSubsystem<ResourceCache>()->GetResource<Model>("Models/Cylinder.mdl");
+        if (!cyl) cyl = boxModel_;
+
+        switch (type) {
+        case W_PISTOL:
+            AddPart(weaponModelNode_, Vector3(0, 0, 0.10f), Vector3(0.045f, 0.05f, 0.22f), gunMat);
+            AddPart(weaponModelNode_, Vector3(0, -0.075f, 0.02f), Vector3(0.04f, 0.11f, 0.055f), dark);
+            AddPart(weaponModelNode_, Vector3(0, 0.012f, 0.225f), Vector3(0.018f, 0.018f, 0.06f), accent);
+            break;
+        case W_SMG:
+            AddPart(weaponModelNode_, Vector3(0, 0, 0.16f), Vector3(0.05f, 0.055f, 0.34f), gunMat);
+            AddPart(weaponModelNode_, Vector3(0, -0.09f, 0.04f), Vector3(0.04f, 0.12f, 0.05f), dark);
+            AddPart(weaponModelNode_, Vector3(0, -0.085f, 0.18f), Vector3(0.03f, 0.10f, 0.045f), dark);
+            AddPart(weaponModelNode_, Vector3(0, 0.045f, 0.10f), Vector3(0.02f, 0.02f, 0.16f), accent);
+            AddPart(weaponModelNode_, Vector3(0, 0.0f, 0.36f), Vector3(0.02f, 0.02f, 0.08f), gunMat, cyl);
+            break;
+        case W_RIFLE:
+            AddPart(weaponModelNode_, Vector3(0, 0, 0.24f), Vector3(0.05f, 0.06f, 0.55f), gunMat);
+            AddPart(weaponModelNode_, Vector3(0, -0.10f, 0.06f), Vector3(0.04f, 0.13f, 0.05f), dark);
+            AddPart(weaponModelNode_, Vector3(0, -0.09f, 0.24f), Vector3(0.032f, 0.12f, 0.05f), dark);
+            AddPart(weaponModelNode_, Vector3(0, 0.055f, 0.16f), Vector3(0.024f, 0.028f, 0.20f), accent);
+            AddPart(weaponModelNode_, Vector3(0, 0.055f, 0.28f), Vector3(0.03f, 0.03f, 0.02f), gunMat, cyl);
+            AddPart(weaponModelNode_, Vector3(0, 0.0f, 0.55f), Vector3(0.018f, 0.018f, 0.14f), gunMat, cyl);
+            AddPart(weaponModelNode_, Vector3(0, -0.02f, -0.06f), Vector3(0.045f, 0.06f, 0.14f), dark);
+            break;
+        case W_SHOTGUN:
+            AddPart(weaponModelNode_, Vector3(0, 0.012f, 0.28f), Vector3(0.028f, 0.028f, 0.55f), gunMat, cyl);
+            AddPart(weaponModelNode_, Vector3(0, -0.02f, 0.26f), Vector3(0.03f, 0.03f, 0.5f), gunMat, cyl);
+            AddPart(weaponModelNode_, Vector3(0, -0.015f, 0.10f), Vector3(0.06f, 0.05f, 0.22f), gunMat);
+            AddPart(weaponModelNode_, Vector3(0, -0.07f, 0.02f), Vector3(0.04f, 0.11f, 0.05f), dark);
+            AddPart(weaponModelNode_, Vector3(0, -0.045f, 0.30f), Vector3(0.05f, 0.035f, 0.12f), accent);
+            AddPart(weaponModelNode_, Vector3(0, -0.02f, -0.10f), Vector3(0.05f, 0.07f, 0.16f), dark);
+            break;
+        case W_SNIPER:
+            AddPart(weaponModelNode_, Vector3(0, 0, 0.30f), Vector3(0.04f, 0.05f, 0.7f), gunMat);
+            AddPart(weaponModelNode_, Vector3(0, 0.0f, 0.72f), Vector3(0.015f, 0.015f, 0.2f), gunMat, cyl);
+            AddPart(weaponModelNode_, Vector3(0, 0.07f, 0.26f), Vector3(0.028f, 0.028f, 0.26f), dark, cyl);
+            AddPart(weaponModelNode_, Vector3(0, 0.07f, 0.40f), Vector3(0.036f, 0.036f, 0.02f), accent, cyl);
+            AddPart(weaponModelNode_, Vector3(0, -0.10f, 0.08f), Vector3(0.04f, 0.12f, 0.05f), dark);
+            AddPart(weaponModelNode_, Vector3(0, -0.02f, -0.12f), Vector3(0.05f, 0.07f, 0.2f), dark);
+            AddPart(weaponModelNode_, Vector3(0, -0.05f, 0.5f), Vector3(0.02f, 0.06f, 0.02f), dark);
+            break;
+        case W_MINIGUN: {
+            // Корпус и барабан из 6 стволов
+            AddPart(weaponModelNode_, Vector3(0, -0.01f, 0.14f), Vector3(0.09f, 0.10f, 0.34f), gunMat);
+            for (int i = 0; i < 6; ++i) {
+                float ang = i * 60.0f;
+                Quaternion rot(ang, Vector3(1, 0, 0));
+                Vector3 off = rot * Vector3(0, 0.045f, 0);
+                Node* barrel = AddPart(weaponModelNode_, Vector3(off.x_, off.y_, 0.48f), Vector3(0.02f, 0.02f, 0.34f), accent, cyl);
+                barrel->SetRotation(rot);
+                barrel->SetPosition(Vector3(off.x_, off.y_, 0.48f));
+            }
+            AddPart(weaponModelNode_, Vector3(0, -0.10f, 0.02f), Vector3(0.05f, 0.12f, 0.07f), dark);      // рукоять
+            AddPart(weaponModelNode_, Vector3(0, -0.09f, 0.20f), Vector3(0.06f, 0.10f, 0.10f), dark);      // магазин-короб
+            AddPart(weaponModelNode_, Vector3(0, 0.06f, 0.14f), Vector3(0.05f, 0.05f, 0.22f), dark);       // верхний кожух
+            break;
+        }
+        case W_LAUNCHER: {
+            // Труба гранатомёта + прицел + рукояти
+            AddPart(weaponModelNode_, Vector3(0, 0.02f, 0.30f), Vector3(0.075f, 0.075f, 0.62f), gunMat, cyl);
+            AddPart(weaponModelNode_, Vector3(0, 0.02f, 0.63f), Vector3(0.09f, 0.09f, 0.06f), accent, cyl);  // раструб
+            AddPart(weaponModelNode_, Vector3(0, 0.11f, 0.22f), Vector3(0.03f, 0.05f, 0.16f), dark);          // кронштейн прицела
+            AddPart(weaponModelNode_, Vector3(0, 0.15f, 0.22f), Vector3(0.045f, 0.03f, 0.12f), accent);       // оптика
+            AddPart(weaponModelNode_, Vector3(0, -0.09f, 0.06f), Vector3(0.04f, 0.12f, 0.05f), dark);         // пистолетная рукоять
+            AddPart(weaponModelNode_, Vector3(0, -0.06f, 0.34f), Vector3(0.04f, 0.06f, 0.10f), dark);         // передняя рукоять
+            AddPart(weaponModelNode_, Vector3(0, -0.01f, -0.05f), Vector3(0.07f, 0.09f, 0.14f), dark);        // затыльник
+            break;
+        }
+        }
+    }
+
+    void EquipWeapon(int type, bool full) {
+        if (type < 0 || type >= WEAPON_COUNT) return;
+        currentWeapon_ = type;
+        const WeaponDef& def = WEAPON_DEFS[type];
+        weapon_.weaponType_ = type;
+        weapon_.isReloading_ = false;
+        weapon_.reloadTimer_ = 0;
+        weapon_.fireTimer_ = 0;
+        weapon_.currentAmmo_ = def.magSize;
+        if (full) weapon_.reserveAmmo_ = def.reserveMax;
+        BuildWeaponModel(type);
+        UpdateAmmoDisplay();
+        if (weaponNameText_) weaponNameText_->SetText(String(def.name) + " | " + String(SKIN_DEFS[currentSkin_].name));
     }
 
     // =========================================================================
@@ -909,6 +1326,27 @@ private:
         messageText_->SetPosition(screenWidth / 2, screenHeight / 2);
         messageText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
         messageText_->SetEnabled(false);
+
+        // Панель текущего оружия (низ центра)
+        hudPanelBg_ = root->CreateChild<BorderImage>("HudWeaponPanel");
+        hudPanelBg_->SetSize(260, 46);
+        hudPanelBg_->SetPosition(screenWidth / 2 - 130, screenHeight - 70);
+        hudPanelBg_->SetColor(Color(0.05f, 0.07f, 0.1f, 0.55f));
+
+        weaponNameText_ = root->CreateChild<Text>();
+        weaponNameText_->SetFont(font_, 18);
+        weaponNameText_->SetTextAlignment(HA_CENTER);
+        weaponNameText_->SetPosition(screenWidth / 2 - 125, screenHeight - 62);
+        weaponNameText_->SetWidth(250);
+        weaponNameText_->SetColor(Color(1.0f, 0.85f, 0.3f, 1.0f));
+        weaponNameText_->SetText(String(WEAPON_DEFS[currentWeapon_].name) + " | " + String(SKIN_DEFS[currentSkin_].name));
+
+        // Подсказка управления (левый верх)
+        Text* help = root->CreateChild<Text>();
+        help->SetFont(font_, 14);
+        help->SetText("WASD — движение | SHIFT — бег | R — перезарядка | 1-7 — оружие | Q/E — скин | TAB — арсенал");
+        help->SetPosition(20, 90);
+        help->SetColor(Color(0.8f, 0.85f, 0.9f, 0.75f));
     }
     
     void UpdateAmmoDisplay() {
@@ -1045,6 +1483,14 @@ private:
         if (weapon_.fireTimer_ > 0) {
             weapon_.fireTimer_ -= dt;
         }
+
+        // Автоогонь: удержание ЛКМ (не для дробовика/снайперки/гранатомёта)
+        if (!armoryOpen_ && !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
+            int wt = currentWeapon_;
+            if (wt != W_SHOTGUN && wt != W_SNIPER && wt != W_LAUNCHER) {
+                TryFire();
+            }
+        }
         
         // Восстанавливаем отдачу
         weapon_.recoilX_ = Lerp(weapon_.recoilX_, 0.0f, GameConstants::RECOIL_RECOVERY * dt);
@@ -1111,8 +1557,25 @@ private:
         }
         
         // Скрыть/показать мышь (для отладки)
-        if (key == KEY_TAB) { ToggleMouseVisibility(); }
-    if (key == KEY_ESCAPE) { engine_->Exit(); }
+        if (key == KEY_TAB) { ToggleArmory(); return; }
+
+        // Esc: сначала закрыть меню, потом выйти
+        if (key == KEY_ESCAPE) {
+            if (armoryOpen_) { ToggleArmory(); }
+            else { engine_->Exit(); }
+            return;
+        }
+
+        // 1..7 — быстрое переключение оружия
+        if (key >= KEY_1 && key <= KEY_7) {
+            int idx = key - KEY_1;
+            if (idx < WEAPON_COUNT) { EquipWeapon(idx, true); ShowMessage(String("Оружие: ") + WEAPON_DEFS[idx].name); }
+            return;
+        }
+
+        // Q — смена скина
+        if (key == KEY_Q) { CycleSkin(1); return; }
+        if (key == KEY_E) { CycleSkin(-1); return; }
     }
     
     void HandleKeyUp(StringHash eventType, VariantMap& eventData) {
@@ -1130,6 +1593,12 @@ private:
         
         int button = eventData[P_BUTTON].GetI32();
         
+        // Меню арсенала перехватывает клики
+        if (armoryOpen_) {
+            HandleArmoryClick(button == MOUSEB_LEFT);
+            return;
+        }
+
         // Левая кнопка мыши - стрельба
         if (button == MOUSEB_LEFT) {
             TryFire();
@@ -1265,7 +1734,7 @@ private:
         player_.shotsFired_++;
         
         // Сбрасываем таймер стрельбы
-        weapon_.fireTimer_ = GameConstants::FIRE_RATE;
+        weapon_.fireTimer_ = WEAPON_DEFS[currentWeapon_].fireRate;
         
         // Добавляем отдачу
         float randomRecoil = (float)(rand() % 100) / 100.0f * GameConstants::BULLET_SPREAD;
@@ -1276,20 +1745,23 @@ private:
         PlayMuzzleFlash();
         PlayShootSound();
         
-        // Расчет точки попадания (рейкаст)
-        PerformRaycast();
+        // Дробины дробовика — отдельными лучами
+        const WeaponDef& wdef = WEAPON_DEFS[currentWeapon_];
+        for (int p = 0; p < wdef.pellets; ++p) {
+            PerformRaycast(wdef.damage, wdef.spread);
+        }
         
         // Обновляем UI
         UpdateAmmoDisplay();
     }
     
-    void PerformRaycast() {
+    void PerformRaycast(float damage, float spread) {
         // Получаем направление из центра экрана
         auto* camera = cameraNode_->GetComponent<Camera>();
         if (!camera) return;
         
         // Добавляем разброс
-        float spreadAngle = GameConstants::BULLET_SPREAD * (1.0f - player_.GetAccuracy() / 200.0f);
+        float spreadAngle = spread * (1.0f - player_.GetAccuracy() / 200.0f);
         float randomX = (float)(rand() % 1000 - 500) / 1000.0f * spreadAngle;
         float randomY = (float)(rand() % 1000 - 500) / 1000.0f * spreadAngle;
         
@@ -1318,7 +1790,13 @@ private:
             CreateImpactEffect(hitPosition, hitNormal);
             
             // Проверяем, попала ли пуля в мишень
-            CheckTargetHit(result.body_);
+            // Гранатомёт: взрыв по площади
+            if (currentWeapon_ == W_LAUNCHER) {
+                CreateExplosionEffect(hitPosition);
+                ApplyExplosionDamage(hitPosition, damage);
+            } else {
+                CheckTargetHit(result.body_, damage);
+            }
             
             // Отладочная визуализация
             #ifdef DEBUG
@@ -1333,7 +1811,7 @@ private:
         }
     }
     
-    void CheckTargetHit(RigidBody* hitBody) {
+    void CheckTargetHit(RigidBody* hitBody, float damage) {
         if (!hitBody) return;
         
         Node* hitNode = hitBody->GetNode();
@@ -1343,7 +1821,7 @@ private:
         for (auto& target : targets_) {
             if (target.isActive_ && target.node_ == hitNode) {
                 // Попали в мишень!
-                target.health_ -= GameConstants::BULLET_DAMAGE;
+                target.health_ -= damage;
                 
                 // Визуальный эффект попадания
                 StaticModel* model = hitNode->GetComponent<StaticModel>();
@@ -1511,6 +1989,141 @@ private:
     // Утилиты
     // =========================================================================
     
+    void ApplyExplosionDamage(const Vector3& center, float damage) {
+        const float radius = 5.0f;
+        for (auto& target : targets_) {
+            if (!target.isActive_ || !target.node_) continue;
+            float dist = (target.node_->GetPosition() - center).Length();
+            if (dist <= radius) {
+                float falloff = 1.0f - dist / radius;
+                target.health_ -= damage * falloff;
+                StaticModel* model = target.node_->GetComponent<StaticModel>();
+                if (model) model->SetMaterial(targetHitMaterial_);
+                if (target.health_ <= 0) DestroyTarget(target);
+            }
+        }
+    }
+
+    void CycleSkin(int dir) {
+        currentSkin_ = ((currentSkin_ + dir) % SKIN_COUNT + SKIN_COUNT) % SKIN_COUNT;
+        RefreshWeaponMaterials();
+        BuildWeaponModel(currentWeapon_);
+        if (weaponNameText_) weaponNameText_->SetText(String(WEAPON_DEFS[currentWeapon_].name) + " | " + String(SKIN_DEFS[currentSkin_].name));
+        ShowMessage(String("Скин: ") + SKIN_DEFS[currentSkin_].name);
+        if (armoryOpen_) UpdateArmoryHighlight();
+    }
+
+    // ================= МЕНЮ АРСЕНАЛА (TAB) =================
+
+    void ToggleArmory() {
+        armoryOpen_ = !armoryOpen_;
+        auto* input = GetSubsystem<Input>();
+        auto* graphics = GetSubsystem<Graphics>();
+        if (armoryOpen_) {
+            if (!armoryPanel_) CreateArmoryMenu();
+            armoryPanel_->SetVisible(true);
+            input->SetMouseVisible(true);
+            ShowMessage("Арсенал: клик по оружию/скину, TAB — закрыть");
+        } else {
+            if (armoryPanel_) armoryPanel_->SetVisible(false);
+            input->SetMouseVisible(false);
+            input->SetMousePosition(IntVector2(graphics->GetWidth() / 2, graphics->GetHeight() / 2));
+        }
+        UpdateArmoryHighlight();
+    }
+
+    void CreateArmoryMenu() {
+        auto* ui = GetSubsystem<UI>();
+        auto* root = ui->GetRoot();
+        int sw = GetSubsystem<Graphics>()->GetWidth();
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+
+        armoryPanel_ = root->CreateChild<UIElement>("ArmoryPanel");
+        armoryPanel_->SetSize(sw, sh);
+
+        BorderImage* bg = armoryPanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.02f, 0.03f, 0.05f, 0.82f));
+
+        Text* title = armoryPanel_->CreateChild<Text>();
+        title->SetFont(font_, 36);
+        title->SetText("АРСЕНАЛ CHIKENGUN 2.1");
+        title->SetTextAlignment(HA_CENTER);
+        title->SetPosition(sw / 2 - 200, 30);
+        title->SetWidth(400);
+        title->SetColor(Color(1.0f, 0.85f, 0.3f, 1.0f));
+
+        Text* wHead = armoryPanel_->CreateChild<Text>();
+        wHead->SetFont(font_, 22);
+        wHead->SetText("ОРУЖИЕ (1-" + String(WEAPON_COUNT) + ")");
+        wHead->SetPosition(sw / 2 - 380, 100);
+        wHead->SetColor(Color(0.7f, 0.9f, 1.0f, 1.0f));
+
+        for (int i = 0; i < WEAPON_COUNT; ++i) {
+            Text* row = armoryPanel_->CreateChild<Text>();
+            row->SetFont(font_, 20);
+            const WeaponDef& d = WEAPON_DEFS[i];
+            row->SetText(String(i + 1) + ". " + d.name + "  DMG:" + String(d.damage, 0) +
+                         "  ROF:" + String((int)(1.0f / d.fireRate)) + "/s  MAG:" + String(d.magSize));
+            row->SetPosition(sw / 2 - 380, 135 + i * 34);
+            row->SetVar("index", i);
+            armoryWeaponRows_.Push(row);
+        }
+
+        Text* sHead = armoryPanel_->CreateChild<Text>();
+        sHead->SetFont(font_, 22);
+        sHead->SetText("СКИНЫ (Q/E)");
+        sHead->SetPosition(sw / 2 + 80, 100);
+        sHead->SetColor(Color(0.7f, 1.0f, 0.8f, 1.0f));
+
+        for (int i = 0; i < SKIN_COUNT; ++i) {
+            Text* row = armoryPanel_->CreateChild<Text>();
+            row->SetFont(font_, 20);
+            const SkinDef& sk = SKIN_DEFS[i];
+            row->SetText(String(i + 1) + ". " + sk.name + (sk.emissive ? " (glow)" : ""));
+            row->SetPosition(sw / 2 + 80, 135 + i * 34);
+            row->SetVar("index", i);
+            armorySkinRows_.Push(row);
+        }
+
+        Text* hint = armoryPanel_->CreateChild<Text>();
+        hint->SetFont(font_, 16);
+        hint->SetText("TAB - close | ESC - close/exit | LMB - select");
+        hint->SetTextAlignment(HA_CENTER);
+        hint->SetPosition(sw / 2 - 250, sh - 60);
+        hint->SetWidth(500);
+        hint->SetColor(Color(0.8f, 0.8f, 0.8f, 1.0f));
+
+        armoryPanel_->SetVisible(false);
+    }
+
+    void UpdateArmoryHighlight() {
+        for (unsigned i = 0; i < armoryWeaponRows_.Size(); ++i) {
+            bool sel = ((int)i == currentWeapon_);
+            armoryWeaponRows_[i]->SetColor(sel ? Color(1.0f, 0.85f, 0.2f, 1.0f) : Color(0.85f, 0.85f, 0.9f, 1.0f));
+        }
+        for (unsigned i = 0; i < armorySkinRows_.Size(); ++i) {
+            bool sel = ((int)i == currentSkin_);
+            const SkinDef& sk = SKIN_DEFS[i];
+            if (sel) armorySkinRows_[i]->SetColor(Color(1.0f, 0.85f, 0.2f, 1.0f));
+            else armorySkinRows_[i]->SetColor(Color(sk.color.r_ * 0.9f + 0.1f, sk.color.g_ * 0.9f + 0.1f, sk.color.b_ * 0.9f + 0.1f, 1.0f));
+        }
+    }
+
+    void HandleArmoryClick(bool left) {
+        if (!left || !armoryPanel_) return;
+        auto* input = GetSubsystem<Input>();
+        IntVector2 mp = input->GetMousePosition();
+        for (unsigned i = 0; i < armoryWeaponRows_.Size(); ++i) {
+            IntRect r = armoryWeaponRows_[i]->GetAbsoluteOffset();
+            if (r.Contains(mp)) { EquipWeapon((int)i, true); UpdateArmoryHighlight(); return; }
+        }
+        for (unsigned i = 0; i < armorySkinRows_.Size(); ++i) {
+            IntRect r = armorySkinRows_[i]->GetAbsoluteOffset();
+            if (r.Contains(mp)) { CycleSkin((int)i - currentSkin_); return; }
+        }
+    }
+
     void ToggleMouseVisibility() {
         auto* input = GetSubsystem<Input>();
         isMouseVisible_ = !isMouseVisible_;
