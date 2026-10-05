@@ -91,11 +91,30 @@ using namespace Urho3D;
 
 namespace GameConstants {
     // Настройки игрока
-    constexpr float PLAYER_HEIGHT = 1.7f;
+    constexpr float PLAYER_HEIGHT = 1.7f;         // стоя
+    constexpr float PLAYER_HEIGHT_CROUCH = 1.0f;  // присев
+    constexpr float CROUCH_TRANSITION_SPEED = 9.0f; // скорость плавного приседания
     constexpr float PLAYER_SPEED = 8.0f;
     constexpr float PLAYER_SPRINT_MULTIPLIER = 1.8f;
+    constexpr float PLAYER_CROUCH_MULTIPLIER = 0.5f;   // скорость ползком
     constexpr float MOUSE_SENSITIVITY = 0.15f;
     constexpr float MAX_PITCH = 89.0f;
+
+    // Прыжки / физика игрока
+    constexpr float JUMP_IMPULSE = 6.4f;          // начальная вертикальная скорость
+    constexpr float GRAVITY = 22.0f;              // "игровая" гравитация (быстрее 9.81 — приятнее в шутере)
+    constexpr float COYOTE_TIME = 0.12f;          // сек после схода с края, когда ещё можно прыгнуть
+    constexpr float JUMP_BUFFER_TIME = 0.15f;     // сек до приземления, когда нажатие Space засчитывается
+
+    // Динамическая камера от 1-го лица
+    constexpr float HEAD_BOB_FREQ = 9.0f;         // частота покачивания головы при ходьбе
+    constexpr float HEAD_BOB_AMP = 0.035f;        // амплитуда покачивания (м)
+    constexpr float SPRINT_FOV_ADD = 12.0f;       // добавка FOV при беге
+    constexpr float ADS_FOV_SUB = 25.0f;          // уменьшение FOV при прицеливании (ПКМ)
+    constexpr float LAND_DUCK_AMOUNT = 0.14f;     // просадка камеры при приземлении (м)
+    constexpr float LAND_DUCK_RECOVERY = 7.0f;    // скорость восстановления после просадки
+    constexpr float FALL_CAM_TILT = 3.0f;         // лёгкий наклон камеры при падении (град/сек скорости)
+    constexpr float CAMERA_SHAKE_DECAY = 6.0f;    // затухание тряски от взрывов
     
     // Настройки оружия
     constexpr int MAX_AMMO = 30;
@@ -289,7 +308,28 @@ private:
     float yaw_ = 0.0f;
     float pitch_ = 0.0f;
     bool isSprinting_ = false;
+    bool isCrouching_ = false;      // удерживаемый Ctrl/C — присед
+    bool isAiming_ = false;         // прицеливание (удержание ПКМ)
     bool isMouseVisible_ = false;
+
+    // Физика игрока: прыжки, гравитация, рейкаст-пол
+    Vector3 playerVelocity_ = Vector3::ZERO;  // горизонтальная скорость (сглаживание)
+    float verticalVelocity_ = 0.0f;           // вертикальная скорость (прыжок/падение)
+    float eyeHeight_ = GameConstants::PLAYER_HEIGHT; // текущая высота глаз (приседание)
+    float groundY_ = 0.0f;                    // высота пола под игроком
+    bool onGround_ = true;
+    float coyoteTimer_ = 0.0f;                // «коёот-таймер»: запрыгивание на край после схода
+    float jumpBufferTimer_ = 0.0f;            // буфер нажатия Space до приземления
+    float fallSpeedOnLand_ = 0.0f;            // скорость в момент касания земли
+
+    // Динамическая камера от 1-го лица
+    float headBobPhase_ = 0.0f;
+    float headBobIntensity_ = 0.0f;           // 0..1, плавное нарастание покачки при разгоне
+    float landDuckOffset_ = 0.0f;             // просадка камеры при приземлении
+    float camShakeAmount_ = 0.0f;             // тряска от взрывов/отдачи
+    float currentFov_ = 75.0f;                // плавно интерполируемый FOV
+    Vector3 lastCamPos_ = Vector3(0, GameConstants::PLAYER_HEIGHT, 0);
+    Vector3 camVelocitySmoothed_ = Vector3::ZERO; // для velocity-based наклона
     
     // Временные переменные
     float messageTimer_ = 0.0f;
@@ -390,7 +430,7 @@ public:
         EquipWeapon(currentWeapon_, true);
 
         // Показ сообщения о начале игры
-        ShowMessage("CHIKENGUN 2.1 | WASD - движение, ЛКМ - огонь, R - перезарядка\n1-5 оружие, TAB меню оружейной, F режим, Esc выход");
+        ShowMessage("CHIKENGUN 2.1 | WASD - движение, SHIFT - бег, SPACE - прыжок, CTRL - присед\nЛКМ - огонь, ПКМ - прицел, 1-7 оружие, TAB - арсенал, F - режим, Esc - выход");
     }
 
 private:
@@ -570,7 +610,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         // Создаем уровень
         CreateFloor();
         CreateWalls();
-        CreateCeiling();
+        // Потолок убран: арена открыта небу — прыжки и динамическая камера смотрят на skybox
         CreateObstacles();
         CreateTargets();
         
@@ -799,15 +839,8 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     }
     
     void CreateCeiling() {
-        const float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
-        
-        Node* ceilingNode = scene_->CreateChild("Ceiling");
-        ceilingNode->SetPosition(Vector3(0, wallHeight_, 0));
-        ceilingNode->SetScale(Vector3(arenaSize * 2, 1.0f, arenaSize * 2));
-        
-        StaticModel* model = ceilingNode->CreateComponent<StaticModel>();
-        model->SetModel(planeModel_ ? planeModel_ : boxModel_);
-        model->SetMaterial(stoneMaterial_);
+        // Потолок намеренно не создаётся: открытый небо-купол для прыжков
+        // и обзора динамической камеры. Функция оставлена как заглушка.
     }
     
     void CreateObstacles() {
@@ -1344,7 +1377,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         // Подсказка управления (левый верх)
         Text* help = root->CreateChild<Text>();
         help->SetFont(font_, 14);
-        help->SetText("WASD — движение | SHIFT — бег | R — перезарядка | 1-7 — оружие | Q/E — скин | TAB — арсенал");
+        help->SetText("WASD — движение | SHIFT — бег | SPACE — прыжок | CTRL/C — присед | ПКМ — прицел | R — перезарядка | 1-7 — оружие | Q/E — скин | TAB — арсенал");
         help->SetPosition(20, 90);
         help->SetColor(Color(0.8f, 0.85f, 0.9f, 0.75f));
     }
@@ -1530,15 +1563,16 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         IntVector2 mouseMove = input->GetMouseMove();
         
         // Обновляем углы Эйлера
-        yaw_ += (float)mouseMove.x_ * GameConstants::MOUSE_SENSITIVITY;
-        pitch_ += (float)mouseMove.y_ * GameConstants::MOUSE_SENSITIVITY;
+        float sens = GameConstants::MOUSE_SENSITIVITY;
+        if (isAiming_) sens *= 0.45f; // точное прицеливание мышью (ПКМ)
+        if (isCrouching_) sens *= 0.8f;
+        yaw_ += (float)mouseMove.x_ * sens;
+        pitch_ += (float)mouseMove.y_ * sens;
         
         // Ограничиваем вертикальный угол
         pitch_ = Clamp(pitch_, -GameConstants::MAX_PITCH, GameConstants::MAX_PITCH);
         
-        // Применяем вращение к камере
-        // ВАЖНО: используем правильный порядок: сначала YAW (вокруг Y), потом PITCH (вокруг локальной X)
-        cameraNode_->SetRotation(Quaternion(pitch_, yaw_, 0.0f));
+        // Позицию и вращение камеры применяет динамический контроллер
     }
     
     void HandleKeyDown(StringHash eventType, VariantMap& eventData) {
@@ -1548,7 +1582,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         
         // Бег
         if (key == KEY_LSHIFT || key == KEY_RSHIFT) {
-            isSprinting_ = true;
+            isSprinting_ = !isCrouching_; // из приседа не разбегаемся
         }
         
         // Перезарядка
@@ -1604,9 +1638,9 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             TryFire();
         }
         
-        // Правая кнопка мыши - прицеливание (можно добавить зум)
+        // Правая кнопка мыши - прицеливание (ADS): FOV сужается, мышь точнее, разброс меньше
         if (button == MOUSEB_RIGHT) {
-            // Можно реализовать прицеливание
+            isAiming_ = true;
         }
     }
     
@@ -1616,7 +1650,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         int button = eventData[P_BUTTON].GetI32();
         
         if (button == MOUSEB_RIGHT) {
-            // Отмена прицеливания
+            isAiming_ = false;
         }
     }
 
@@ -1624,81 +1658,236 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     // Игровая логика
     // =========================================================================
     
+    // =========================================================================
+    // Контроллер игрока: движение + прыжки (Space) + гравитация + присед (Ctrl/C)
+    // Пол определяется рейкастом вниз — можно запрыгнуть на платформу/ящик.
+    // =========================================================================
+
+    float ProbeGround(const Vector3& feetPos) {
+        // Ищем верхнюю поверхность под ногами (4 луча по краям «стопы»)
+        float bestY = -1e6f;
+        const float probeTop = feetPos.y_ + eyeHeight_ * 0.5f;
+        const float probeLen = eyeHeight_ + 3.0f;
+        for (int sx = -1; sx <= 1; sx += 2) {
+            for (int sz = -1; sz <= 1; sz += 2) {
+                Vector3 offset(sx * 0.22f, 0.0f, sz * 0.22f);
+                Ray down(Vector3(feetPos.x_ + offset.x_, probeTop, feetPos.z_ + offset.z_), Vector3(0, -1, 0));
+                PhysicsRaycastResult r;
+                physicsWorld_->RaycastSingle(r, down, probeLen);
+                if (r.body_ && r.distance_ > 0.0f) {
+                    bestY = Max(bestY, probeTop - r.distance_);
+                }
+            }
+        }
+        return bestY;
+    }
+
+    bool HeadBlocked(const Vector3& feetPos) {
+        // Нет ли препятствия над головой (нельзя встать из приседа под низкими объектами)
+        Ray up(Vector3(feetPos.x_, feetPos.y_ + 0.1f, feetPos.z_), Vector3(0, 1, 0));
+        PhysicsRaycastResult r;
+        physicsWorld_->RaycastSingle(r, up, GameConstants::PLAYER_HEIGHT + 0.1f);
+        return r.body_ != nullptr && r.distance_ > 0.05f && r.distance_ < GameConstants::PLAYER_HEIGHT;
+    }
+
     void HandleMovement(float dt) {
         auto* input = GetSubsystem<Input>();
-        
-        // Получаем направление взгляда (только горизонтальное)
+
+        Vector3 camPos = cameraNode_->GetPosition();
+        Vector3 feetPos(camPos.x_, camPos.y_ - eyeHeight_, camPos.z_);
+
+        // --- Направление ввода (горизонтальная плоскость взгляда) ---
         Quaternion yawRot(0.0f, yaw_, 0.0f);
         Vector3 forward = yawRot * Vector3(0.0f, 0.0f, 1.0f);
         Vector3 right = yawRot * Vector3(1.0f, 0.0f, 0.0f);
-        
-        // Собираем ввод движения
-        Vector3 moveDirection = Vector3::ZERO;
-        
-        if (input->GetKeyDown(KEY_W)) {
-            moveDirection += forward;
+
+        Vector3 wishDir = Vector3::ZERO;
+        if (input->GetKeyDown(KEY_W)) wishDir += forward;
+        if (input->GetKeyDown(KEY_S)) wishDir -= forward;
+        if (input->GetKeyDown(KEY_D)) wishDir += right;
+        if (input->GetKeyDown(KEY_A)) wishDir -= right;
+        if (wishDir.LengthSquared() > 0.0f) wishDir.Normalize();
+
+        // --- Приседание (Ctrl или C): плавная высота глаз + замедление ---
+        bool wantCrouch = input->GetKeyDown(KEY_LCTRL) || input->GetKeyDown(KEY_RCTRL) || input->GetKeyDown(KEY_C);
+        if (!wantCrouch && isCrouching_ && HeadBlocked(feetPos)) {
+            wantCrouch = true; // под низким препятствием не даём встать
         }
-        if (input->GetKeyDown(KEY_S)) {
-            moveDirection -= forward;
+        isCrouching_ = wantCrouch;
+        float targetEye = isCrouching_ ? GameConstants::PLAYER_HEIGHT_CROUCH : GameConstants::PLAYER_HEIGHT;
+        eyeHeight_ = Lerp(eyeHeight_, targetEye, Min(1.0f, GameConstants::CROUCH_TRANSITION_SPEED * dt));
+
+        // --- Целевая скорость (бег Shift быстрее, присед медленнее, прицел тише) ---
+        float speed = GameConstants::PLAYER_SPEED;
+        if (isCrouching_) speed *= GameConstants::PLAYER_CROUCH_MULTIPLIER;
+        else if (isSprinting_ && wishDir.DotProduct(forward) > 0.0f && !isAiming_)
+            speed *= GameConstants::PLAYER_SPRINT_MULTIPLIER;
+        if (isAiming_) speed *= 0.6f;
+
+        Vector3 targetVel = wishDir * speed;
+        // Плавный разгон/торможение (ускорение и инерция)
+        float accel = onGround_ ? 14.0f : 4.0f; // в воздухе управление слабее
+        playerVelocity_ = Lerp(playerVelocity_, targetVel, Min(1.0f, accel * dt));
+
+        // --- Гравитация и прыжок ---
+        verticalVelocity_ -= GameConstants::GRAVITY * dt;
+
+        if (onGround_) coyoteTimer_ = GameConstants::COYOTE_TIME;
+        else coyoteTimer_ -= dt;
+        if (jumpBufferTimer_ > 0.0f) jumpBufferTimer_ -= dt;
+
+        bool wantJump = input->GetKeyDown(KEY_SPACE);
+        if (wantJump && jumpBufferTimer_ <= 0.0f) jumpBufferTimer_ = GameConstants::JUMP_BUFFER_TIME;
+
+        if (jumpBufferTimer_ > 0.0f && coyoteTimer_ > 0.0f) {
+            verticalVelocity_ = GameConstants::JUMP_IMPULSE;
+            jumpBufferTimer_ = 0.0f;
+            coyoteTimer_ = 0.0f;
+            onGround_ = false;
+            landDuckOffset_ = -0.03f; // лёгкая «подседжка» перед отрывом
         }
-        if (input->GetKeyDown(KEY_D)) {
-            moveDirection += right;
-        }
-        if (input->GetKeyDown(KEY_A)) {
-            moveDirection -= right;
-        }
-        
-        // Нормализуем и применяем скорость
-        if (moveDirection.LengthSquared() > 0.0f) {
-            moveDirection.Normalize();
-            
-            float speed = GameConstants::PLAYER_SPEED;
-            if (isSprinting_) {
-                speed *= GameConstants::PLAYER_SPRINT_MULTIPLIER;
+
+        // --- Интегрирование позиции ---
+        Vector3 newPos = feetPos + playerVelocity_ * dt;
+
+        // Коллизии со стенами/колоннами: горизонтальные рейкасты по 4 сторонам
+        const float radius = 0.35f;
+        Vector3 testFeet(newPos.x_, feetPos.y_ + 0.4f, newPos.z_);
+        const Vector3 dirs[4] = { Vector3(1,0,0), Vector3(-1,0,0), Vector3(0,0,1), Vector3(0,0,-1) };
+        Vector3 push = Vector3::ZERO;
+        for (int i = 0; i < 4; ++i) {
+            Ray h(testFeet, dirs[i]);
+            PhysicsRaycastResult r;
+            physicsWorld_->RaycastSingle(r, h, radius + 0.15f);
+            if (r.body_ && r.distance_ > 0.0f && r.distance_ < radius + 0.15f) {
+                float penetration = (radius + 0.15f) - r.distance_;
+                push -= dirs[i] * penetration;
             }
-            
-            Vector3 newPosition = cameraNode_->GetPosition() + moveDirection * speed * dt;
-            
-            // Простая проверка коллизий с границами арены
-            float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
-            newPosition.x_ = Clamp(newPosition.x_, -arenaSize + 2.0f, arenaSize - 2.0f);
-            newPosition.z_ = Clamp(newPosition.z_, -arenaSize + 2.0f, arenaSize - 2.0f);
-            newPosition.y_ = GameConstants::PLAYER_HEIGHT;  // Держим высоту постоянной
-            
-            cameraNode_->SetPosition(newPosition);
         }
+        newPos += push;
+
+        // Границы арены
+        float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
+        newPos.x_ = Clamp(newPos.x_, -arenaSize + 2.0f, arenaSize - 2.0f);
+        newPos.z_ = Clamp(newPos.z_, -arenaSize + 2.0f, arenaSize - 2.0f);
+
+        // Вертикальное движение + определение земли
+        newPos.y_ += verticalVelocity_ * dt;
+        float groundY = ProbeGround(newPos);
+        if (groundY < -1e5f) groundY = 0.0f; // страховка: базовый пол арены
+
+        bool wasOnGround = onGround_;
+        if (verticalVelocity_ <= 0.0f && newPos.y_ <= groundY + 0.02f) {
+            // Приземление
+            fallSpeedOnLand_ = -verticalVelocity_;
+            newPos.y_ = groundY;
+            verticalVelocity_ = 0.0f;
+            onGround_ = true;
+            if (!wasOnGround) {
+                // Просадка камеры пропорционально скорости падения + тряска
+                float impact = Clamp(fallSpeedOnLand_ / 12.0f, 0.0f, 1.0f);
+                landDuckOffset_ = -GameConstants::LAND_DUCK_AMOUNT * impact;
+                camShakeAmount_ = Max(camShakeAmount_, impact * 0.06f);
+            }
+        } else if (newPos.y_ > groundY + 0.05f) {
+            onGround_ = false;
+        }
+        groundY_ = groundY;
+
+        // Камера на высоте глаз поверх позиции ног
+        cameraNode_->SetPosition(Vector3(newPos.x_, newPos.y_ + eyeHeight_, newPos.z_));
+
+        // --- Динамика камеры (bob, FOV, наклон) ---
+        UpdateDynamicCamera(dt, playerVelocity_.Length());
+    }
+
+    // =========================================================================
+    // Динамическая камера от 1-го лица: покачка головы, FOV-эффекты, просадки
+    // =========================================================================
+
+    void UpdateDynamicCamera(float dt, float horizSpeed) {
+        Camera* camera = cameraNode_->GetComponent<Camera>();
+
+        // 1) Покачка головы (head bob): фаза зависит от скорости бега
+        float speedRatio = Clamp(horizSpeed / GameConstants::PLAYER_SPEED, 0.0f, 2.0f);
+        float targetIntensity = (onGround_ && horizSpeed > 0.5f && !isAiming_) ? Min(speedRatio, 1.5f) : 0.0f;
+        headBobIntensity_ = Lerp(headBobIntensity_, targetIntensity, Min(1.0f, 8.0f * dt));
+        headBobPhase_ += GameConstants::HEAD_BOB_FREQ * dt * (0.6f + speedRatio * 0.7f);
+
+        float amp = GameConstants::HEAD_BOB_AMP * headBobIntensity_;
+        float bobY = fabs(sin(headBobPhase_)) * amp;
+        float bobX = cos(headBobPhase_ * 0.5f) * amp * 0.7f; // боковая составляющая -> roll
+
+        // 2) Просадка после приземления — пружинное восстановление
+        landDuckOffset_ = Lerp(landDuckOffset_, 0.0f, Min(1.0f, GameConstants::LAND_DUCK_RECOVERY * dt));
+
+        // 3) Тряска от взрывов/приземлений
+        camShakeAmount_ = Lerp(camShakeAmount_, 0.0f, Min(1.0f, GameConstants::CAMERA_SHAKE_DECAY * dt));
+        float shakeX = ((float)(rand() % 200) - 100.0f) / 100.0f * camShakeAmount_;
+        float shakeY = ((float)(rand() % 200) - 100.0f) / 100.0f * camShakeAmount_;
+
+        // Смещаем камеру относительно «логической» позиции игрока
+        Vector3 pos = cameraNode_->GetPosition();
+        pos.y_ += bobY + landDuckOffset_ + shakeY;
+        pos.x_ += shakeX;
+        cameraNode_->SetPosition(pos);
+
+        // 4) Наклон камеры (roll): боковая покачка + крен при падении
+        float roll = bobX * 60.0f; // градусы
+        if (!onGround_ && verticalVelocity_ < -2.0f) {
+            roll += Clamp(verticalVelocity_, -15.0f, 0.0f) * GameConstants::FALL_CAM_TILT * 0.15f;
+        }
+        cameraNode_->SetRotation(Quaternion(pitch_, yaw_, roll));
+
+        // 5) Динамический FOV: разбег при беге, сужение при прицеливании, вытягивание в прыжке
+        float targetFov = 75.0f;
+        if (isAiming_) targetFov -= GameConstants::ADS_FOV_SUB;
+        else if (isSprinting_ && horizSpeed > GameConstants::PLAYER_SPEED * 1.1f)
+            targetFov += GameConstants::SPRINT_FOV_ADD;
+        if (isCrouching_) targetFov -= 4.0f;
+        if (!onGround_) targetFov += verticalVelocity_ * 0.35f;
+        currentFov_ = Lerp(currentFov_, targetFov, Min(1.0f, 6.0f * dt));
+        if (camera) camera->SetFov(Clamp(currentFov_, 30.0f, 110.0f));
+    }
+
+    void AddCameraShake(float amount) {
+        camShakeAmount_ = Min(camShakeAmount_ + amount, 0.25f);
     }
     
     void UpdateWeaponBob(float dt) {
-        auto* input = GetSubsystem<Input>();
-        
-        // Проверяем, движется ли игрок
-        bool isMoving = input->GetKeyDown(KEY_W) || input->GetKeyDown(KEY_S) ||
-                       input->GetKeyDown(KEY_A) || input->GetKeyDown(KEY_D);
-        
-        if (isMoving && !weapon_.isReloading_) {
-            weapon_.weaponBobPhase_ += GameConstants::WEAPON_BOB_FREQUENCY * dt;
-            
-            float bobAmount = GameConstants::WEAPON_BOB_AMOUNT;
-            if (isSprinting_) {
-                bobAmount *= 2.0f;
-            }
-            
+        // Покачка оружия синхронизирована с динамикой камеры и состояниями игрока:
+        // прицел (ПКМ) — оружие по центру, присед — ниже, бег — сильнее, в прыжке — подтянуто
+        bool moving = playerVelocity_.LengthSquared() > 0.5f;
+
+        if (moving && !weapon_.isReloading_ && !isAiming_) {
+            weapon_.weaponBobPhase_ += GameConstants::WEAPON_BOB_FREQUENCY * dt * (0.7f + headBobIntensity_ * 0.6f);
+
+            float bobAmount = GameConstants::WEAPON_BOB_AMOUNT * (0.5f + headBobIntensity_);
+            if (isSprinting_ && !isCrouching_) bobAmount *= 2.0f;
+            if (isCrouching_) bobAmount *= 0.5f;
+
             float bobX = cos(weapon_.weaponBobPhase_) * bobAmount;
             float bobY = fabs(sin(weapon_.weaponBobPhase_ * 2.0f)) * bobAmount;
-            
-            weaponNode_->SetPosition(Vector3(0.3f + bobX, -0.25f - bobY, 0.5f));
+
+            Vector3 base = WeaponBasePose();
+            weaponNode_->SetPosition(Vector3(base.x_ + bobX, base.y_ - bobY, base.z_));
         } else {
-            // Возвращаем оружие в исходное положение
             Vector3 currentPos = weaponNode_->GetPosition();
-            Vector3 targetPos(0.3f, -0.25f, 0.5f);
-            weaponNode_->SetPosition(Lerp(currentPos, targetPos, 10.0f * dt));
+            weaponNode_->SetPosition(Lerp(currentPos, WeaponBasePose(), Min(1.0f, 10.0f * dt)));
         }
+    }
+
+    Vector3 WeaponBasePose() {
+        Vector3 base(0.3f, -0.25f, 0.5f);
+        if (isAiming_) return Vector3(0.0f, -0.16f, 0.45f);      // ADS: оружие у центра экрана
+        if (isCrouching_) base.y_ -= 0.05f;                       // от приседа смотрит чуть ниже
+        if (!onGround_) base.y_ += 0.04f;                         // в прыжке подтягиваем вверх
+        return base;
     }
     
     void ApplyRecoilToWeapon() {
-        // Применяем отдачу к позиции оружия
-        Vector3 basePos(0.3f, -0.25f, 0.5f);
+        // Применяем отдачу к позиции оружия (база зависит от стойки: ADS/присед/прыжок)
+        Vector3 basePos = WeaponBasePose();
         Vector3 recoilOffset(-weapon_.recoilY_ * 0.01f, -weapon_.recoilX_ * 0.01f, -weapon_.recoilX_ * 0.02f);
         weaponNode_->SetPosition(basePos + recoilOffset);
         
@@ -1762,6 +1951,9 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         
         // Добавляем разброс
         float spreadAngle = spread * (1.0f - player_.GetAccuracy() / 200.0f);
+        if (isAiming_) spreadAngle *= 0.35f;      // ADS: точный огонь
+        if (isCrouching_) spreadAngle *= 0.7f;    // присед: стабильнее
+        if (!onGround_) spreadAngle *= 1.6f;      // в прыжке: хуже точность
         float randomX = (float)(rand() % 1000 - 500) / 1000.0f * spreadAngle;
         float randomY = (float)(rand() % 1000 - 500) / 1000.0f * spreadAngle;
         
@@ -1794,6 +1986,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             if (currentWeapon_ == W_LAUNCHER) {
                 CreateExplosionEffect(hitPosition);
                 ApplyExplosionDamage(hitPosition, damage);
+                AddCameraShake(0.12f); // тряска камеры от взрыва
             } else {
                 CheckTargetHit(result.body_, damage);
             }
