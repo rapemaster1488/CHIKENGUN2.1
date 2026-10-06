@@ -82,6 +82,8 @@
 #include <Urho3D/Math/Color.h>
 
 #include <Urho3D/Graphics/CustomGeometry.h>
+#include <Urho3D/Graphics/Technique.h>
+#include <Urho3D/Graphics/Texture2D.h>
 #include <Urho3D/UI/Button.h>
 
 using namespace Urho3D;
@@ -2654,7 +2656,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
 
         Text* wHead = armoryPanel_->CreateChild<Text>();
         wHead->SetFont(font_, 22);
-        wHead->SetText("ОРУЖИЕ (1-" + String(WEAPON_COUNT) + ")");
+        wHead->SetText("ОРУЖИЕ (1-" + String((int)WEAPON_COUNT) + ")");
         wHead->SetPosition(sw / 2 - 380, 100);
         wHead->SetColor(Color(0.7f, 0.9f, 1.0f, 1.0f));
 
@@ -3124,7 +3126,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         e.speed_ = elite ? 2.6f : 1.6f;
         e.scoreValue_ = elite ? 300 : 150;
         enemies_.Push(e);
-        enemyNodes_.Push(rob);
+        enemyNodes_.Push(SharedPtr<Node>(rob));
     }
 
     void SpawnWave() {
@@ -3239,7 +3241,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             sparks->SetPosition(pos);
             ParticleEmitter* pe = sparks->CreateComponent<ParticleEmitter>();
             pe->SetEffect(sparkEffect_);
-            pe->SetEDuration(0.4f);
+            pe->SetMaxParticles(200);
             pe->SetEmitting(true);
             PendingRemove pr2; pr2.node_ = sparks; pr2.ttl_ = 1.5f; pendingRemoves_.Push(pr2);
         }
@@ -3251,7 +3253,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         sparkNode->SetPosition(pos);
         ParticleEmitter* emitter = sparkNode->CreateComponent<ParticleEmitter>();
         emitter->SetEffect(sparkEffect_);
-        emitter->SetEDuration(0.2f);
+        emitter->SetMaxParticles(100);
         emitter->SetEmitting(true);
         PendingRemove pr; pr.node_ = sparkNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr);
     }
