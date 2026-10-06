@@ -83,10 +83,6 @@
 
 #include <Urho3D/Graphics/CustomGeometry.h>
 #include <Urho3D/UI/Button.h>
-#include <Urho3D/UI/Window.h>
-#include <Urho3D/UI/ScrollView.h>
-#include <Urho3D/UI/MenuBar.h>
-#include <Urho3D/UI/Menu.h>
 
 using namespace Urho3D;
 
