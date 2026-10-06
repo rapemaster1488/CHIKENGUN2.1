@@ -74,7 +74,7 @@
 #include <Urho3D/IO/Log.h>
 #include <Urho3D/IO/File.h>
 #include <Urho3D/IO/FileSystem.h>
-#include <Urho3D/IO/XmlSerializer.h>
+#include <Urho3D/Resource/XMLFile.h>
 #include <Urho3D/Container/Vector.h>
 #include <Urho3D/Math/MathDefs.h>
 #include <Urho3D/Math/Vector3.h>
