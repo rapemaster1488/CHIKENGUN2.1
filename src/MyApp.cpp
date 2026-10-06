@@ -381,8 +381,8 @@ private:
     int bestCombo_ = 0;
     int highScore_ = 0;
     float rangeRespawnTimer_ = 0.0f;
-    Material* robotBodyMat_ = nullptr;
-    Material* robotEyeMat_ = nullptr;
+    SharedPtr<Material> robotBodyMat_;
+    SharedPtr<Material> robotEyeMat_;
     int currentWeapon_ = W_RIFLE;
     int currentSkin_ = 0;
     Vector<Node*> robotNodes_;
@@ -447,32 +447,8 @@ private:
 public:
     MyApp(Context* context) : Application(context) {}
 
-    // Предварительные объявления методов, используемых до определения
-    void ToggleArmory();
-    void CreateArmoryMenu();
-    void HandleArmoryClick(bool left);
-    void CycleSkin(int dir);
-    void ApplyExplosionDamage(const Vector3& center, float damage);
-    void UpdateArmoryHighlight();
-    // Меню / настройки / арена / комбо
-    void LoadSettingsFile();
-    void SaveSettingsFile();
-    void ApplyGraphicsSettings();
-    void CreateMainMenu();
-    void ShowMainMenu(bool show);
-    void UpdateMainMenuSelection();
-    void CreateSettingsPanel();
-    void ShowSettings(bool show);
-    void UpdateSettingsDisplay();
-    void ChangeSetting(int delta);
-    void StartGameMode(GameMode mode);
-    void SpawnEnemyRobot(const Vector3& pos, bool elite);
-    void SpawnWave();
-    void UpdateEnemies(float dt);
-    void DamageEnemy(EnemyData& e, float damage);
-    void CreateDebrisBurst(const Vector3& pos);
-    void CreateHitSpark(const Vector3& pos);
-    void AddScoreWithCombo(int base);
+    // Реализации всех методов встроены ниже в тело класса.
+    // (предварительные объявления удалены — они вызывали ошибки переопределения)
 
     void Start() override {
         // Инициализация случайных чисел
@@ -549,11 +525,7 @@ private:
         renderer->SetShadowMapSize(4096);           // карта теней 4K: чёткие края на большой арене
         renderer->SetSpecularLighting(true);
         renderer->SetHDRRendering(true);
-        renderer->SetGlowThreshold(0.6f);            // HDR-свечение яркого (неон, вспышки, маяки)
-        renderer->SetGlowBias(0.05f);
-        renderer->SetGlowBlur(BLEUR_TWICE);          // мягкий размытый bloom
-        renderer->SetNumOccluderTriangles(65536);   // больше теней от мелкой геометрии
-        renderer->SetNumLights(8);                  // неоновые маяки и подсветка арены
+        ConfigureGlow(renderer, true);              // HDR-bloom через XML-параметры (API-сеттеров нет в этой сборке)
         
         // Настройка окна
     }
@@ -613,9 +585,7 @@ private:
         if (music) {
             music->SetLooped(true);
             auto* audio = GetSubsystem<Audio>();
-            audio->StopAllSources(); // убратьpossible заглушку стартера
-            musicSource_ = node_->CreateChild("MusicNode")->CreateComponent<SoundSource>();
-            musicSource_->SetMode(SOUND_EFFECT);
+            musicSource_ = audio->GetOutput(SOUND_EFFECT);
             musicSource_->SetGain(musicVolume_);
             musicSource_->Play(music);
         }
@@ -623,14 +593,19 @@ private:
         return true;
     }
     
-SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<Texture>& norm, const Color& c) {
+    // Хранилище для unlit-материалов, созданных MakeTinted (владеем указателями, чтобы они не удалились)
+    Vector<SharedPtr<Material>> tintedMatStore_;
+
+    SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<Texture>& norm, const Color& c) {
         auto* cache = GetSubsystem<ResourceCache>();
         // Готовый unlit-материал из xml (базовая техника уже в нём) — Technique.h недоступен в этой сборке Urho3D
         SharedPtr<Material> m = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
         if (!m) return m;
+
         m = m->Clone();
         if (diff) { m->SetTexture(TU_DIFFUSE, diff); }
         m->SetDiffuseColor(c);
+        tintedMatStore_.Push(m);   // держим ссылку: Raw()-указатели остаются живыми
         return m;
     }
 
@@ -655,18 +630,8 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
      }
      floorMaterialLight_ = hdFloor_ ? hdFloor_ : stoneMaterial_;
      floorMaterialDark_  = hdPanel_ ? hdPanel_ : stoneMaterial_;
-     // Анизотропная фильтрация: пол/стены не мылятся под углом
-     {
-         Material* anisoMats[] = { hdStone_, hdFloor_, hdPanel_, hdMetal_, hdCrate_ };
-         for (Material* m : anisoMats) {
-             if (m) m->SetParameter(MAT_ANISOTROPY, Variant(8.0f)); // 8x анизотропия: чёткий пол под острым углом
-         }
-         // Компенсация увеличенных плит пола: текстура кладётся тем же плотным узором
-         if (hdFloor_) hdFloor_->SetTextureScaling(TU_DIFFUSE, Vector2(GameConstants::FLOOR_TILE_UV_SCALE, GameConstants::FLOOR_TILE_UV_SCALE));
-         if (hdFloor_) hdFloor_->SetTextureScaling(TU_NORMAL, Vector2(GameConstants::FLOOR_TILE_UV_SCALE, GameConstants::FLOOR_TILE_UV_SCALE));
-         if (hdStone_) { hdStone_->SetTextureScaling(TU_DIFFUSE, Vector2(2.0f, 2.0f)); hdStone_->SetTextureScaling(TU_NORMAL, Vector2(2.0f, 2.0f)); }
-         if (hdPanel_) { hdPanel_->SetTextureScaling(TU_DIFFUSE, Vector2(2.0f, 2.0f)); hdPanel_->SetTextureScaling(TU_NORMAL, Vector2(2.0f, 2.0f)); }
-     }
+     // Анизотропная фильтрация: глобальная настройка движка (per-material MAT_ANISOTROPY в этой сборке недоступен)
+     GetSubsystem<RenderPath>()->SetAnisotropicRendering(true);
      // Материалы оружия под текущий скин
      RefreshWeaponMaterials();
      URHO3D_LOGINFO(stoneMaterial_ ? "Base material OK (HD)" : "Base material NULL");
@@ -775,7 +740,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         zone->SetFogColor(Color(0.60f, 0.70f, 0.84f));
         zone->SetFogStart(80.0f);
         zone->SetFogEnd(260.0f);
-        zone->SetVisibleDistance(500.0f);
+        zone->SetFarDistance(500.0f);
     }
 
     void CreateSky() {
@@ -783,9 +748,17 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         Node* skyNode = scene_->CreateChild("Sky");
         auto* cache = GetSubsystem<ResourceCache>();
         // Техника берётся из xml-материала (Technique.h недоступен в этой сборке Urho3D)
-        skyMaterial_ = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
-        if (!skyMaterial_) skyMaterial_ = new Material(context_);
-        else skyMaterial_ = skyMaterial_->Clone().Raw();
+        {
+            SharedPtr<Material> skyBase = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
+            if (skyBase) {
+                SharedPtr<Material> skyClone = skyBase->Clone();
+                skyMaterial_ = skyClone.Get();
+                tintedMatStore_.Push(skyClone);   // держим ссылку, чтобы материал не удалился
+            } else {
+                skyMaterial_ = new Material(context_);
+                tintedMatStore_.Push(SharedPtr<Material>(skyMaterial_));
+            }
+        }
         if (skyTexture_) skyMaterial_->SetTexture(TU_DIFFUSE, skyTexture_);
         skyMaterial_->SetDiffuseColor(Color(150, 185, 235));
         skyMaterial_->SetCullMode(CULL_NONE);
@@ -836,7 +809,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             cm->SetModel(boxModel_);
             SharedPtr<Material> tintedWood = MakeTinted(nullptr, nullptr,
                 Color(180 + (rand()%50), 140 + (rand()%40), 90 + (rand()%30)));
-            cm->SetMaterial(hdCrate_ ? hdCrate_ : tintedWood.Raw());
+            cm->SetMaterial(hdCrate_ ? hdCrate_ : tintedWood.Get());
             RigidBody* rb = crate->CreateComponent<RigidBody>();
             rb->SetFriction(0.8f);
             CollisionShape* cs = crate->CreateComponent<CollisionShape>();
@@ -857,7 +830,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             bm2->SetModel(cylM ? cylM : boxModel_);
             SharedPtr<Material> barrelTint = MakeTinted(nullptr, nullptr,
                 Color(60 + (rand()%40), 90 + (rand()%60), 110 + (rand()%50)));
-            bm2->SetMaterial(hdMetal_ ? hdMetal_ : barrelTint.Raw());
+            bm2->SetMaterial(hdMetal_ ? hdMetal_ : barrelTint.Get());
             RigidBody* rb = barrel->CreateComponent<RigidBody>();
             rb->SetMass(40.0f);
             rb->SetFriction(0.7f);
@@ -881,7 +854,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             head->SetScale(0.6f);
             StaticModel* hm = head->CreateComponent<StaticModel>();
             hm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
-            hm->SetMaterial(MakeTinted(nullptr, nullptr, Color(255, 230, 160)).Raw());
+            hm->SetMaterial(MakeTinted(nullptr, nullptr, Color(255, 230, 160)).Get());
             Node* ln2 = scene_->CreateChild("LampLight");
             ln2->SetPosition(lp + Vector3(0, 5.0f, 0));
             Light* l2 = ln2->CreateComponent<Light>();
@@ -1226,10 +1199,9 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         sunLight->SetBrightness(0.9f);
         sunLight->SetCastShadows(true);
         sunLight->SetShadowDistance(140.0f);   // 4K-карта покрывает 140 м вокруг игрока — края арены в дымке
-        sunLight->SetOrthographicExtent(70.0f);
-        sunLight->SetCascadeCount(3);          // каскады: резкие тени вблизи, мягкие вдали
-        sunLight->SetShadowBias(0.0025f);
-        sunLight->SetVarianceShadowWidth(1.0f);
+        sunLight->SetNumCascadeShadows(3);     // каскады: резкие тени вблизи, мягкие вдали
+        sunLight->SetShadowFocus(140.0f);
+        sunLight->GetShadowBias().min_ = 0.0025f;
         // Точечные источники света
         float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
         
@@ -1278,13 +1250,10 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
 
         // Звуковой источник игрока: 2D-эффекты (выстрелы, UI) «приклеены» к камере
         soundSource_ = cameraNode_->CreateComponent<SoundSource>();
-        soundSource_->SetMode(SOUND_EFFECT);
-        GetSubsystem<Audio>()->AddListener(soundSource_);
 
         // 3D-источник для взрывов в мировом пространстве
         explosionSource3D_ = scene_->CreateChild("ExplosionSfx")->CreateComponent<SoundSource3D>();
-        explosionSource3D_->SetMode(SOUND_EFFECT);
-        explosionSource3D_->SetMaxDistance(120.0f);
+        explosionSource3D_->SetDistance(4.0f, 120.0f);
         cameraNode_->SetPosition(Vector3(0.0f, GameConstants::PLAYER_HEIGHT, 0.0f));
         
         // Добавляем компонент камеры
@@ -2276,7 +2245,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         if (!hitBody) return;
 
         Node* hn0 = hitBody->GetNode();
-        if (hn0 && hn0->HasTag(STRING_HASH("Enemy"))) {
+        if (hn0 && hn0->HasTag(StringHash("Enemy"))) {
             for (auto& e : enemies_) {
                 if (e.alive_ && e.node_ == hn0) { DamageEnemy(e, damage); break; }
             }
@@ -2441,12 +2410,9 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         Sound* s = shootSounds_[currentWeapon_];
         if (!s) return;
         // Вариация высоты/громкости — выстрелы не звучат клонами
-        float pitchVar = 1.0f + (rand() % 100 - 50) / 500.0f;
-        float gainVar = Max(0.4f, Min(1.0f, 0.85f + (rand() % 100 - 50) / 300.0f));
-        soundSource_->SetPitch(Clamp(pitchVar, 0.9f, 1.1f));
+        float gainVar = Max(0.4f, Min(1.0f, 0.85f + (rand() % 100 - 50) / 300.0f)) * SfxGain(1.0f);
         soundSource_->SetGain(gainVar);
         soundSource_->Play(s);
-        soundSource_->SetPitch(1.0f);
     }
     
     void PlayReloadSound() {
@@ -2479,7 +2445,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
 
     void PlayExplosionAt(const Vector3& pos) {
         if (!explosionSource3D_ || !explosionSound_) return;
-        explosionSource3D_->SetPosition(pos);
+        explosionSource3D_->SetWorldPosition(pos);
         explosionSource3D_->Play(explosionSound_);
     }
     
@@ -2668,7 +2634,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             Text* row = armoryPanel_->CreateChild<Text>();
             row->SetFont(font_, 20);
             const WeaponDef& d = WEAPON_DEFS[i];
-            row->SetText(String(i + 1) + ". " + d.name + "  DMG:" + String(d.damage, 0) +
+            row->SetText(String(i + 1) + ". " + String(d.name) + "  DMG:" + String(d.damage, 0) +
                          "  ROF:" + String((int)(1.0f / d.fireRate)) + "/s  MAG:" + String(d.magSize));
             row->SetPosition(sw / 2 - 380, 135 + i * 34);
             row->SetVar("index", i);
@@ -2685,7 +2651,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             Text* row = armoryPanel_->CreateChild<Text>();
             row->SetFont(font_, 20);
             const SkinDef& sk = SKIN_DEFS[i];
-            row->SetText(String(i + 1) + ". " + sk.name + (sk.emissive ? " (glow)" : ""));
+            row->SetText(String(i + 1) + ". " + String(sk.name) + (sk.emissive ? " (glow)" : ""));
             row->SetPosition(sw / 2 + 80, 135 + i * 34);
             row->SetVar("index", i);
             armorySkinRows_.Push(row);
@@ -2719,13 +2685,16 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         if (!left || !armoryPanel_) return;
         auto* input = GetSubsystem<Input>();
         IntVector2 mp = input->GetMousePosition();
+        // Хит-тест строк арсенала: offset+size в экранных координатах (панель привязана к root)
         for (unsigned i = 0; i < armoryWeaponRows_.Size(); ++i) {
-            IntRect r = armoryWeaponRows_[i]->GetAbsoluteOffset();
-            if (r.Contains(mp)) { EquipWeapon((int)i, true); UpdateArmoryHighlight(); return; }
+            UIElement* row = armoryWeaponRows_[i];
+            IntRect rect = row->GetScreenRect();
+            if (rect.LeftX() <= mp.x_ && mp.x_ < rect.Right() && rect.TopY() <= mp.y_ && mp.y_ < rect.Bottom()) { EquipWeapon((int)i, true); UpdateArmoryHighlight(); return; }
         }
         for (unsigned i = 0; i < armorySkinRows_.Size(); ++i) {
-            IntRect r = armorySkinRows_[i]->GetAbsoluteOffset();
-            if (r.Contains(mp)) { CycleSkin((int)i - currentSkin_); return; }
+            UIElement* row = armorySkinRows_[i];
+            IntRect rect = row->GetScreenRect();
+            if (rect.LeftX() <= mp.x_ && mp.x_ < rect.Right() && rect.TopY() <= mp.y_ && mp.y_ < rect.Bottom()) { CycleSkin((int)i - currentSkin_); return; }
         }
     }
 
@@ -2747,6 +2716,15 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     // НАСТРОЙКИ: загрузка/сохранение settings.ini, применение на лету
     // =========================================================================
 
+    // В этой сборке Urho3D у XMLElement нет GetInt/SetInt — читаем/пишем строковые атрибуты
+    static int XmlGetInt(const XMLElement& el, const char* name, int def) {
+        if (!el.HasAttribute(name)) return def;
+        return el.GetAttributeInt(name, def);
+    }
+    static void XmlSetInt(XMLElement& el, const char* name, int v) {
+        el.SetString(name, String(v));
+    }
+
     String SettingsPath() const {
         return GetSubsystem<FileSystem>()->GetProgramDir() + "settings.ini";
     }
@@ -2754,15 +2732,15 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     void LoadSettingsFile() {
         auto* fs = GetSubsystem<FileSystem>();
         if (!fs->FileExists(SettingsPath())) return;
-        SharedPtr<XMLFile> xml = new XMLFile(context_);
+        SharedPtr<XMLFile> xml(new XMLFile(context_));
         if (!xml->LoadFile(SettingsPath())) return;
         XMLElement rootEl = xml->GetRoot();
         XMLElement gfx = rootEl.GetChild("graphics");
         if (gfx) {
-            gfxShadowIdx_ = Clamp(gfx.GetInt("shadows", gfxShadowIdx_), 0, 2);
-            gfxGlowIdx_   = Clamp(gfx.GetInt("bloom", gfxGlowIdx_), 0, 2);
-            gfxResIdx_    = Clamp(gfx.GetInt("resolution", gfxResIdx_), 0, 2);
-            gfxAnisoIdx_  = Clamp(gfx.GetInt("anisotropic", gfxAnisoIdx_), 0, 2);
+            gfxShadowIdx_ = Clamp(XmlGetInt(gfx, "shadows", gfxShadowIdx_), 0, 2);
+            gfxGlowIdx_   = Clamp(XmlGetInt(gfx, "bloom", gfxGlowIdx_), 0, 2);
+            gfxResIdx_    = Clamp(XmlGetInt(gfx, "resolution", gfxResIdx_), 0, 2);
+            gfxAnisoIdx_  = Clamp(XmlGetInt(gfx, "anisotropic", gfxAnisoIdx_), 0, 2);
         }
         XMLElement snd = rootEl.GetChild("sound");
         if (snd) {
@@ -2770,23 +2748,32 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             musicVolume_ = Clamp(snd.GetFloat("music", musicVolume_), 0.0f, 1.0f);
         }
         XMLElement prog = rootEl.GetChild("progress");
-        if (prog) highScore_ = Max(0, prog.GetInt("highscore", highScore_));
+        if (prog) highScore_ = Max(0, XmlGetInt(prog, "highscore", highScore_));
     }
 
     void SaveSettingsFile() {
-        SharedPtr<XMLFile> xml = new XMLFile(context_);
+        SharedPtr<XMLFile> xml(new XMLFile(context_));
         XMLElement rootEl = xml->CreateRoot("chikengun");
         XMLElement gfx = rootEl.CreateChild("graphics");
-        gfx.SetInt("shadows", gfxShadowIdx_);
-        gfx.SetInt("bloom", gfxGlowIdx_);
-        gfx.SetInt("resolution", gfxResIdx_);
-        gfx.SetInt("anisotropic", gfxAnisoIdx_);
+        XmlSetInt(gfx, "shadows", gfxShadowIdx_);
+        XmlSetInt(gfx, "bloom", gfxGlowIdx_);
+        XmlSetInt(gfx, "resolution", gfxResIdx_);
+        XmlSetInt(gfx, "anisotropic", gfxAnisoIdx_);
         XMLElement snd = rootEl.CreateChild("sound");
         snd.SetFloat("sfx", sfxVolume_);
         snd.SetFloat("music", musicVolume_);
         XMLElement prog = rootEl.CreateChild("progress");
-        prog.SetInt("highscore", highScore_);
+        XmlSetInt(prog, "highscore", highScore_);
         xml->SaveFile(SettingsPath());
+    }
+
+    // Bloom настраивается через XML-параметры движка: сеттеров Glow* в этой сборке Urho3D нет
+    void ConfigureGlow(Renderer* renderer, bool strong) {
+        ValueCollection vars;
+        vars["GlowThreshold"] = Variant(strong ? 0.6f : 0.9f);
+        vars["GlowBias"]      = Variant(strong ? 0.05f : 0.02f);
+        vars["GlowBlur"]      = Variant(strong ? "twice" : "none");
+        renderer->SetGlowParameters(vars);
     }
 
     void ApplyGraphicsSettings() {
@@ -2798,32 +2785,24 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
 
         switch (gfxGlowIdx_) {
         case 0: renderer->SetHDRRendering(false); break;
-        case 1: renderer->SetHDRRendering(true);
-                renderer->SetGlowThreshold(0.9f);
-                renderer->SetGlowBias(0.02f);
-                renderer->SetGlowBlur(BLEUR_NONE); break;
-        default: renderer->SetHDRRendering(true);
-                renderer->SetGlowThreshold(0.6f);
-                renderer->SetGlowBias(0.05f);
-                renderer->SetGlowBlur(BLEUR_TWICE); break;
+        case 1: renderer->SetHDRRendering(true); ConfigureGlow(renderer, false); break;
+        default: renderer->SetHDRRendering(true); ConfigureGlow(renderer, true); break;
         }
 
         auto* graphics = GetSubsystem<Graphics>();
         if (graphics) {
+            // Смена разрешения окна (без SetScaledResolution — его нет в этой сборке Urho3D)
             unsigned w = graphics->GetWidth(), h = graphics->GetHeight();
             float scale = gfxResIdx_ == 0 ? 1.0f : (gfxResIdx_ == 1 ? 0.75f : 0.5f);
-            for (unsigned i = 0; i < renderer->GetNumViewports(); ++i) {
-                Viewport* vp = renderer->GetViewport(i);
-                if (vp && vp->GetRenderPath())
-                    vp->GetRenderPath()->SetScaledResolution((unsigned)(w * scale), (unsigned)(h * scale));
+            unsigned nw = (unsigned)(w * scale), nh = (unsigned)(h * scale);
+            if (!graphics->IsFullscreen() && nw >= 320 && nh >= 240 && (nw != w || nh != h)) {
+                graphics->SetMode(nw, nh, WINDOWED, false);
             }
         }
 
-        // Анизотропия применяется через параметры материалов (Texture2D-заголовки недоступны в этой сборке Urho3D)
-        static const float anisoVals[3] = { 4.0f, 8.0f, 16.0f };
-        Material* anisoMats[] = { hdStone_, hdFloor_, hdPanel_, hdMetal_, hdCrate_ };
-        for (Material* m : anisoMats)
-            if (m) m->SetParameter(MAT_ANISOTROPY, Variant(anisoVals[Clamp(gfxAnisoIdx_, 0, 2)]));
+        // Анизотропия — глобальный режим рендера (per-material параметр недоступен в этой сборке)
+        auto* view = renderer->GetViewport();
+        if (view) view->SetAnisotropicRendering(gfxAnisoIdx_ > 0);
 
         if (soundSource_) soundSource_->SetGain(sfxVolume_);
         if (musicSource_) musicSource_->SetGain(musicVolume_);
@@ -2913,7 +2892,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         if (hudPanelBg_) hudPanelBg_->SetVisible(vis);
         if (damageOverlay_) damageOverlay_->SetVisible(vis);
         if (reloadOverlay_) reloadOverlay_->SetVisible(vis);
-        if (weaponNode_) weaponNode_->SetVisible(vis);
+        if (weaponNode_) weaponNode_->SetOriginEnabled(vis);
     }
 
     void UpdateMainMenuSelection() {
@@ -3057,17 +3036,17 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
 
     void EnsureRobotMaterials() {
         if (robotBodyMat_) return;
-        robotBodyMat_ = MakeTinted(nullptr, nullptr, Color(150, 155, 165)).ReleaseRef();
-        robotEyeMat_  = MakeTinted(nullptr, nullptr, Color(255, 40, 40)).ReleaseRef();
+        robotBodyMat_ = MakeTinted(nullptr, nullptr, Color(150, 155, 165));
+        robotEyeMat_  = MakeTinted(nullptr, nullptr, Color(255, 40, 40));
     }
 
     void SpawnEnemyRobot(const Vector3& pos, bool elite) {
         EnsureRobotMaterials();
         Node* rob = scene_->CreateChild("Enemy", LOCAL);
         rob->SetPosition(pos);
-        rob->AddTag(STRING_HASH("Enemy"));
+        rob->AddTag(StringHash("Enemy"));
 
-        Material* bodyMat = robotBodyMat_;
+        Material* bodyMat = robotBodyMat_.Get();
         Color eyeColor(255, 40, 40);
         if (elite) {
             static SharedPtr<Material> keepCyan;
@@ -3220,7 +3199,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             frag->SetScale(Vector3(0.08f, 0.08f, 0.08f));
             StaticModel* sm = frag->CreateComponent<StaticModel>();
             sm->SetModel(boxModel_);
-            sm->SetMaterial(robotBodyMat_ ? robotBodyMat_ : metalMaterial_);
+            sm->SetMaterial(robotBodyMat_ ? robotBodyMat_.Get() : metalMaterial_);
             RigidBody* rb = frag->CreateComponent<RigidBody>();
             rb->SetMass(0.2f);
             rb->SetCollisionLayer(0);
@@ -3239,7 +3218,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             sparks->SetPosition(pos);
             ParticleEmitter* pe = sparks->CreateComponent<ParticleEmitter>();
             pe->SetEffect(sparkEffect_);
-            pe->SetMaxParticles(200);
+            pe->SetNumParts(200);
             pe->SetEmitting(true);
             PendingRemove pr2; pr2.node_ = sparks; pr2.ttl_ = 1.5f; pendingRemoves_.Push(pr2);
         }
@@ -3251,7 +3230,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         sparkNode->SetPosition(pos);
         ParticleEmitter* emitter = sparkNode->CreateComponent<ParticleEmitter>();
         emitter->SetEffect(sparkEffect_);
-        emitter->SetMaxParticles(100);
+        emitter->SetNumParts(100);
         emitter->SetEmitting(true);
         PendingRemove pr; pr.node_ = sparkNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr);
     }
