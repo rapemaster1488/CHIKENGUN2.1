@@ -82,8 +82,8 @@
 #include <Urho3D/Math/Color.h>
 
 #include <Urho3D/Graphics/CustomGeometry.h>
-#include <Urho3D/Graphics/Technique.h>
-#include <Urho3D/Graphics/Texture2D.h>
+// Technique/Texture2D не инклюдим отдельными заголовками (их нет в этой сборке Urho3D) —
+// GetResource<T>() использует только имя ресурса, достаточно ResourceCache.h + Graphics.h
 #include <Urho3D/UI/Button.h>
 
 using namespace Urho3D;
@@ -625,8 +625,10 @@ private:
     
 SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<Texture>& norm, const Color& c) {
         auto* cache = GetSubsystem<ResourceCache>();
-        SharedPtr<Material> m = new Material(context_);
-        m->SetTechnique(0, cache->GetResource<Technique>("Techniques/DiffUnlit.xml"));
+        // Готовый unlit-материал из xml (базовая техника уже в нём) — Technique.h недоступен в этой сборке Urho3D
+        SharedPtr<Material> m = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
+        if (!m) return m;
+        m = m->Clone();
         if (diff) { m->SetTexture(TU_DIFFUSE, diff); }
         m->SetDiffuseColor(c);
         return m;
@@ -640,7 +642,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
      hdPanel_  = cache->GetResource<Material>("Materials/Game/MetalPanel.xml");
      hdMetal_  = cache->GetResource<Material>("Materials/Game/BrushedMetal.xml");
      hdCrate_  = cache->GetResource<Material>("Materials/Game/CrateWood.xml");
-     skyTexture_ = cache->GetResource<Texture2D>("Textures/SkyDay.png");
+     skyTexture_ = cache->GetResource<Texture>("Textures/SkyDay.png"); // базовый класс Texture — заголовки Technique/Texture2D недоступны в этой сборке
 
      stoneMaterial_ = hdStone_ ? hdStone_ : cache->GetResource<Material>("Materials/Stone.xml");
      if (!stoneMaterial_) stoneMaterial_ = new Material(context_);
@@ -779,12 +781,14 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     void CreateSky() {
         // Небо через Skybox: рисуется до сцены на бесконечности — не мерцает с геометрией
         Node* skyNode = scene_->CreateChild("Sky");
-        skyMaterial_ = new Material(context_);
-        skyMaterial_->SetTechnique(0, GetSubsystem<ResourceCache>()->GetResource<Technique>("Techniques/DiffUnlit.xml"));
+        auto* cache = GetSubsystem<ResourceCache>();
+        // Техника берётся из xml-материала (Technique.h недоступен в этой сборке Urho3D)
+        skyMaterial_ = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
+        if (!skyMaterial_) skyMaterial_ = new Material(context_);
+        else skyMaterial_ = skyMaterial_->Clone().Raw();
         if (skyTexture_) skyMaterial_->SetTexture(TU_DIFFUSE, skyTexture_);
         skyMaterial_->SetDiffuseColor(Color(150, 185, 235));
         skyMaterial_->SetCullMode(CULL_NONE);
-        skyMaterial_->SetGlowEnabled(true); // облака чуть светятся в HDR
         Skybox* sky = skyNode->CreateComponent<Skybox>();
         sky->SetModel(boxModel_);
         sky->SetMaterial(skyMaterial_);
@@ -2815,17 +2819,11 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             }
         }
 
-        static const unsigned anisoVals[3] = { 4, 8, 16 };
-        auto* cache = GetSubsystem<ResourceCache>();
-        static const char* texFiles[] = {
-            "Textures/Game/StoneHD.png", "Textures/Game/FloorTile.png",
-            "Textures/Game/MetalPanel.png", "Textures/Game/BrushedMetal.png",
-            "Textures/Game/CrateWood.png"
-        };
-        for (unsigned t = 0; t < sizeof(texFiles) / sizeof(texFiles[0]); ++t) {
-            SharedPtr<Texture2D> tex = cache->GetResource<Texture2D>(texFiles[t], false);
-            if (tex) tex->SetAnisotropy(anisoVals[Clamp(gfxAnisoIdx_, 0, 2)]);
-        }
+        // Анизотропия применяется через параметры материалов (Texture2D-заголовки недоступны в этой сборке Urho3D)
+        static const float anisoVals[3] = { 4.0f, 8.0f, 16.0f };
+        Material* anisoMats[] = { hdStone_, hdFloor_, hdPanel_, hdMetal_, hdCrate_ };
+        for (Material* m : anisoMats)
+            if (m) m->SetParameter(MAT_ANISOTROPY, Variant(anisoVals[Clamp(gfxAnisoIdx_, 0, 2)]));
 
         if (soundSource_) soundSource_->SetGain(sfxVolume_);
         if (musicSource_) musicSource_->SetGain(musicVolume_);
