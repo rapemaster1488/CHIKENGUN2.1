@@ -72,6 +72,9 @@
 #include <Urho3D/Physics/PhysicsEvents.h>
 
 #include <Urho3D/IO/Log.h>
+#include <Urho3D/IO/File.h>
+#include <Urho3D/IO/FileSystem.h>
+#include <Urho3D/IO/XmlSerializer.h>
 #include <Urho3D/Container/Vector.h>
 #include <Urho3D/Math/MathDefs.h>
 #include <Urho3D/Math/Vector3.h>
@@ -342,6 +345,46 @@ private:
 
     // Новый контент: режимы, оружие, скины, арена
     GameMode gameMode_ = MODE_RANGE;
+
+    // ===== Главное меню / настройки / арена с волнами =====
+    bool inMenu_ = true;            // игра стартует в главном меню
+    int menuSel_ = 0;               // 0 тир, 1 арена, 2 настройки, 3 выход
+    bool inSettings_ = false;
+    int settingsSel_ = 0;           // 0 тени, 1 bloom, 2 разрешение, 3 анизотропия, 4 SFX, 5 музыка, 6 назад
+    int gfxShadowIdx_ = 2;          // 0=1K 1=2K 2=4K
+    int gfxGlowIdx_ = 2;            // 0=выкл 1=слабый 2=полный
+    int gfxResIdx_ = 0;             // 0=натив 1=75% 2=50%
+    int gfxAnisoIdx_ = 2;           // 0=4x 1=8x 2=16x
+    float sfxVolume_ = 0.8f;
+    float musicVolume_ = 0.35f;
+    SharedPtr<UIElement> mainMenuPanel_;
+    Vector<SharedPtr<Text>> mainMenuItems_;
+    SharedPtr<UIElement> settingsPanel_;
+    Vector<SharedPtr<Text>> settingsItems_;
+    // Арена: волны роботов-курят
+    struct EnemyData {
+        WeakPtr<Node> node_;
+        WeakPtr<RigidBody> body_;
+        float health_ = 100.0f;
+        bool alive_ = true;
+        Vector3 patrolCenter_;
+        float patrolRadius_ = 4.0f;
+        float phase_ = 0.0f;
+        float speed_ = 1.6f;
+        int scoreValue_ = 150;
+    };
+    Vector<EnemyData> enemies_;
+    Vector<SharedPtr<Node>> enemyNodes_;   // владение нодами до удаления
+    int waveNum_ = 0;
+    float waveRespawnTimer_ = 0.0f;
+    // Комбо и рекорды
+    int comboCount_ = 0;
+    float comboTimer_ = 0.0f;
+    int bestCombo_ = 0;
+    int highScore_ = 0;
+    float rangeRespawnTimer_ = 0.0f;
+    Material* robotBodyMat_ = nullptr;
+    Material* robotEyeMat_ = nullptr;
     int currentWeapon_ = W_RIFLE;
     int currentSkin_ = 0;
     Vector<Node*> robotNodes_;
@@ -413,6 +456,25 @@ public:
     void CycleSkin(int dir);
     void ApplyExplosionDamage(const Vector3& center, float damage);
     void UpdateArmoryHighlight();
+    // Меню / настройки / арена / комбо
+    void LoadSettingsFile();
+    void SaveSettingsFile();
+    void ApplyGraphicsSettings();
+    void CreateMainMenu();
+    void ShowMainMenu(bool show);
+    void UpdateMainMenuSelection();
+    void CreateSettingsPanel();
+    void ShowSettings(bool show);
+    void UpdateSettingsDisplay();
+    void ChangeSetting(int delta);
+    void StartGameMode(GameMode mode);
+    void SpawnEnemyRobot(const Vector3& pos, bool elite);
+    void SpawnWave();
+    void UpdateEnemies(float dt);
+    void DamageEnemy(EnemyData& e, float damage);
+    void CreateDebrisBurst(const Vector3& pos);
+    void CreateHitSpark(const Vector3& pos);
+    void AddScoreWithCombo(int base);
 
     void Start() override {
         // Инициализация случайных чисел
@@ -420,6 +482,10 @@ public:
         
         // Настройка движка
         SetupEngineSettings();
+
+        // Пользовательские настройки графики/звука (settings.ini)
+        LoadSettingsFile();
+        ApplyGraphicsSettings();
 
         // Загрузочный экран показываем ДО долгой загрузки ресурсов
         CreateLoadingScreen();
@@ -456,6 +522,10 @@ public:
         
         // Скрываем загрузочный экран перед первым игровым кадром
         HideLoadingScreen();
+
+        // Стартовое главное меню (игрок сам выбирает режим)
+        CreateMainMenu();
+        ShowMainMenu(true);
 
         // Применение выбранного оружия/скина
         EquipWeapon(currentWeapon_, true);
@@ -548,7 +618,7 @@ private:
             audio->StopAllSources(); // убратьpossible заглушку стартера
             musicSource_ = node_->CreateChild("MusicNode")->CreateComponent<SoundSource>();
             musicSource_->SetMode(SOUND_EFFECT);
-            musicSource_->SetGain(0.35f);
+            musicSource_->SetGain(musicVolume_);
             musicSource_->Play(music);
         }
 
@@ -1539,7 +1609,12 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     
     void UpdateScoreDisplay() {
         if (scoreText_) {
-            scoreText_->SetText("SCORE: " + String(player_.score_) + " | KILLS: " + String(player_.kills_));
+            String s = "SCORE: " + String(player_.score_) + " | KILLS: " + String(player_.kills_);
+            if (comboCount_ > 1) s += " | COMBO x" + String(comboCount_);
+            s += "\nRECORD: " + String(highScore_);
+            if (gameMode_ == MODE_ARENA) s += " | WAVE " + String(waveNum_);
+            scoreText_->SetText(s);
+            scoreText_->SetColor(comboCount_ > 1 ? Color(1.0f, 0.6f, 0.1f, 1.0f) : Color(1.0f, 1.0f, 1.0f, 1.0f));
         }
     }
     
@@ -1639,7 +1714,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         }
 
         // Автоогонь: удержание ЛКМ (не для дробовика/снайперки/гранатомёта)
-        if (!armoryOpen_ && !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
+        if (!inMenu_ && !armoryOpen_ && !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
             int wt = currentWeapon_;
             if (wt != W_SHOTGUN && wt != W_SNIPER && wt != W_LAUNCHER) {
                 TryFire();
@@ -1658,6 +1733,44 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         
         // Обновляем анимацию покачивания оружия
         UpdateWeaponBob(dt);
+
+        // Камера медленно крутится вокруг арены, пока игрок в меню
+        if (inMenu_) {
+            yaw_ += dt * 6.0f;
+        }
+
+        // Комбо-таймер: серия убийств живёт 4 секунды
+        if (comboTimer_ > 0.0f) {
+            comboTimer_ -= dt;
+            if (comboTimer_ <= 0.0f && comboCount_ > 0) {
+                comboCount_ = 0;
+                UpdateScoreDisplay();
+            }
+        }
+
+        if (!inMenu_) {
+            if (gameMode_ == MODE_ARENA) {
+                UpdateEnemies(dt);
+                int aliveCount = 0;
+                for (unsigned i = 0; i < enemies_.Size(); ++i) if (enemies_[i].alive_) aliveCount++;
+                if (aliveCount == 0) {
+                    waveRespawnTimer_ += dt;
+                    if (waveRespawnTimer_ > 3.0f) { waveRespawnTimer_ = 0.0f; SpawnWave(); }
+                }
+            } else if (gameMode_ == MODE_RANGE) {
+                int activeCount = 0;
+                for (unsigned i = 0; i < targets_.Size(); ++i) if (targets_[i].isActive_) activeCount++;
+                if (activeCount < 3) {
+                    rangeRespawnTimer_ += dt;
+                    if (rangeRespawnTimer_ > 8.0f) {
+                        rangeRespawnTimer_ = 0.0f;
+                        float rx = (float)(rand() % 30 - 15);
+                        float rz = (float)(rand() % 30 - 15);
+                        CreateTarget(Vector3(rx, 1.5f, rz), Vector3(0, 0, 1));
+                    }
+                }
+            }
+        }
     }
     
     void HandlePostUpdate(StringHash eventType, VariantMap& eventData) {
@@ -1700,6 +1813,35 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         using namespace KeyDown;
         
         int key = eventData[P_KEY].GetI32();
+
+        // ===== Главное меню перехватывает весь ввод =====
+        if (inMenu_) {
+            if (inSettings_) {
+                if (key == KEY_UP || key == KEY_W) { settingsSel_ = (settingsSel_ + 6) % 7; PlayUISound(); UpdateSettingsDisplay(); }
+                else if (key == KEY_DOWN || key == KEY_S) { settingsSel_ = (settingsSel_ + 1) % 7; PlayUISound(); UpdateSettingsDisplay(); }
+                else if (key == KEY_LEFT || key == KEY_A) { ChangeSetting(-1); }
+                else if (key == KEY_RIGHT || key == KEY_D) { ChangeSetting(1); }
+                else if (key == KEY_RETURN) { if (settingsSel_ == 6) ShowSettings(false); else ChangeSetting(1); }
+                else if (key == KEY_ESCAPE) { ShowSettings(false); }
+                return;
+            }
+            if (key == KEY_UP || key == KEY_W) { menuSel_ = (menuSel_ + 3) % 4; PlayUISound(); UpdateMainMenuSelection(); }
+            else if (key == KEY_DOWN || key == KEY_S) { menuSel_ = (menuSel_ + 1) % 4; PlayUISound(); UpdateMainMenuSelection(); }
+            else if (key == KEY_RETURN || key == KEY_SPACE) {
+                if (menuSel_ == 0) StartGameMode(MODE_RANGE);
+                else if (menuSel_ == 1) StartGameMode(MODE_ARENA);
+                else if (menuSel_ == 2) ShowSettings(true);
+                else engine_->Exit();
+            }
+            else if (key == KEY_ESCAPE) engine_->Exit();
+            return;
+        }
+
+        // F — быстрая смена режима (тир <-> арена)
+        if (key == KEY_F) {
+            StartGameMode(gameMode_ == MODE_RANGE ? MODE_ARENA : MODE_RANGE);
+            return;
+        }
         
         // Бег
         if (key == KEY_LSHIFT || key == KEY_RSHIFT) {
@@ -1707,7 +1849,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         }
         
         // Перезарядка
-        if (key == KEY_R && !weapon_.isReloading_) {
+        if (key == KEY_R && !inMenu_ && !weapon_.isReloading_) {
             StartReload();
         }
         
@@ -2130,6 +2272,14 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     
     void CheckTargetHit(RigidBody* hitBody, float damage) {
         if (!hitBody) return;
+
+        Node* hn0 = hitBody->GetNode();
+        if (hn0 && hn0->HasTag(STRING_HASH("Enemy"))) {
+            for (auto& e : enemies_) {
+                if (e.alive_ && e.node_ == hn0) { DamageEnemy(e, damage); break; }
+            }
+            return;
+        }
         
         Node* hitNode = hitBody->GetNode();
         if (!hitNode) return;
@@ -2140,6 +2290,8 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
                 // Попали в мишень!
                 target.health_ -= damage;
                 
+                CreateHitSpark(hitNode->GetPosition());
+
                 // Визуальный эффект попадания
                 StaticModel* model = hitNode->GetComponent<StaticModel>();
                 if (model) {
@@ -2165,8 +2317,8 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     void DestroyTarget(TargetData& target) {
         target.isActive_ = false;
         
-        // Обновляем статистику
-        player_.score_ += target.scoreValue_;
+        // Комбо-очки (серия убийств подряд)
+        AddScoreWithCombo(target.scoreValue_);
         player_.kills_++;
         
         // Удаляем мишень
@@ -2174,6 +2326,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
         if (targetNode) {
             // Эффект разрушения
             CreateExplosionEffect(targetNode->GetPosition());
+            CreateDebrisBurst(targetNode->GetPosition());
             PlayDestroySound();
             
             // Удаляем из сцены
@@ -2279,6 +2432,8 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     // Звуковые эффекты (заглушки)
     // =========================================================================
     
+    float SfxGain(float base) const { return Clamp(base * sfxVolume_, 0.0f, 1.0f); }
+
     void PlayShootSound() {
         if (!soundSource_) return;
         Sound* s = shootSounds_[currentWeapon_];
@@ -2293,27 +2448,27 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     }
     
     void PlayReloadSound() {
-        if (soundSource_ && reloadSound_) { soundSource_->SetGain(0.8f); soundSource_->Play(reloadSound_); }
+        if (soundSource_ && reloadSound_) { soundSource_->SetGain(SfxGain(0.8f)); soundSource_->Play(reloadSound_); }
     }
     
     void PlayEmptyClickSound() {
-        if (soundSource_ && emptyClickSound_) { soundSource_->SetGain(0.6f); soundSource_->Play(emptyClickSound_); }
+        if (soundSource_ && emptyClickSound_) { soundSource_->SetGain(SfxGain(0.6f)); soundSource_->Play(emptyClickSound_); }
     }
     
     void PlayHitSound() {
-        if (soundSource_ && hitSound_) { soundSource_->SetGain(0.7f); soundSource_->Play(hitSound_); }
+        if (soundSource_ && hitSound_) { soundSource_->SetGain(SfxGain(0.7f)); soundSource_->Play(hitSound_); }
     }
     
     void PlayDestroySound() {
-        if (soundSource_ && destroySound_) { soundSource_->SetGain(0.9f); soundSource_->Play(destroySound_); }
+        if (soundSource_ && destroySound_) { soundSource_->SetGain(SfxGain(0.9f)); soundSource_->Play(destroySound_); }
     }
 
     void PlayUISound() {
-        if (soundSource_ && uiSelectSound_) { soundSource_->SetGain(0.5f); soundSource_->Play(uiSelectSound_); }
+        if (soundSource_ && uiSelectSound_) { soundSource_->SetGain(SfxGain(0.5f)); soundSource_->Play(uiSelectSound_); }
     }
 
     void PlayJumpSound() {
-        if (soundSource_ && jumpSound_) { soundSource_->SetGain(0.45f); soundSource_->Play(jumpSound_); }
+        if (soundSource_ && jumpSound_) { soundSource_->SetGain(SfxGain(0.45f)); soundSource_->Play(jumpSound_); }
     }
 
     void PlayLandSound(float impact) {
@@ -2583,6 +2738,541 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             // Центрируем мышь при скрытии
             auto* graphics = GetSubsystem<Graphics>();
             input->SetMousePosition(IntVector2(graphics->GetWidth() / 2, graphics->GetHeight() / 2));
+        }
+    }
+
+    // =========================================================================
+    // НАСТРОЙКИ: загрузка/сохранение settings.ini, применение на лету
+    // =========================================================================
+
+    String SettingsPath() const {
+        return GetSubsystem<FileSystem>()->GetProgramDir() + "settings.ini";
+    }
+
+    void LoadSettingsFile() {
+        auto* fs = GetSubsystem<FileSystem>();
+        if (!fs->FileExists(SettingsPath())) return;
+        SharedPtr<XMLFile> xml = new XMLFile(context_);
+        if (!xml->LoadFile(SettingsPath())) return;
+        XMLElement rootEl = xml->GetRoot();
+        XMLElement gfx = rootEl.GetChild("graphics");
+        if (gfx) {
+            gfxShadowIdx_ = Clamp(gfx.GetInt("shadows", gfxShadowIdx_), 0, 2);
+            gfxGlowIdx_   = Clamp(gfx.GetInt("bloom", gfxGlowIdx_), 0, 2);
+            gfxResIdx_    = Clamp(gfx.GetInt("resolution", gfxResIdx_), 0, 2);
+            gfxAnisoIdx_  = Clamp(gfx.GetInt("anisotropic", gfxAnisoIdx_), 0, 2);
+        }
+        XMLElement snd = rootEl.GetChild("sound");
+        if (snd) {
+            sfxVolume_   = Clamp(snd.GetFloat("sfx", sfxVolume_), 0.0f, 1.0f);
+            musicVolume_ = Clamp(snd.GetFloat("music", musicVolume_), 0.0f, 1.0f);
+        }
+        XMLElement prog = rootEl.GetChild("progress");
+        if (prog) highScore_ = Max(0, prog.GetInt("highscore", highScore_));
+    }
+
+    void SaveSettingsFile() {
+        SharedPtr<XMLFile> xml = new XMLFile(context_);
+        XMLElement rootEl = xml->CreateRoot("chikengun");
+        XMLElement gfx = rootEl.CreateChild("graphics");
+        gfx.SetInt("shadows", gfxShadowIdx_);
+        gfx.SetInt("bloom", gfxGlowIdx_);
+        gfx.SetInt("resolution", gfxResIdx_);
+        gfx.SetInt("anisotropic", gfxAnisoIdx_);
+        XMLElement snd = rootEl.CreateChild("sound");
+        snd.SetFloat("sfx", sfxVolume_);
+        snd.SetFloat("music", musicVolume_);
+        XMLElement prog = rootEl.CreateChild("progress");
+        prog.SetInt("highscore", highScore_);
+        xml->SaveFile(SettingsPath());
+    }
+
+    void ApplyGraphicsSettings() {
+        auto* renderer = GetSubsystem<Renderer>();
+        if (!renderer) return;
+
+        static const int shadowSizes[3] = { 1024, 2048, 4096 };
+        renderer->SetShadowMapSize((unsigned)shadowSizes[Clamp(gfxShadowIdx_, 0, 2)]);
+
+        switch (gfxGlowIdx_) {
+        case 0: renderer->SetHDRRendering(false); break;
+        case 1: renderer->SetHDRRendering(true);
+                renderer->SetGlowThreshold(0.9f);
+                renderer->SetGlowBias(0.02f);
+                renderer->SetGlowBlur(BLEUR_NONE); break;
+        default: renderer->SetHDRRendering(true);
+                renderer->SetGlowThreshold(0.6f);
+                renderer->SetGlowBias(0.05f);
+                renderer->SetGlowBlur(BLEUR_TWICE); break;
+        }
+
+        auto* graphics = GetSubsystem<Graphics>();
+        if (graphics) {
+            unsigned w = graphics->GetWidth(), h = graphics->GetHeight();
+            float scale = gfxResIdx_ == 0 ? 1.0f : (gfxResIdx_ == 1 ? 0.75f : 0.5f);
+            for (unsigned i = 0; i < renderer->GetNumViewports(); ++i) {
+                Viewport* vp = renderer->GetViewport(i);
+                if (vp && vp->GetRenderPath())
+                    vp->GetRenderPath()->SetScaledResolution((unsigned)(w * scale), (unsigned)(h * scale));
+            }
+        }
+
+        static const unsigned anisoVals[3] = { 4, 8, 16 };
+        auto* cache = GetSubsystem<ResourceCache>();
+        static const char* texFiles[] = {
+            "Textures/Game/StoneHD.png", "Textures/Game/FloorTile.png",
+            "Textures/Game/MetalPanel.png", "Textures/Game/BrushedMetal.png",
+            "Textures/Game/CrateWood.png"
+        };
+        for (unsigned t = 0; t < sizeof(texFiles) / sizeof(texFiles[0]); ++t) {
+            SharedPtr<Texture2D> tex = cache->GetResource<Texture2D>(texFiles[t], false);
+            if (tex) tex->SetAnisotropy(anisoVals[Clamp(gfxAnisoIdx_, 0, 2)]);
+        }
+
+        if (soundSource_) soundSource_->SetGain(sfxVolume_);
+        if (musicSource_) musicSource_->SetGain(musicVolume_);
+    }
+
+    // =========================================================================
+    // ГЛАВНОЕ МЕНЮ
+    // =========================================================================
+
+    void CreateMainMenu() {
+        if (mainMenuPanel_) return;
+        auto* ui = GetSubsystem<UI>();
+        auto* root = ui->GetRoot();
+        int sw = GetSubsystem<Graphics>()->GetWidth();
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+
+        mainMenuPanel_ = root->CreateChild<UIElement>("MainMenuPanel");
+        mainMenuPanel_->SetSize(sw, sh);
+
+        BorderImage* bg = mainMenuPanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.01f, 0.02f, 0.04f, 0.62f));
+
+        Text* title = mainMenuPanel_->CreateChild<Text>();
+        title->SetFont(font_, 64);
+        title->SetText("CHIKENGUN 2.1");
+        title->SetTextAlignment(HA_CENTER);
+        title->SetPosition(sw / 2 - 400, sh / 2 - 220);
+        title->SetWidth(800);
+        title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
+
+        Text* sub = mainMenuPanel_->CreateChild<Text>();
+        sub->SetFont(font_, 18);
+        sub->SetText("ARENA SHOOTER | URHO3D");
+        sub->SetTextAlignment(HA_CENTER);
+        sub->SetPosition(sw / 2 - 400, sh / 2 - 150);
+        sub->SetWidth(800);
+        sub->SetColor(Color(0.5f, 0.8f, 1.0f, 0.9f));
+
+        const char* items[4] = { "ТИР (мишени)", "АРЕНА (волны роботов)", "НАСТРОЙКИ", "ВЫХОД" };
+        for (int i = 0; i < 4; ++i) {
+            Text* it = mainMenuPanel_->CreateChild<Text>();
+            it->SetFont(font_, 28);
+            it->SetText(items[i]);
+            it->SetPosition(sw / 2 - 260, sh / 2 - 70 + i * 48);
+            it->SetWidth(520);
+            mainMenuItems_.Push(it);
+        }
+
+        Text* hint = mainMenuPanel_->CreateChild<Text>();
+        hint->SetFont(font_, 16);
+        hint->SetText("W/S или стрелки - выбор, Enter - запуск");
+        hint->SetTextAlignment(HA_CENTER);
+        hint->SetPosition(sw / 2 - 350, sh / 2 + 150);
+        hint->SetWidth(700);
+        hint->SetColor(Color(0.7f, 0.75f, 0.8f, 0.9f));
+
+        UpdateMainMenuSelection();
+    }
+
+    void ShowMainMenu(bool show) {
+        inMenu_ = show;
+        if (show) {
+            if (!mainMenuPanel_) CreateMainMenu();
+            mainMenuPanel_->SetVisible(true);
+            SetGameHudVisible(false);
+            auto* input = GetSubsystem<Input>();
+            input->SetMouseVisible(false);
+        } else {
+            if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
+            SetGameHudVisible(true);
+        }
+    }
+
+    void SetGameHudVisible(bool vis) {
+        if (crosshairCenter_) crosshairCenter_->SetVisible(vis);
+        if (crosshairTop_) crosshairTop_->SetVisible(vis);
+        if (crosshairBottom_) crosshairBottom_->SetVisible(vis);
+        if (crosshairLeft_) crosshairLeft_->SetVisible(vis);
+        if (crosshairRight_) crosshairRight_->SetVisible(vis);
+        if (ammoText_) ammoText_->SetVisible(vis);
+        if (healthText_) healthText_->SetVisible(vis);
+        if (scoreText_) scoreText_->SetVisible(vis);
+        if (accuracyText_) accuracyText_->SetVisible(vis);
+        if (messageText_) messageText_->SetVisible(vis);
+        if (weaponNameText_) weaponNameText_->SetVisible(vis);
+        if (hudPanelBg_) hudPanelBg_->SetVisible(vis);
+        if (damageOverlay_) damageOverlay_->SetVisible(vis);
+        if (reloadOverlay_) reloadOverlay_->SetVisible(vis);
+        if (weaponNode_) weaponNode_->SetVisible(vis);
+    }
+
+    void UpdateMainMenuSelection() {
+        static const char* labels[4] = { "ТИР (мишени)", "АРЕНА (волны роботов)", "НАСТРОЙКИ", "ВЫХОД" };
+        for (unsigned i = 0; i < mainMenuItems_.Size(); ++i) {
+            bool sel = ((int)i == menuSel_);
+            mainMenuItems_[i]->SetText((sel ? ">  " : "   ") + String(labels[i]) + (sel ? "  <" : ""));
+            mainMenuItems_[i]->SetColor(sel ? Color(1.0f, 0.85f, 0.2f, 1.0f) : Color(0.85f, 0.85f, 0.9f, 1.0f));
+        }
+    }
+
+    // =========================================================================
+    // ПАНЕЛЬ НАСТРОЕК
+    // =========================================================================
+
+    void CreateSettingsPanel() {
+        if (settingsPanel_) return;
+        auto* ui = GetSubsystem<UI>();
+        auto* root = ui->GetRoot();
+        int sw = GetSubsystem<Graphics>()->GetWidth();
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+
+        settingsPanel_ = root->CreateChild<UIElement>("SettingsPanel");
+        settingsPanel_->SetSize(sw, sh);
+
+        BorderImage* bg = settingsPanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.01f, 0.02f, 0.04f, 0.88f));
+
+        Text* title = settingsPanel_->CreateChild<Text>();
+        title->SetFont(font_, 40);
+        title->SetText("НАСТРОЙКИ");
+        title->SetTextAlignment(HA_CENTER);
+        title->SetPosition(sw / 2 - 300, sh / 2 - 220);
+        title->SetWidth(600);
+        title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
+
+        for (int i = 0; i < 7; ++i) {
+            Text* row = settingsPanel_->CreateChild<Text>();
+            row->SetFont(font_, 24);
+            row->SetPosition(sw / 2 - 320, sh / 2 - 140 + i * 44);
+            row->SetWidth(640);
+            settingsItems_.Push(row);
+        }
+
+        Text* hint = settingsPanel_->CreateChild<Text>();
+        hint->SetFont(font_, 16);
+        hint->SetText("A/D или стрелки - менять, Enter - применить/назад, Esc - назад (применяет автоматически)");
+        hint->SetTextAlignment(HA_CENTER);
+        hint->SetPosition(sw / 2 - 450, sh / 2 + 190);
+        hint->SetWidth(900);
+        hint->SetColor(Color(0.7f, 0.75f, 0.8f, 0.9f));
+
+        UpdateSettingsDisplay();
+    }
+
+    void ShowSettings(bool show) {
+        inSettings_ = show;
+        if (show) {
+            if (!settingsPanel_) CreateSettingsPanel();
+            settingsPanel_->SetVisible(true);
+        } else {
+            if (settingsPanel_) settingsPanel_->SetVisible(false);
+            SaveSettingsFile();
+            PlayUISound();
+        }
+    }
+
+    void UpdateSettingsDisplay() {
+        static const char* shadowNames[3] = { "1K", "2K", "4K" };
+        static const char* bloomNames[3]  = { "выкл", "слабый", "полный" };
+        static const char* resNames[3]    = { "нативное", "75%", "50%" };
+        static const char* anisoNames[3]  = { "4x", "8x", "16x" };
+        const char* names[7] = { "Тени", "HDR Bloom", "Разрешение", "Анизотропная фильтрация", "Громкость эффектов", "Громкость музыки", "Назад" };
+        String vals[7];
+        vals[0] = shadowNames[Clamp(gfxShadowIdx_, 0, 2)];
+        vals[1] = bloomNames[Clamp(gfxGlowIdx_, 0, 2)];
+        vals[2] = resNames[Clamp(gfxResIdx_, 0, 2)];
+        vals[3] = anisoNames[Clamp(gfxAnisoIdx_, 0, 2)];
+        vals[4] = String((int)(sfxVolume_ * 100.0f)) + "%";
+        vals[5] = String((int)(musicVolume_ * 100.0f)) + "%";
+        vals[6] = "<- в меню";
+        for (unsigned i = 0; i < settingsItems_.Size(); ++i) {
+            bool sel = ((int)i == settingsSel_);
+            settingsItems_[i]->SetText((sel ? ">  " : "   ") + String(names[i]) + ":  " + vals[i]);
+            settingsItems_[i]->SetColor(sel ? Color(1.0f, 0.85f, 0.2f, 1.0f) : Color(0.85f, 0.85f, 0.9f, 1.0f));
+        }
+    }
+
+    void ChangeSetting(int delta) {
+        switch (settingsSel_) {
+        case 0: gfxShadowIdx_ = Clamp(gfxShadowIdx_ + delta, 0, 2); break;
+        case 1: gfxGlowIdx_   = Clamp(gfxGlowIdx_ + delta, 0, 2); break;
+        case 2: gfxResIdx_    = Clamp(gfxResIdx_ + delta, 0, 2); break;
+        case 3: gfxAnisoIdx_  = Clamp(gfxAnisoIdx_ + delta, 0, 2); break;
+        case 4: sfxVolume_   = Clamp(sfxVolume_ + delta * 0.1f, 0.0f, 1.0f); break;
+        case 5: musicVolume_ = Clamp(musicVolume_ + delta * 0.1f, 0.0f, 1.0f); break;
+        default: return;
+        }
+        PlayUISound();
+        ApplyGraphicsSettings();
+        UpdateSettingsDisplay();
+    }
+
+    // =========================================================================
+    // РЕЖИМЫ ИГРЫ
+    // =========================================================================
+
+    void ClearEnemies() {
+        for (unsigned i = 0; i < enemyNodes_.Size(); ++i)
+            if (enemyNodes_[i]) enemyNodes_[i]->Remove();
+        enemyNodes_.Clear();
+        enemies_.Clear();
+    }
+
+    void StartGameMode(GameMode mode) {
+        gameMode_ = mode;
+        player_.score_ = 0;
+        player_.kills_ = 0;
+        comboCount_ = 0;
+        comboTimer_ = 0.0f;
+        waveRespawnTimer_ = 0.0f;
+        rangeRespawnTimer_ = 0.0f;
+        ClearEnemies();
+
+        if (mode == MODE_ARENA) {
+            waveNum_ = 0;
+            SpawnWave();
+            ShowMessage("РЕЖИМ: АРЕНА - отбивай волны роботов! F - сменить режим");
+        } else {
+            waveNum_ = 0;
+            ShowMessage("РЕЖИМ: ТИР - уничтожь все мишени! F - арена");
+        }
+        UpdateScoreDisplay();
+        ShowMainMenu(false);
+    }
+
+    // =========================================================================
+    // ВРАГИ-РОБОТЫ: спавн, ИИ, урон
+    // =========================================================================
+
+    void EnsureRobotMaterials() {
+        if (robotBodyMat_) return;
+        robotBodyMat_ = MakeTinted(nullptr, nullptr, Color(150, 155, 165)).ReleaseRef();
+        robotEyeMat_  = MakeTinted(nullptr, nullptr, Color(255, 40, 40)).ReleaseRef();
+    }
+
+    void SpawnEnemyRobot(const Vector3& pos, bool elite) {
+        EnsureRobotMaterials();
+        Node* rob = scene_->CreateChild("Enemy", LOCAL);
+        rob->SetPosition(pos);
+        rob->AddTag(STRING_HASH("Enemy"));
+
+        Material* bodyMat = robotBodyMat_;
+        Color eyeColor(255, 40, 40);
+        if (elite) {
+            static SharedPtr<Material> keepCyan;
+            if (!keepCyan) keepCyan = MakeTinted(nullptr, nullptr, Color(40, 220, 255));
+            bodyMat = keepCyan.Get();
+            eyeColor = Color(255, 200, 40);
+        }
+
+        StaticModel* torso = rob->CreateComponent<StaticModel>();
+        torso->SetModel(boxModel_);
+        torso->SetMaterial(bodyMat);
+        torso->SetCastShadows(true);
+
+        Node* head = rob->CreateChild("Head");
+        head->SetPosition(Vector3(0, 0.95f, 0));
+        head->SetScale(Vector3(0.5f, 0.45f, 0.5f));
+        StaticModel* hm = head->CreateComponent<StaticModel>();
+        hm->SetModel(boxModel_);
+        hm->SetMaterial(bodyMat);
+        hm->SetCastShadows(true);
+
+        static Vector<SharedPtr<Material>> eyeMats;
+        SharedPtr<Material> eyeMat = MakeTinted(nullptr, nullptr, eyeColor);
+        eyeMats.Push(eyeMat);
+        Material* em = eyeMats.Back().Get();
+        Node* eyeL = head->CreateChild("EyeL");
+        eyeL->SetPosition(Vector3(-0.12f, 0.05f, 0.26f));
+        eyeL->SetScale(Vector3(0.1f, 0.08f, 0.03f));
+        StaticModel* elm = eyeL->CreateComponent<StaticModel>();
+        elm->SetModel(boxModel_); elm->SetMaterial(em);
+        Node* eyeR = head->CreateChild("EyeR");
+        eyeR->SetPosition(Vector3(0.12f, 0.05f, 0.26f));
+        eyeR->SetScale(Vector3(0.1f, 0.08f, 0.03f));
+        StaticModel* erm = eyeR->CreateComponent<StaticModel>();
+        erm->SetModel(boxModel_); erm->SetMaterial(em);
+
+        RigidBody* rb = rob->CreateComponent<RigidBody>();
+        rb->SetMass(3.0f);
+        rb->SetCollisionLayer(2);
+        rb->SetCollisionMask(3);
+        rb->SetLinearDamping(4.0f);
+        rb->SetAngularDamping(10.0f);
+        CollisionShape* cs = rob->CreateComponent<CollisionShape>();
+        cs->SetBox(Vector3(0.8f, 1.8f, 0.6f));
+
+        EnemyData e;
+        e.node_ = rob;
+        e.body_ = rb;
+        e.health_ = elite ? 200.0f : 100.0f;
+        e.alive_ = true;
+        e.patrolCenter_ = pos;
+        e.patrolRadius_ = elite ? 6.0f : 4.0f;
+        e.phase_ = (float)(rand() % 628) / 100.0f;
+        e.speed_ = elite ? 2.6f : 1.6f;
+        e.scoreValue_ = elite ? 300 : 150;
+        enemies_.Push(e);
+        enemyNodes_.Push(rob);
+    }
+
+    void SpawnWave() {
+        ++waveNum_;
+        int count = Min(3 + waveNum_, 10);
+        const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 6.0f;
+        for (int i = 0; i < count; ++i) {
+            float ang = (float)(rand() % 360) * 0.0174533f;
+            float r = 10.0f + (float)(rand() % 30);
+            Vector3 pos(cosf(ang) * r, 1.0f, sinf(ang) * r);
+            pos.x_ = Clamp(pos.x_, -half, half);
+            pos.z_ = Clamp(pos.z_, -half, half);
+            bool elite = (waveNum_ >= 3) && ((rand() % 100) < 20);
+            SpawnEnemyRobot(pos, elite);
+        }
+        ShowMessage("ВОЛНА " + String(waveNum_) + "! Роботов: " + String(count));
+        UpdateScoreDisplay();
+    }
+
+    void UpdateEnemies(float dt) {
+        Vector3 camPos = cameraNode_ ? cameraNode_->GetPosition() : Vector3::ZERO;
+        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+            EnemyData& e = enemies_[i];
+            if (!e.alive_) continue;
+            Node* n = e.node_.Get();
+            if (!n) { e.alive_ = false; continue; }
+
+            Vector3 p = n->GetPosition();
+            Vector3 toCam = camPos - p; toCam.y_ = 0.0f;
+            float dist = toCam.Length();
+
+            Vector3 targetPos = p;
+            if (dist > 14.0f) {
+                targetPos = p + toCam.Normalized() * (e.speed_ * dt);
+            } else if (dist < 5.0f) {
+                targetPos = p - toCam.Normalized() * (e.speed_ * 0.5f * dt);
+            } else {
+                e.phase_ += dt * 0.7f;
+                targetPos = e.patrolCenter_ + Vector3(cosf(e.phase_) * e.patrolRadius_, 0.0f,
+                                                     sinf(e.phase_ * 0.8f) * e.patrolRadius_);
+                Vector3 dir = targetPos - p; dir.y_ = 0.0f;
+                float dl = dir.Length();
+                if (dl > 0.001f) targetPos = p + dir / dl * Min(dl, e.speed_ * dt);
+            }
+
+            n->SetPosition(Vector3(targetPos.x_, 1.0f + 0.05f * sinf(timeAcc_ * 3.0f + e.phase_), targetPos.z_));
+            if (dist > 0.5f) {
+                float yawDeg = atan2f(toCam.x_, toCam.z_) * 57.29578f;
+                n->SetRotation(Quaternion(yawDeg, Vector3::UP));
+            }
+        }
+    }
+
+    void DamageEnemy(EnemyData& e, float damage) {
+        if (!e.alive_) return;
+        e.health_ -= damage;
+        Node* n = e.node_.Get();
+        if (n) {
+            CreateHitSpark(n->GetPosition() + Vector3(0, 0.5f, 0));
+            PlayHitSound();
+            RigidBody* rb = e.body_.Get();
+            if (rb) {
+                Vector3 camPos = cameraNode_ ? cameraNode_->GetPosition() : Vector3::ZERO;
+                Vector3 kb = n->GetPosition() - camPos; kb.y_ = 0.2f;
+                rb->ApplyImpulse(kb.Normalized() * 6.0f);
+            }
+        }
+        if (e.health_ <= 0.0f) {
+            e.alive_ = false;
+            if (n) {
+                CreateExplosionEffect(n->GetPosition());
+                CreateDebrisBurst(n->GetPosition());
+                PlayExplosionAt(n->GetPosition());
+                n->Remove();
+            }
+            AddScoreWithCombo(e.scoreValue_);
+            player_.kills_++;
+            UpdateScoreDisplay();
+            ShowMessage("РОБОТ УНИЧТОЖЕН! +" + String(e.scoreValue_) +
+                        (comboCount_ > 1 ? (" (COMBO x" + String(comboCount_) + ")") : ""));
+        }
+    }
+
+    // =========================================================================
+    // ЧАСТИЦЫ: осколки и искры
+    // =========================================================================
+
+    void CreateDebrisBurst(const Vector3& pos) {
+        Node* debrisRoot = scene_->CreateChild("Debris");
+        debrisRoot->SetPosition(pos);
+        for (int i = 0; i < 8; ++i) {
+            Node* frag = debrisRoot->CreateChild("Frag");
+            frag->SetScale(Vector3(0.08f, 0.08f, 0.08f));
+            StaticModel* sm = frag->CreateComponent<StaticModel>();
+            sm->SetModel(boxModel_);
+            sm->SetMaterial(robotBodyMat_ ? robotBodyMat_ : metalMaterial_);
+            RigidBody* rb = frag->CreateComponent<RigidBody>();
+            rb->SetMass(0.2f);
+            rb->SetCollisionLayer(0);
+            rb->SetRestitution(0.4f);
+            CollisionShape* cs = frag->CreateComponent<CollisionShape>();
+            cs->SetBox(Vector3::ONE);
+            float a = (float)(rand() % 628) / 100.0f;
+            float up = 3.0f + (float)(rand() % 40) / 10.0f;
+            rb->SetLinearVelocity(Vector3(cosf(a) * 4.0f, up, sinf(a) * 4.0f));
+            rb->SetAngularVelocity(Vector3((float)(rand() % 400 - 200), (float)(rand() % 400 - 200), (float)(rand() % 400 - 200)));
+        }
+        PendingRemove pr; pr.node_ = debrisRoot; pr.ttl_ = 4.0f; pendingRemoves_.Push(pr);
+
+        if (sparkEffect_) {
+            Node* sparks = scene_->CreateChild("DebrisSparks");
+            sparks->SetPosition(pos);
+            ParticleEmitter* pe = sparks->CreateComponent<ParticleEmitter>();
+            pe->SetEffect(sparkEffect_);
+            pe->SetEDuration(0.4f);
+            pe->SetEmitting(true);
+            PendingRemove pr2; pr2.node_ = sparks; pr2.ttl_ = 1.5f; pendingRemoves_.Push(pr2);
+        }
+    }
+
+    void CreateHitSpark(const Vector3& pos) {
+        if (!sparkEffect_) return;
+        Node* sparkNode = scene_->CreateChild("HitSpark");
+        sparkNode->SetPosition(pos);
+        ParticleEmitter* emitter = sparkNode->CreateComponent<ParticleEmitter>();
+        emitter->SetEffect(sparkEffect_);
+        emitter->SetEDuration(0.2f);
+        emitter->SetEmitting(true);
+        PendingRemove pr; pr.node_ = sparkNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr);
+    }
+
+    // =========================================================================
+    // КОМБО / ОЧКИ
+    // =========================================================================
+
+    void AddScoreWithCombo(int base) {
+        comboCount_++;
+        comboTimer_ = 4.0f;
+        bestCombo_ = Max(bestCombo_, comboCount_);
+        int gained = (int)(base * (1.0f + 0.5f * (float)(comboCount_ - 1)));
+        player_.score_ += gained;
+        if (player_.score_ > highScore_) {
+            highScore_ = player_.score_;
+            SaveSettingsFile();
         }
     }
 };
