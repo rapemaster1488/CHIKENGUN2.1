@@ -379,12 +379,29 @@ private:
     ParticleEffect* smokeEffect_ = nullptr;
     Font* font_ = nullptr;
     
-    // Звуки
-    Sound* shootSound_ = nullptr;
+    // Звуки (процедурно-синтезированные WAV в Data/Sounds)
+    Sound* shootSounds_[WEAPON_COUNT] = {};
     Sound* reloadSound_ = nullptr;
     Sound* emptyClickSound_ = nullptr;
     Sound* hitSound_ = nullptr;
     Sound* destroySound_ = nullptr;
+    Sound* explosionSound_ = nullptr;
+    Sound* jumpSound_ = nullptr;
+    Sound* landSound_ = nullptr;
+    Sound* uiSelectSound_ = nullptr;
+    SoundSource* soundSource_ = nullptr;   // 2D-микшер на камере
+    SharedPtr<SoundSource> musicSource_;       // фоновая музыка
+    SoundSource3D* explosionSource3D_ = nullptr; // взрывы в мировом пространстве
+
+    // Загрузочный экран
+    bool loadingScreenActive_ = false;
+    float loadProgress_ = 0.0f;
+    SharedPtr<UIElement> loadingPanel_;
+    SharedPtr<Text> loadingTitleText_;
+    SharedPtr<Text> loadingTipText_;
+    SharedPtr<BorderImage> loadingBarFill_;
+    Vector<String> loadSteps_;
+    int loadStepIndex_ = 0;
 
 public:
     MyApp(Context* context) : Application(context) {}
@@ -403,6 +420,10 @@ public:
         
         // Настройка движка
         SetupEngineSettings();
+
+        // Загрузочный экран показываем ДО долгой загрузки ресурсов
+        CreateLoadingScreen();
+        loadingScreenActive_ = true;
         
         // Загрузка ресурсов
         if (!LoadResources()) {
@@ -413,15 +434,19 @@ public:
         
         // Создание сцены
         CreateScene();
+        AdvanceLoadingStep();
         
         // Создание игрока и камеры
         CreatePlayer();
+        AdvanceLoadingStep();
         
         // Создание оружия
         CreateWeapon();
+        AdvanceLoadingStep();
         
         // Создание UI
         CreateUI();
+        AdvanceLoadingStep();
         
         // Настройка ввода
         SetupInput();
@@ -429,6 +454,9 @@ public:
         // Подписка на события
         SubscribeToEvents();
         
+        // Скрываем загрузочный экран перед первым игровым кадром
+        HideLoadingScreen();
+
         // Применение выбранного оружия/скина
         EquipWeapon(currentWeapon_, true);
 
@@ -492,6 +520,38 @@ private:
             URHO3D_LOGWARNING("Box model not found, will use procedural geometry");
         }
         
+        // Звуки выстрелов — по одному на каждый тип оружия
+        static const char* shotFiles[WEAPON_COUNT] = {
+            "Sounds/Shot_Pistol.wav", "Sounds/Shot_SMG.wav", "Sounds/Shot_Rifle.wav",
+            "Sounds/Shot_Shotgun.wav", "Sounds/Shot_Sniper.wav", "Sounds/Shot_Minigun.wav",
+            "Sounds/Shot_Grenade.wav"
+        };
+        for (int i2 = 0; i2 < WEAPON_COUNT; ++i2) {
+            shootSounds_[i2] = cache->GetResource<Sound>(shotFiles[i2]);
+            if (shootSounds_[i2]) shootSounds_[i2]->SetLooped(false);
+        }
+
+        reloadSound_     = cache->GetResource<Sound>("Sounds/Reload.wav");
+        emptyClickSound_ = cache->GetResource<Sound>("Sounds/EmptyClick.wav");
+        hitSound_        = cache->GetResource<Sound>("Sounds/HitMarker.wav");
+        destroySound_    = cache->GetResource<Sound>("Sounds/TargetDestroy.wav");
+        explosionSound_  = cache->GetResource<Sound>("Sounds/Explosion.wav");
+        jumpSound_       = cache->GetResource<Sound>("Sounds/Jump.wav");
+        landSound_       = cache->GetResource<Sound>("Sounds/Land.wav");
+        uiSelectSound_   = cache->GetResource<Sound>("Sounds/UI_Select.wav");
+
+        // Фоновая музыка (синтезированный трансовый луп)
+        Sound* music = cache->GetResource<Sound>("Music/Game_Theme_Loop.ogg");
+        if (music) {
+            music->SetLooped(true);
+            auto* audio = GetSubsystem<Audio>();
+            audio->StopAllSources(); // убратьpossible заглушку стартера
+            musicSource_ = node_->CreateChild("MusicNode")->CreateComponent<SoundSource>();
+            musicSource_->SetMode(SOUND_EFFECT);
+            musicSource_->SetGain(0.35f);
+            musicSource_->Play(music);
+        }
+
         return true;
     }
     
@@ -1143,6 +1203,16 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     void CreatePlayer() {
         // Создаем узел камеры
         cameraNode_ = scene_->CreateChild("Camera");
+
+        // Звуковой источник игрока: 2D-эффекты (выстрелы, UI) «приклеены» к камере
+        soundSource_ = cameraNode_->CreateComponent<SoundSource>();
+        soundSource_->SetMode(SOUND_EFFECT);
+        GetSubsystem<Audio>()->AddListener(soundSource_);
+
+        // 3D-источник для взрывов в мировом пространстве
+        explosionSource3D_ = scene_->CreateChild("ExplosionSfx")->CreateComponent<SoundSource3D>();
+        explosionSource3D_->SetMode(SOUND_EFFECT);
+        explosionSource3D_->SetMaxDistance(120.0f);
         cameraNode_->SetPosition(Vector3(0.0f, GameConstants::PLAYER_HEIGHT, 0.0f));
         
         // Добавляем компонент камеры
@@ -1796,6 +1866,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             coyoteTimer_ = 0.0f;
             onGround_ = false;
             landDuckOffset_ = -0.03f; // лёгкая «подседжка» перед отрывом
+            PlayJumpSound();
         }
 
         // --- Интегрирование позиции ---
@@ -1839,6 +1910,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
                 float impact = Clamp(fallSpeedOnLand_ / 12.0f, 0.0f, 1.0f);
                 landDuckOffset_ = -GameConstants::LAND_DUCK_AMOUNT * impact;
                 camShakeAmount_ = Max(camShakeAmount_, impact * 0.06f);
+                if (impact > 0.15f) PlayLandSound(impact);
             }
         } else if (newPos.y_ > groundY + 0.05f) {
             onGround_ = false;
@@ -2037,6 +2109,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             if (currentWeapon_ == W_LAUNCHER) {
                 CreateExplosionEffect(hitPosition);
                 ApplyExplosionDamage(hitPosition, damage);
+                PlayExplosionAt(hitPosition);
                 AddCameraShake(0.12f); // тряска камеры от взрыва
             } else {
                 CheckTargetHit(result.body_, damage);
@@ -2207,28 +2280,157 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
     // =========================================================================
     
     void PlayShootSound() {
-        // В реальной игре здесь был бы звук выстрела
-        // auto* audio = GetSubsystem<Audio>();
-        // auto* soundSource = cameraNode_->CreateComponent<SoundSource>();
-        // soundSource->Play(shootSound_);
+        if (!soundSource_) return;
+        Sound* s = shootSounds_[currentWeapon_];
+        if (!s) return;
+        // Вариация высоты/громкости — выстрелы не звучат клонами
+        float pitchVar = 1.0f + (rand() % 100 - 50) / 500.0f;
+        float gainVar = Max(0.4f, Min(1.0f, 0.85f + (rand() % 100 - 50) / 300.0f));
+        soundSource_->SetPitch(Clamp(pitchVar, 0.9f, 1.1f));
+        soundSource_->SetGain(gainVar);
+        soundSource_->Play(s);
+        soundSource_->SetPitch(1.0f);
     }
     
     void PlayReloadSound() {
-        // Звук перезарядки
+        if (soundSource_ && reloadSound_) { soundSource_->SetGain(0.8f); soundSource_->Play(reloadSound_); }
     }
     
     void PlayEmptyClickSound() {
-        // Звук щелчка пустого магазина
+        if (soundSource_ && emptyClickSound_) { soundSource_->SetGain(0.6f); soundSource_->Play(emptyClickSound_); }
     }
     
     void PlayHitSound() {
-        // Звук попадания
+        if (soundSource_ && hitSound_) { soundSource_->SetGain(0.7f); soundSource_->Play(hitSound_); }
     }
     
     void PlayDestroySound() {
-        // Звук разрушения мишени
+        if (soundSource_ && destroySound_) { soundSource_->SetGain(0.9f); soundSource_->Play(destroySound_); }
+    }
+
+    void PlayUISound() {
+        if (soundSource_ && uiSelectSound_) { soundSource_->SetGain(0.5f); soundSource_->Play(uiSelectSound_); }
+    }
+
+    void PlayJumpSound() {
+        if (soundSource_ && jumpSound_) { soundSource_->SetGain(0.45f); soundSource_->Play(jumpSound_); }
+    }
+
+    void PlayLandSound(float impact) {
+        if (soundSource_ && landSound_) { soundSource_->SetGain(Clamp(impact * 0.9f, 0.15f, 0.9f)); soundSource_->Play(landSound_); }
+    }
+
+    void PlayExplosionAt(const Vector3& pos) {
+        if (!explosionSource3D_ || !explosionSound_) return;
+        explosionSource3D_->SetPosition(pos);
+        explosionSource3D_->Play(explosionSound_);
     }
     
+    // =========================================================================
+    // ЗАГРУЗОЧНЫЙ ЭКРАН: затемнение, логотип, прогресс-бар, советы
+    // =========================================================================
+
+    void CreateLoadingScreen() {
+        // Шрифт для загрузочного экрана грузим напрямую (font_ ещё не инициализирован)
+        if (!font_) {
+            font_ = GetSubsystem<ResourceCache>()->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            if (!font_) font_ = GetSubsystem<ResourceCache>()->GetResource<Font>("Fonts/DejaVuSans.ttf");
+        }
+        auto* ui = GetSubsystem<UI>();
+        auto* root = ui->GetRoot();
+        int sw = GetSubsystem<Graphics>()->GetWidth();
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+
+        loadSteps_ = Vector<String>{
+            "Загрузка ресурсов и HD-текстур",
+            "Построение арены 192x192",
+            "Сборка оружия и камеры",
+            "Интерфейс и арсенал",
+            "Готово"
+        };
+
+        loadingPanel_ = root->CreateChild<UIElement>("LoadingPanel");
+        loadingPanel_->SetSize(sw, sh);
+
+        BorderImage* bg = loadingPanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.01f, 0.02f, 0.04f, 1.0f));
+
+        // «Неоновая» линия-акцент над заголовком
+        BorderImage* accent = loadingPanel_->CreateChild<BorderImage>();
+        accent->SetSize(420, 3);
+        accent->SetPosition(sw / 2 - 210, sh / 2 - 120);
+        accent->SetColor(Color(0.1f, 1.0f, 0.6f, 0.9f));
+
+        loadingTitleText_ = loadingPanel_->CreateChild<Text>();
+        loadingTitleText_->SetFont(font_ ? font_ : cache_font(), 56);
+        loadingTitleText_->SetText("CHIKENGUN 2.1");
+        loadingTitleText_->SetTextAlignment(HA_CENTER);
+        loadingTitleText_->SetPosition(sw / 2 - 300, sh / 2 - 105);
+        loadingTitleText_->SetWidth(600);
+        loadingTitleText_->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
+
+        Text* sub = loadingPanel_->CreateChild<Text>();
+        sub->SetFont(font_ ? font_ : cache_font(), 18);
+        sub->SetText("ARENA SHOOTER | URHO3D");
+        sub->SetTextAlignment(HA_CENTER);
+        sub->SetPosition(sw / 2 - 300, sh / 2 - 40);
+        sub->SetWidth(600);
+        sub->SetColor(Color(0.5f, 0.8f, 1.0f, 0.9f));
+
+        // Трек прогресс-бара
+        BorderImage* track = loadingPanel_->CreateChild<BorderImage>();
+        track->SetSize(520, 18);
+        track->SetPosition(sw / 2 - 260, sh / 2 + 30);
+        track->SetColor(Color(0.12f, 0.15f, 0.2f, 1.0f));
+
+        loadingBarFill_ = loadingPanel_->CreateChild<BorderImage>();
+        loadingBarFill_->SetSize(0, 18);
+        loadingBarFill_->SetPosition(sw / 2 - 260, sh / 2 + 30);
+        loadingBarFill_->SetColor(Color(0.15f, 1.0f, 0.55f, 1.0f));
+
+        loadingTipText_ = loadingPanel_->CreateChild<Text>();
+        loadingTipText_->SetFont(font_ ? font_ : cache_font(), 16);
+        loadingTipText_->SetText("Совет: ПКМ — прицел (ADS), удерживай ЛКМ для автоогня");
+        loadingTipText_->SetTextAlignment(HA_CENTER);
+        loadingTipText_->SetPosition(sw / 2 - 350, sh / 2 + 70);
+        loadingTipText_->SetWidth(700);
+        loadingTipText_->SetColor(Color(0.7f, 0.75f, 0.8f, 0.9f));
+
+        // Рендер кадра загрузки до запуска основного цикла событий
+        UpdateLoadingProgress(0.05f);
+    }
+
+    static Font* cache_font() { return nullptr; } // fallback: текст без шрифта не критичен
+
+    void UpdateLoadingProgress(float p) {
+        if (!loadingPanel_) return;
+        loadProgress_ = Clamp(p, 0.0f, 1.0f);
+        int sw = GetSubsystem<Graphics>()->GetWidth();
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+        if (loadingBarFill_) loadingBarFill_->SetSize((int)(520 * loadProgress_), 18);
+        if (loadingTipText_ && loadStepIndex_ < (int)loadSteps_.Size()) {
+            loadingTipText_->SetText(String("Загрузка: ") + loadSteps_[loadStepIndex_] +
+                                     String(" ... ") + String((int)(loadProgress_ * 100)) + "%");
+        }
+        // Принудительно рендерим кадр, чтобы прогресс-бар обновился сразу
+        GetSubsystem<Renderer>()->Update();
+    }
+
+    void AdvanceLoadingStep() {
+        ++loadStepIndex_;
+        float p = (float)loadStepIndex_ / (float)Max(1, (int)loadSteps_.Size());
+        UpdateLoadingProgress(p);
+    }
+
+    void HideLoadingScreen() {
+        if (loadingPanel_) {
+            loadingPanel_->Remove();
+            loadingPanel_ = nullptr;
+        }
+        loadingScreenActive_ = false;
+    }
+
     // =========================================================================
     // Утилиты
     // =========================================================================
@@ -2250,6 +2452,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
 
     void CycleSkin(int dir) {
         currentSkin_ = ((currentSkin_ + dir) % SKIN_COUNT + SKIN_COUNT) % SKIN_COUNT;
+        PlayUISound();
         RefreshWeaponMaterials();
         BuildWeaponModel(currentWeapon_);
         if (weaponNameText_) weaponNameText_->SetText(String(WEAPON_DEFS[currentWeapon_].name) + " | " + String(SKIN_DEFS[currentSkin_].name));
@@ -2268,6 +2471,7 @@ SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<T
             armoryPanel_->SetVisible(true);
             input->SetMouseVisible(true);
             ShowMessage("Арсенал: клик по оружию/скину, TAB — закрыть");
+            PlayUISound();
         } else {
             if (armoryPanel_) armoryPanel_->SetVisible(false);
             input->SetMouseVisible(false);
