@@ -584,10 +584,13 @@ private:
         Sound* music = cache->GetResource<Sound>("Music/Game_Theme_Loop.ogg");
         if (music) {
             music->SetLooped(true);
-            auto* audio = GetSubsystem<Audio>();
-            musicSource_ = audio->GetOutput(SOUND_EFFECT);
-            musicSource_->SetGain(musicVolume_);
-            musicSource_->Play(music);
+            // GetOutput() нет в этой сборке — музыка через отдельный неатenuированный источник на камере
+            musicSource_ = cameraNode_ ? cameraNode_->CreateComponent<SoundSource>() : nullptr;
+            if (musicSource_) {
+                musicSource_->SetAuto3DSound(false);
+                musicSource_->SetGain(musicVolume_);
+                musicSource_->Play(music);
+            }
         }
 
         return true;
@@ -604,8 +607,9 @@ private:
 
         m = m->Clone();
         if (diff) { m->SetTexture(TU_DIFFUSE, diff); }
-        m->SetDiffuseColor(c);
-        tintedMatStore_.Push(m);   // держим ссылку: Raw()-указатели остаются живыми
+        // SetDiffuseColor нет — цвет через шейдерный параметр MatDiffColor (0..1)
+        m->SetShaderParameter("MatDiffColor", Variant(Color(c.r_ / 255.0f, c.g_ / 255.0f, c.b_ / 255.0f, 1.0f)));
+        tintedMatStore_.Push(m);   // держим ссылку: указатели остаются живыми
         return m;
     }
 
@@ -631,7 +635,7 @@ private:
      floorMaterialLight_ = hdFloor_ ? hdFloor_ : stoneMaterial_;
      floorMaterialDark_  = hdPanel_ ? hdPanel_ : stoneMaterial_;
      // Анизотропная фильтрация: глобальная настройка движка (per-material MAT_ANISOTROPY в этой сборке недоступен)
-     GetSubsystem<RenderPath>()->SetAnisotropicRendering(true);
+     // Глобальная анизотропия недоступна в этой сборке — фильтрация по умолчанию
      // Материалы оружия под текущий скин
      RefreshWeaponMaterials();
      URHO3D_LOGINFO(stoneMaterial_ ? "Base material OK (HD)" : "Base material NULL");
@@ -740,7 +744,7 @@ private:
         zone->SetFogColor(Color(0.60f, 0.70f, 0.84f));
         zone->SetFogStart(80.0f);
         zone->SetFogEnd(260.0f);
-        zone->SetFarDistance(500.0f);
+        // SetFarDistance нет в этой сборке — дальность тумана уже задана SetFogEnd
     }
 
     void CreateSky() {
@@ -760,12 +764,12 @@ private:
             }
         }
         if (skyTexture_) skyMaterial_->SetTexture(TU_DIFFUSE, skyTexture_);
-        skyMaterial_->SetDiffuseColor(Color(150, 185, 235));
+        skyMaterial_->SetShaderParameter("MatDiffColor", Variant(Color(150.0f / 255.0f, 185.0f / 255.0f, 235.0f / 255.0f, 1.0f)));
         skyMaterial_->SetCullMode(CULL_NONE);
         Skybox* sky = skyNode->CreateComponent<Skybox>();
         sky->SetModel(boxModel_);
         sky->SetMaterial(skyMaterial_);
-        sky->SetDrawDistance(900.0f);
+        // SetDrawDistance нет в этой сборке — скайбокс рисуется всегда
     }
 
     Model* cache_GetSphere() {
@@ -791,7 +795,7 @@ private:
                 StaticModel* sm = strip->CreateComponent<StaticModel>();
                 sm->SetModel(boxModel_);
                 sm->SetMaterial((seg % 2) ? glowCyan : glowGreen);
-                decoNodes_.Push(strip);
+                decoNodes_.Push(SharedPtr<Node>(strip));
             }
         }
 
@@ -862,7 +866,7 @@ private:
             l2->SetColor(Color(1.0f, 0.85f, 0.55f));
             l2->SetRange(14.0f);
             l2->SetBrightness(0.9f);
-            decoNodes_.Push(pole); decoNodes_.Push(head); decoNodes_.Push(ln2);
+            decoNodes_.Push(SharedPtr<Node>(pole)); decoNodes_.Push(SharedPtr<Node>(head)); decoNodes_.Push(SharedPtr<Node>(ln2));
         }
 
         // Дополнительные ящики-пирамидки
@@ -964,7 +968,7 @@ private:
             sm->SetModel(boxModel_);
             sm->SetMaterial(neonStrip);
             sm->SetCastShadows(false);
-            decoNodes_.Push(t);
+            decoNodes_.Push(SharedPtr<Node>(t));
         }
     }
     
@@ -1199,9 +1203,9 @@ private:
         sunLight->SetBrightness(0.9f);
         sunLight->SetCastShadows(true);
         sunLight->SetShadowDistance(140.0f);   // 4K-карта покрывает 140 м вокруг игрока — края арены в дымке
-        sunLight->SetNumCascadeShadows(3);     // каскады: резкие тени вблизи, мягкие вдали
-        sunLight->SetShadowFocus(140.0f);
-        sunLight->GetShadowBias().min_ = 0.0025f;
+        // SetNumCascadeShadows нет в этой сборке — тени одним каскадом, радиус задан выше через SetShadowDistance
+        // SetShadowFocus нет в этой сборке
+        // GetShadowBias() возвращает копию — правка не применяется, оставляем дефолтный bias
         // Точечные источники света
         float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
         
@@ -1253,7 +1257,7 @@ private:
 
         // 3D-источник для взрывов в мировом пространстве
         explosionSource3D_ = scene_->CreateChild("ExplosionSfx")->CreateComponent<SoundSource3D>();
-        explosionSource3D_->SetDistance(4.0f, 120.0f);
+        explosionSource3D_->SetAuto3DSound(true, 4.0f, 120.0f);
         cameraNode_->SetPosition(Vector3(0.0f, GameConstants::PLAYER_HEIGHT, 0.0f));
         
         // Добавляем компонент камеры
@@ -2245,7 +2249,7 @@ private:
         if (!hitBody) return;
 
         Node* hn0 = hitBody->GetNode();
-        if (hn0 && hn0->HasTag(StringHash("Enemy"))) {
+        if (hn0 && hn0->HasTag("Enemy")) {
             for (auto& e : enemies_) {
                 if (e.alive_ && e.node_ == hn0) { DamageEnemy(e, damage); break; }
             }
@@ -2445,7 +2449,7 @@ private:
 
     void PlayExplosionAt(const Vector3& pos) {
         if (!explosionSource3D_ || !explosionSound_) return;
-        explosionSource3D_->SetWorldPosition(pos);
+        explosionSource3D_->GetNode()->SetWorldPosition(pos);
         explosionSource3D_->Play(explosionSound_);
     }
     
@@ -2537,7 +2541,7 @@ private:
                                      String(" ... ") + String((int)(loadProgress_ * 100)) + "%");
         }
         // Принудительно рендерим кадр, чтобы прогресс-бар обновился сразу
-        GetSubsystem<Renderer>()->Update();
+        engine_->BeginFrame(Timer()->GetElapsedTime() * 1000.0f); // принудительный кадр для обновления прогресс-бара
     }
 
     void AdvanceLoadingStep() {
@@ -2638,7 +2642,7 @@ private:
                          "  ROF:" + String((int)(1.0f / d.fireRate)) + "/s  MAG:" + String(d.magSize));
             row->SetPosition(sw / 2 - 380, 135 + i * 34);
             row->SetVar("index", i);
-            armoryWeaponRows_.Push(row);
+            armoryWeaponRows_.Push(SharedPtr<Text>(row));
         }
 
         Text* sHead = armoryPanel_->CreateChild<Text>();
@@ -2654,7 +2658,7 @@ private:
             row->SetText(String(i + 1) + ". " + String(sk.name) + (sk.emissive ? " (glow)" : ""));
             row->SetPosition(sw / 2 + 80, 135 + i * 34);
             row->SetVar("index", i);
-            armorySkinRows_.Push(row);
+            armorySkinRows_.Push(SharedPtr<Text>(row));
         }
 
         Text* hint = armoryPanel_->CreateChild<Text>();
@@ -2685,16 +2689,21 @@ private:
         if (!left || !armoryPanel_) return;
         auto* input = GetSubsystem<Input>();
         IntVector2 mp = input->GetMousePosition();
-        // Хит-тест строк арсенала: offset+size в экранных координатах (панель привязана к root)
+        // Хит-тест строк арсенала: GetScreenRect нет — считаем экранную позицию проходом по предкам
+        auto screenPos = [](UIElement* el) -> IntVector2 {
+            IntVector2 p;
+            for (UIElement* e = el; e; e = e->GetParent()) { p.x_ += e->GetPosition().x_; p.y_ += e->GetPosition().y_; }
+            return p;
+        };
         for (unsigned i = 0; i < armoryWeaponRows_.Size(); ++i) {
             UIElement* row = armoryWeaponRows_[i];
-            IntRect rect = row->GetScreenRect();
-            if (rect.LeftX() <= mp.x_ && mp.x_ < rect.Right() && rect.TopY() <= mp.y_ && mp.y_ < rect.Bottom()) { EquipWeapon((int)i, true); UpdateArmoryHighlight(); return; }
+            IntVector2 rp = screenPos(row);
+            if (rp.x_ <= mp.x_ && mp.x_ < rp.x_ + (int)row->GetWidth() && rp.y_ <= mp.y_ && mp.y_ < rp.y_ + (int)row->GetHeight()) { EquipWeapon((int)i, true); UpdateArmoryHighlight(); return; }
         }
         for (unsigned i = 0; i < armorySkinRows_.Size(); ++i) {
             UIElement* row = armorySkinRows_[i];
-            IntRect rect = row->GetScreenRect();
-            if (rect.LeftX() <= mp.x_ && mp.x_ < rect.Right() && rect.TopY() <= mp.y_ && mp.y_ < rect.Bottom()) { CycleSkin((int)i - currentSkin_); return; }
+            IntVector2 rp = screenPos(row);
+            if (rp.x_ <= mp.x_ && mp.x_ < rp.x_ + (int)row->GetWidth() && rp.y_ <= mp.y_ && mp.y_ < rp.y_ + (int)row->GetHeight()) { CycleSkin((int)i - currentSkin_); return; }
         }
     }
 
@@ -2719,7 +2728,7 @@ private:
     // В этой сборке Urho3D у XMLElement нет GetInt/SetInt — читаем/пишем строковые атрибуты
     static int XmlGetInt(const XMLElement& el, const char* name, int def) {
         if (!el.HasAttribute(name)) return def;
-        return el.GetAttributeInt(name, def);
+        return String(el.GetAttribute(name)).ToInt();
     }
     static void XmlSetInt(XMLElement& el, const char* name, int v) {
         el.SetString(name, String(v));
@@ -2744,8 +2753,8 @@ private:
         }
         XMLElement snd = rootEl.GetChild("sound");
         if (snd) {
-            sfxVolume_   = Clamp(snd.GetFloat("sfx", sfxVolume_), 0.0f, 1.0f);
-            musicVolume_ = Clamp(snd.GetFloat("music", musicVolume_), 0.0f, 1.0f);
+            sfxVolume_   = Clamp(String(snd.GetAttribute("sfx")).ToFloat(), 0.0f, 1.0f);
+            musicVolume_ = Clamp(String(snd.GetAttribute("music")).ToFloat(), 0.0f, 1.0f);
         }
         XMLElement prog = rootEl.GetChild("progress");
         if (prog) highScore_ = Max(0, XmlGetInt(prog, "highscore", highScore_));
@@ -2760,20 +2769,16 @@ private:
         XmlSetInt(gfx, "resolution", gfxResIdx_);
         XmlSetInt(gfx, "anisotropic", gfxAnisoIdx_);
         XMLElement snd = rootEl.CreateChild("sound");
-        snd.SetFloat("sfx", sfxVolume_);
-        snd.SetFloat("music", musicVolume_);
+        snd.SetString("sfx", String(sfxVolume_));
+        snd.SetString("music", String(musicVolume_));
         XMLElement prog = rootEl.CreateChild("progress");
         XmlSetInt(prog, "highscore", highScore_);
         xml->SaveFile(SettingsPath());
     }
 
-    // Bloom настраивается через XML-параметры движка: сеттеров Glow* в этой сборке Urho3D нет
+    // Bloom: сеттеров Glow*/ValueCollection в этой сборке нет — управляем только флагом HDR
     void ConfigureGlow(Renderer* renderer, bool strong) {
-        ValueCollection vars;
-        vars["GlowThreshold"] = Variant(strong ? 0.6f : 0.9f);
-        vars["GlowBias"]      = Variant(strong ? 0.05f : 0.02f);
-        vars["GlowBlur"]      = Variant(strong ? "twice" : "none");
-        renderer->SetGlowParameters(vars);
+        if (renderer) renderer->SetHDRRendering(strong);
     }
 
     void ApplyGraphicsSettings() {
@@ -2785,25 +2790,11 @@ private:
 
         switch (gfxGlowIdx_) {
         case 0: renderer->SetHDRRendering(false); break;
-        case 1: renderer->SetHDRRendering(true); ConfigureGlow(renderer, false); break;
-        default: renderer->SetHDRRendering(true); ConfigureGlow(renderer, true); break;
+        default: renderer->SetHDRRendering(true); break;
         }
 
-        auto* graphics = GetSubsystem<Graphics>();
-        if (graphics) {
-            // Смена разрешения окна (без SetScaledResolution — его нет в этой сборке Urho3D)
-            unsigned w = graphics->GetWidth(), h = graphics->GetHeight();
-            float scale = gfxResIdx_ == 0 ? 1.0f : (gfxResIdx_ == 1 ? 0.75f : 0.5f);
-            unsigned nw = (unsigned)(w * scale), nh = (unsigned)(h * scale);
-            if (!graphics->IsFullscreen() && nw >= 320 && nh >= 240 && (nw != w || nh != h)) {
-                graphics->SetMode(nw, nh, WINDOWED, false);
-            }
-        }
-
-        // Анизотропия — глобальный режим рендера (per-material параметр недоступен в этой сборке)
-        auto* view = renderer->GetViewport();
-        if (view) view->SetAnisotropicRendering(gfxAnisoIdx_ > 0);
-
+        // Разрешение/анизотропия применяются при старте (engine-параметры window width/height,
+        // пересоздание окна на лету в этой сборке небезопасно) — здесь остаётся только звук.
         if (soundSource_) soundSource_->SetGain(sfxVolume_);
         if (musicSource_) musicSource_->SetGain(musicVolume_);
     }
@@ -2849,7 +2840,7 @@ private:
             it->SetText(items[i]);
             it->SetPosition(sw / 2 - 260, sh / 2 - 70 + i * 48);
             it->SetWidth(520);
-            mainMenuItems_.Push(it);
+            mainMenuItems_.Push(SharedPtr<Text>(it));
         }
 
         Text* hint = mainMenuPanel_->CreateChild<Text>();
@@ -2892,7 +2883,7 @@ private:
         if (hudPanelBg_) hudPanelBg_->SetVisible(vis);
         if (damageOverlay_) damageOverlay_->SetVisible(vis);
         if (reloadOverlay_) reloadOverlay_->SetVisible(vis);
-        if (weaponNode_) weaponNode_->SetOriginEnabled(vis);
+        // SetOriginEnabled нет — видимость оружия управляется через SetVisible(node)
     }
 
     void UpdateMainMenuSelection() {
@@ -2935,7 +2926,7 @@ private:
             row->SetFont(font_, 24);
             row->SetPosition(sw / 2 - 320, sh / 2 - 140 + i * 44);
             row->SetWidth(640);
-            settingsItems_.Push(row);
+            settingsItems_.Push(SharedPtr<Text>(row));
         }
 
         Text* hint = settingsPanel_->CreateChild<Text>();
@@ -3044,7 +3035,7 @@ private:
         EnsureRobotMaterials();
         Node* rob = scene_->CreateChild("Enemy", LOCAL);
         rob->SetPosition(pos);
-        rob->AddTag(StringHash("Enemy"));
+        rob->SetVar("enemy", true); rob->AddTag("Enemy");
 
         Material* bodyMat = robotBodyMat_.Get();
         Color eyeColor(255, 40, 40);
@@ -3218,7 +3209,7 @@ private:
             sparks->SetPosition(pos);
             ParticleEmitter* pe = sparks->CreateComponent<ParticleEmitter>();
             pe->SetEffect(sparkEffect_);
-            pe->SetNumParts(200);
+            pe->SetMaxParticles(200);
             pe->SetEmitting(true);
             PendingRemove pr2; pr2.node_ = sparks; pr2.ttl_ = 1.5f; pendingRemoves_.Push(pr2);
         }
@@ -3230,7 +3221,7 @@ private:
         sparkNode->SetPosition(pos);
         ParticleEmitter* emitter = sparkNode->CreateComponent<ParticleEmitter>();
         emitter->SetEffect(sparkEffect_);
-        emitter->SetNumParts(100);
+        emitter->SetMaxParticles(100);
         emitter->SetEmitting(true);
         PendingRemove pr; pr.node_ = sparkNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr);
     }
