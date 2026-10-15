@@ -1,3 +1,10 @@
+#include <Urho3D/Urho3D.h>
+#include <Urho3D/Core/CoreEvents.h>
+#include <Urho3D/Graphics/Model.h>
+#include <Urho3D/Input/InputConstants.h>
+#ifndef KEY_ESC
+#define KEY_ESC KEY_ESCAPE
+#endif
 #include <Urho3D/Engine/Application.h>
 #include <Urho3D/Graphics/Graphics.h>
 #include <Urho3D/Scene/Scene.h>

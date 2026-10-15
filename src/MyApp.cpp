@@ -587,7 +587,7 @@ private:
             // GetOutput() нет в этой сборке — музыка через отдельный неатenuированный источник на камере
             musicSource_ = cameraNode_ ? cameraNode_->CreateComponent<SoundSource>() : nullptr;
             if (musicSource_) {
-                musicSource_->SetAuto3DSound(false);
+// //                 musicSource_->SetAuto3DSound(false);
                 musicSource_->SetGain(musicVolume_);
                 musicSource_->Play(music);
             }
@@ -602,7 +602,9 @@ private:
     SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<Texture>& norm, const Color& c) {
         auto* cache = GetSubsystem<ResourceCache>();
         // Готовый unlit-материал из xml (базовая техника уже в нём) — Technique.h недоступен в этой сборке Urho3D
-        SharedPtr<Material> m = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
+        //SharedPtr<Material> m = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
+        Material* raw_m = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
+        SharedPtr<Material> m(raw_m);
         if (!m) return m;
 
         m = m->Clone();
@@ -753,7 +755,9 @@ private:
         auto* cache = GetSubsystem<ResourceCache>();
         // Техника берётся из xml-материала (Technique.h недоступен в этой сборке Urho3D)
         {
-            SharedPtr<Material> skyBase = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
+            //SharedPtr<Material> skyBase = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
+            Material* raw_skyBase = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
+            SharedPtr<Material> skyBase(raw_skyBase);
             if (skyBase) {
                 SharedPtr<Material> skyClone = skyBase->Clone();
                 skyMaterial_ = skyClone.Get();
@@ -1257,7 +1261,7 @@ private:
 
         // 3D-источник для взрывов в мировом пространстве
         explosionSource3D_ = scene_->CreateChild("ExplosionSfx")->CreateComponent<SoundSource3D>();
-        explosionSource3D_->SetAuto3DSound(true, 4.0f, 120.0f);
+// //         explosionSource3D_->SetAuto3DSound(true, 4.0f, 120.0f);
         cameraNode_->SetPosition(Vector3(0.0f, GameConstants::PLAYER_HEIGHT, 0.0f));
         
         // Добавляем компонент камеры
@@ -2541,7 +2545,6 @@ private:
                                      String(" ... ") + String((int)(loadProgress_ * 100)) + "%");
         }
         // Принудительно рендерим кадр, чтобы прогресс-бар обновился сразу
-        engine_->BeginFrame(Timer()->GetElapsedTime() * 1000.0f); // принудительный кадр для обновления прогресс-бара
     }
 
     void AdvanceLoadingStep() {
@@ -2728,7 +2731,8 @@ private:
     // В этой сборке Urho3D у XMLElement нет GetInt/SetInt — читаем/пишем строковые атрибуты
     static int XmlGetInt(const XMLElement& el, const char* name, int def) {
         if (!el.HasAttribute(name)) return def;
-        return String(el.GetAttribute(name)).ToInt();
+        //return String(el.GetAttribute(name)).ToInt();
+        return atoi(el.GetAttribute(name).CString());
     }
     static void XmlSetInt(XMLElement& el, const char* name, int v) {
         el.SetString(name, String(v));
@@ -2753,8 +2757,10 @@ private:
         }
         XMLElement snd = rootEl.GetChild("sound");
         if (snd) {
-            sfxVolume_   = Clamp(String(snd.GetAttribute("sfx")).ToFloat(), 0.0f, 1.0f);
-            musicVolume_ = Clamp(String(snd.GetAttribute("music")).ToFloat(), 0.0f, 1.0f);
+            //sfxVolume_   = Clamp(String(snd.GetAttribute("sfx")).ToFloat(), 0.0f, 1.0f);
+            //musicVolume_ = Clamp(String(snd.GetAttribute("music")).ToFloat(), 0.0f, 1.0f);
+            sfxVolume_   = Clamp((float)atof(snd.GetAttribute("sfx").CString()), 0.0f, 1.0f);
+            musicVolume_ = Clamp((float)atof(snd.GetAttribute("music").CString()), 0.0f, 1.0f);
         }
         XMLElement prog = rootEl.GetChild("progress");
         if (prog) highScore_ = Max(0, XmlGetInt(prog, "highscore", highScore_));
@@ -3209,7 +3215,7 @@ private:
             sparks->SetPosition(pos);
             ParticleEmitter* pe = sparks->CreateComponent<ParticleEmitter>();
             pe->SetEffect(sparkEffect_);
-            pe->SetMaxParticles(200);
+            pe->SetNumParticles(200);
             pe->SetEmitting(true);
             PendingRemove pr2; pr2.node_ = sparks; pr2.ttl_ = 1.5f; pendingRemoves_.Push(pr2);
         }
@@ -3221,7 +3227,7 @@ private:
         sparkNode->SetPosition(pos);
         ParticleEmitter* emitter = sparkNode->CreateComponent<ParticleEmitter>();
         emitter->SetEffect(sparkEffect_);
-        emitter->SetMaxParticles(100);
+        emitter->SetNumParticles(100);
         emitter->SetEmitting(true);
         PendingRemove pr; pr.node_ = sparkNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr);
     }

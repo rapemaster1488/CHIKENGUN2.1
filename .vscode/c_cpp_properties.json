@@ -1,0 +1,26 @@
+{
+    "configurations": [
+        {
+            "name": "NixOS-Urho3D",
+            "includePath": [
+                "${workspaceFolder}",
+                "/home/pipi/urho3d-local/include",
+                "/home/pipi/urho3d-local/include/Urho3D",
+                "/home/pipi/urho3d-local/include/Urho3D/ThirdParty",
+                "/home/pipi/urho3d-sdl-shim"
+            ],
+            "defines": [],
+            "compilerPath": "$(which g++)", 
+            "cStandard": "c17",
+            "cppStandard": "c++17",
+            "intelliSenseMode": "linux-gcc-x64",
+            "browse": {
+                "path": [
+                    "${workspaceFolder}",
+                    "/home/pipi/urho3d-local/include"
+                ]
+            }
+        }
+    ],
+    "version": 4
+}

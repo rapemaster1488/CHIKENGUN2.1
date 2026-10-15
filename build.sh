@@ -1,6 +1,6 @@
 #!/bin/bash
 
-URHO3D="/home/larp/urho3d"
+URHO3D="~/urho3d"
 BUILD_DIR="build"
 SRC="src/MyApp.cpp"
 
