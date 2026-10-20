@@ -1,0 +1,378 @@
+From 1325be1f1a0e5c9b91387b3dbf1f22a68981cee6 Mon Sep 17 00:00:00 2001
+From: "qwen.ai[bot]" <qwenlm-intl@service.alibaba.com>
+Date: Tue, 20 Oct 2026 09:54:44 +0000
+Subject: [PATCH 2/2] =?UTF-8?q?=F0=9F=8E=A8=20=D0=93=D1=80=D0=B0=D1=84?=
+ =?UTF-8?q?=D0=B8=D0=BA=D0=B0-=D0=BF=D0=B0=D1=82=D1=87:=20=D0=B0=D0=BD?=
+ =?UTF-8?q?=D0=B8=D0=BC=D0=B8=D1=80=D0=BE=D0=B2=D0=B0=D0=BD=D0=BD=D1=8B?=
+ =?UTF-8?q?=D0=B9=20=D1=8D=D0=BA=D1=80=D0=B0=D0=BD=20=D0=B2=D1=85=D0=BE?=
+ =?UTF-8?q?=D0=B4=D0=B0=20(=D1=87=D0=B0=D1=81=D1=82=D0=B8=D1=86=D1=8B,=20?=
+ =?UTF-8?q?=D0=BF=D0=B0=D1=80=D0=B0=D0=BB=D0=BB=D0=B0=D0=BA=D1=81,=20?=
+ =?UTF-8?q?=D0=BD=D0=B5=D0=BE=D0=BD),=20mipmaps+=D0=B0=D0=BD=D0=B8=D0=B7?=
+ =?UTF-8?q?=D0=BE=D1=82=D1=80=D0=BE=D0=BF=D0=B8=D1=8F=20=D1=82=D0=B5=D0=BA?=
+ =?UTF-8?q?=D1=81=D1=82=D1=83=D1=80,=20=D1=81=D0=B2=D0=B5=D1=82=D1=8F?=
+ =?UTF-8?q?=D1=89=D0=B8=D0=B5=D1=81=D1=8F=20=D0=B3=D0=BB=D0=B0=D0=B7=D0=B0?=
+ =?UTF-8?q?=20=D1=80=D0=BE=D0=B1=D0=BE=D1=82=D0=BE=D0=B2=20=D0=BF=D0=BE=20?=
+ =?UTF-8?q?=D1=82=D0=B8=D0=BF=D0=B0=D0=BC,=20=D0=BF=D1=83=D0=BB=D1=8C?=
+ =?UTF-8?q?=D1=81=D0=B0=D1=86=D0=B8=D1=8F=20GAME=20OVER?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ src/MyApp.cpp | 230 ++++++++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 222 insertions(+), 8 deletions(-)
+
+diff --git a/src/MyApp.cpp b/src/MyApp.cpp
+index 4ac776e..42d8c35 100644
+--- a/src/MyApp.cpp
++++ b/src/MyApp.cpp
+@@ -383,6 +383,20 @@ private:
+     float musicVolume_ = 0.35f;
+     SharedPtr<UIElement> mainMenuPanel_;
+     Vector<SharedPtr<Text>> mainMenuItems_;
++    // Элементы меню для анимации (заголовок, подзаголовок, плашка, подсказка, частицы)
++    SharedPtr<Text> menuTitle_;
++    SharedPtr<Text> menuSub_;
++    SharedPtr<Text> menuHint_;
++    SharedPtr<BorderImage> menuPlate_;
++    SharedPtr<BorderImage> menuAccentBar_;
++    Vector<SharedPtr<BorderImage>> menuParticles_;
++    Vector<float> menuParticlePhase_;
++    Vector<float> menuParticleX_;
++    Vector<float> menuParticleSpeed_;
++    SharedPtr<Text> gameOverTitle_;
++    SharedPtr<Text> gameOverStats_;
++    SharedPtr<Text> gameOverHint_;
++    float gameOverPulse_ = 0.0f;
+     SharedPtr<UIElement> settingsPanel_;
+     Vector<SharedPtr<Text>> settingsItems_;
+     // Арена: волны роботов-курят
+@@ -660,6 +674,27 @@ private:
+      hdCrate_  = cache->GetResource<Material>("Materials/Game/CrateWood.xml");
+      skyTexture_ = cache->GetResource<Texture>("Textures/SkyDay.png"); // базовый класс Texture — заголовки Technique/Texture2D недоступны в этой сборке
+ 
++     // --- Качество текстур: mipmaps убирают «снег» на дальних плоскостях,
++     // анизотропная фильтрация делает плитку пола чёткой под острым углом ---
++     {
++         const char* hdTexNames[] = {
++             "Textures/StoneHDDiffuse.png", "Textures/StoneHDNormal.png",
++             "Textures/FloorTileDiffuse.png", "Textures/FloorTileNormal.png",
++             "Textures/MetalPanelDiffuse.png", "Textures/MetalPanelNormal.png",
++             "Textures/BrushedMetalDiffuse.png", "Textures/BrushedMetalNormal.png",
++             "Textures/CrateWoodDiffuse.png", "Textures/CrateWoodNormal.png",
++             "Textures/SkyDay.png"
++         };
++         for (const char* tn : hdTexNames) {
++            SharedPtr<Texture> t = cache->GetResource<Texture>(String(tn));
++            if (t) {
++                t->SetMipLevels(10);              // 1024px -> 10 уровней
++                t->SetFilterMode(FILTER_ANISOTROPIC);
++                t->SetAnisotropy(8);
++            }
++        }
++     }
++
+      stoneMaterial_ = hdStone_ ? hdStone_ : cache->GetResource<Material>("Materials/Stone.xml");
+      if (!stoneMaterial_) stoneMaterial_ = new Material(context_);
+      metalMaterial_ = hdMetal_ ? hdMetal_ : stoneMaterial_;
+@@ -1579,6 +1614,13 @@ private:
+         title->SetPosition(sw / 2 - 400, sh / 2 - 150);
+         title->SetWidth(800);
+         title->SetColor(Color(1.0f, 0.15f, 0.1f, 1.0f));
++        gameOverTitle_ = SharedPtr<Text>(title);
++
++        // Красная акцентная черта под заголовком
++        BorderImage* goBar = gameOverPanel_->CreateChild<BorderImage>();
++        goBar->SetPosition(sw / 2 - 200, sh / 2 - 66);
++        goBar->SetSize(400, 2);
++        goBar->SetColor(Color(1.0f, 0.2f, 0.15f, 0.8f));
+ 
+         gameOverStatsText_ = gameOverPanel_->CreateChild<Text>();
+         gameOverStatsText_->SetFont(font_, 24);
+@@ -1594,9 +1636,27 @@ private:
+         hint->SetPosition(sw / 2 - 400, sh / 2 + 120);
+         hint->SetWidth(800);
+         hint->SetColor(Color(1.0f, 0.85f, 0.3f, 1.0f));
++        gameOverHint_ = SharedPtr<Text>(hint);
+ 
+         gameOverPanel_->SetVisible(false);
+     }
++
++    // Пульсация экрана смерти: заголовок «бьётся» как сердце, подсказка дышит
++    void AnimateGameOver(float dt) {
++        if (!gameOverPanel_ || !gameOverPanel_->IsVisible()) return;
++        auto* gfx = GetSubsystem<Graphics>();
++        int sw = gfx->GetWidth(), sh = gfx->GetHeight();
++        gameOverPulse_ += dt;
++        if (gameOverTitle_) {
++            float beat = powf(0.5f + 0.5f * sinf(gameOverPulse_ * 3.2f), 2.0f);
++            gameOverTitle_->SetColor(Color(0.75f + 0.25f * beat, 0.1f + 0.08f * beat, 0.08f, 1.0f));
++            gameOverTitle_->SetY(sh / 2 - 150 + int(beat * 4.0f));
++            gameOverTitle_->SetX(sw / 2 - 400 + int(sinf(gameOverPulse_ * 9.0f) * beat * 3.0f));
++        }
++        if (gameOverHint_) {
++            gameOverHint_->SetColor(Color(1.0f, 0.85f, 0.3f, 0.55f + 0.45f * sinf(gameOverPulse_ * 2.4f)));
++        }
++    }
+     
+     void CreateCrosshair() {
+         auto* ui = GetSubsystem<UI>();
+@@ -1803,6 +1863,10 @@ private:
+         // Страховка: большой шаг (окно после сворачивания) не должен «teleport'ить» ИИ/снаряды
+         if (dt > 0.1f) dt = 0.1f;
+         timeAcc_ += dt;
++
++        // Анимации интерфейса (главное меню, экран смерти)
++        AnimateMainMenu(dt);
++        AnimateGameOver(dt);
+         Vector<PendingRemove> alive;
+         for (unsigned i = 0; i < pendingRemoves_.Size(); ++i) {
+             PendingRemove pr = pendingRemoves_[i];
+@@ -2843,6 +2907,7 @@ private:
+ 
+     void ShowGameOver(bool show) {
+         gameOver_ = show;
++        if (show) gameOverPulse_ = 0.0f;   // рестарт пульсации каждый раз
+         if (gameOverPanel_) gameOverPanel_->SetVisible(show);
+         SetGameHudVisible(!show);
+         auto* input = GetSubsystem<Input>();
+@@ -3085,6 +3150,12 @@ private:
+     // ГЛАВНОЕ МЕНЮ
+     // =========================================================================
+ 
++    // =========================================================================
++    // ГЛАВНОЕ МЕНЮ — анимированный кибер-экран входа
++    // Градиентный фон, неоновая плашка, «дыхание» заголовка, летящие частицы,
++    // параллакс от мыши, золотая полоска под пунктами.
++    // =========================================================================
++
+     void CreateMainMenu() {
+         if (mainMenuPanel_) return;
+         auto* ui = GetSubsystem<UI>();
+@@ -3095,47 +3166,169 @@ private:
+         mainMenuPanel_ = root->CreateChild<UIElement>("MainMenuPanel");
+         mainMenuPanel_->SetSize(sw, sh);
+ 
++        // --- Фон: тёмно-синий + вертикальные градиентные полосы = мягкий виньеточный градиент ---
+         BorderImage* bg = mainMenuPanel_->CreateChild<BorderImage>();
+         bg->SetSize(sw, sh);
+-        bg->SetColor(Color(0.01f, 0.02f, 0.04f, 0.62f));
++        bg->SetColor(Color(0.012f, 0.02f, 0.045f, 0.80f));
++        for (int i = 0; i < 16; ++i) {
++            BorderImage* band = mainMenuPanel_->CreateChild<BorderImage>();
++            float t = i / 15.0f;
++            // Затемнение к краям экрана (горизонтальная виньетка)
++            float edge = fabs(t - 0.5f) * 2.0f;
++            band->SetPosition(int(t * sw), 0);
++            band->SetSize(sw / 16 + 1, sh);
++            band->SetColor(Color(0.0f, 0.005f, 0.02f, 0.10f + edge * edge * 0.30f));
++        }
++        // Верхняя и нижняя «затухающие» полосы — кинематографичные letterbox-тени
++        BorderImage* topShade = mainMenuPanel_->CreateChild<BorderImage>();
++        topShade->SetPosition(0, 0); topShade->SetSize(sw, sh / 6);
++        topShade->SetColor(Color(0.0f, 0.0f, 0.01f, 0.35f));
++        BorderImage* botShade = mainMenuPanel_->CreateChild<BorderImage>();
++        botShade->SetPosition(0, sh - sh / 6); botShade->SetSize(sw, sh / 6);
++        botShade->SetColor(Color(0.0f, 0.0f, 0.01f, 0.45f));
++
++        // --- Летящие вверх неоновые частицы («искры арены») ---
++        for (int i = 0; i < 26; ++i) {
++            BorderImage* p = mainMenuPanel_->CreateChild<BorderImage>();
++            int sz = 2 + rand() % 3;
++            p->SetSize(sz, sz * 3);
++            float hue = (rand() % 100) / 100.0f;
++            Color pc = (hue < 0.5f)
++                ? Color(0.35f + hue * 0.6f, 0.75f, 1.0f, 0.5f)          // циан
++                : Color(1.0f, 0.8f - (hue - 0.5f) * 0.5f, 0.25f, 0.5f); // золото
++            p->SetColor(pc);
++            menuParticles_.Push(SharedPtr<BorderImage>(p));
++            menuParticlePhase_.Push(rand() % 1000 / 1000.0f * 6.283f);
++            menuParticleX_.Push(float(rand() % sw));
++            menuParticleSpeed_.Push(18.0f + rand() % 42);   // px/c
++        }
++
++        // --- Неоновая рамка-плашка вокруг блока меню ---
++        menuPlate_ = mainMenuPanel_->CreateChild<BorderImage>();
++        menuPlate_->SetPosition(sw / 2 - 320, sh / 2 - 250);
++        menuPlate_->SetSize(640, 470);
++        menuPlate_->SetColor(Color(0.02f, 0.05f, 0.10f, 0.55f));
++        // Тонкая светящаяся окантовка из 4 полосок
++        struct Edge { int x, y, w, h; };
++        Edge edges[4] = {
++            { sw/2 - 322, sh/2 - 252, 644, 2 }, { sw/2 - 322, sh/2 + 218, 644, 2 },
++            { sw/2 - 322, sh/2 - 252, 2, 472 }, { sw/2 + 320, sh/2 - 252, 2, 472 }
++        };
++        for (int i = 0; i < 4; ++i) {
++            BorderImage* e = mainMenuPanel_->CreateChild<BorderImage>();
++            e->SetPosition(edges[i].x, edges[i].y);
++            e->SetSize(edges[i].w, edges[i].h);
++            e->SetColor(Color(0.25f, 0.75f, 1.0f, 0.35f));
++        }
+ 
++        // --- Заголовок с «золотым дыханием» ---
+         Text* title = mainMenuPanel_->CreateChild<Text>();
+-        title->SetFont(font_, 64);
++        title->SetFont(font_, 68);
+         title->SetText("CHIKENGUN 2.1");
+         title->SetTextAlignment(HA_CENTER);
+         title->SetPosition(sw / 2 - 400, sh / 2 - 220);
+         title->SetWidth(800);
+         title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
++        menuTitle_ = SharedPtr<Text>(title);
++
++        // Декоративная черта под заголовком
++        menuAccentBar_ = mainMenuPanel_->CreateChild<BorderImage>();
++        menuAccentBar_->SetPosition(sw / 2 - 180, sh / 2 - 140);
++        menuAccentBar_->SetSize(360, 2);
++        menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.9f));
+ 
+         Text* sub = mainMenuPanel_->CreateChild<Text>();
+         sub->SetFont(font_, 18);
+-        sub->SetText("ARENA SHOOTER | URHO3D");
++        sub->SetText("[ ARENA SHOOTER ]  \xc2\xb7  [ URHO3D ENGINE ]  \xc2\xb7  [ v2.1 ]");
+         sub->SetTextAlignment(HA_CENTER);
+-        sub->SetPosition(sw / 2 - 400, sh / 2 - 150);
++        sub->SetPosition(sw / 2 - 400, sh / 2 - 128);
+         sub->SetWidth(800);
+         sub->SetColor(Color(0.5f, 0.8f, 1.0f, 0.9f));
++        menuSub_ = SharedPtr<Text>(sub);
+ 
+         const char* items[4] = { "ТИР (мишени)", "АРЕНА (волны роботов)", "НАСТРОЙКИ", "ВЫХОД" };
+         for (int i = 0; i < 4; ++i) {
++            // Полупрозрачная подложка строки — «строка меню» как в киберпанк-интерфейсах
++            BorderImage* rowBg = mainMenuPanel_->CreateChild<BorderImage>();
++            rowBg->SetPosition(sw / 2 - 260, sh / 2 - 70 + i * 48);
++            rowBg->SetSize(520, 40);
++            rowBg->SetColor(Color(0.05f, 0.12f, 0.2f, i == menuSel_ ? 0.45f : 0.0f));
++            rowBg->SetName(String("MenuRow") + String(i));
++
+             Text* it = mainMenuPanel_->CreateChild<Text>();
+             it->SetFont(font_, 28);
+             it->SetText(items[i]);
+-            it->SetPosition(sw / 2 - 260, sh / 2 - 70 + i * 48);
++            it->SetPosition(sw / 2 - 260, sh / 2 - 66 + i * 48);
+             it->SetWidth(520);
+             mainMenuItems_.Push(SharedPtr<Text>(it));
+         }
+ 
+         Text* hint = mainMenuPanel_->CreateChild<Text>();
+         hint->SetFont(font_, 16);
+-        hint->SetText("W/S или стрелки - выбор, Enter - запуск");
++        hint->SetText("W/S или стрелки — выбор   |   ENTER — запуск   |   двигай мышью — почувствуй параллакс");
+         hint->SetTextAlignment(HA_CENTER);
+         hint->SetPosition(sw / 2 - 350, sh / 2 + 150);
+         hint->SetWidth(700);
+         hint->SetColor(Color(0.7f, 0.75f, 0.8f, 0.9f));
++        menuHint_ = SharedPtr<Text>(hint);
+ 
+         UpdateMainMenuSelection();
+     }
+ 
++    // Анимация главного меню: вызывается каждый кадр когда панель видима
++    void AnimateMainMenu(float dt) {
++        if (!mainMenuPanel_ || !mainMenuPanel_->IsVisible()) return;
++        auto* gfx = GetSubsystem<Graphics>();
++        int sw = gfx->GetWidth(), sh = gfx->GetHeight();
++
++        // Золотое «дыхание» заголовка + лёгкий дрейф
++        if (menuTitle_) {
++            float pulse = 0.75f + 0.25f * sinf(timeAcc_ * 1.6f);
++            menuTitle_->SetColor(Color(pulse, pulse * 0.82f, pulse * 0.28f, 1.0f));
++            menuTitle_->SetY(sh / 2 - 220 + int(sinf(timeAcc_ * 0.8f) * 3.0f));
++        }
++        // Пульс акцентной черты (ширина туда-сюда)
++        if (menuAccentBar_) {
++            int w = 300 + int(120.0f * (0.5f + 0.5f * sinf(timeAcc_ * 1.2f)));
++            menuAccentBar_->SetSize(w, 2);
++            menuAccentBar_->SetX(sw / 2 - w / 2);
++            menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.55f + 0.45f * sinf(timeAcc_ * 2.4f)));
++        }
++        // Мерцание подзаголовка (редкое «неоновое» мигание)
++        if (menuSub_) {
++            float flick = (sinf(timeAcc_ * 7.0f) > 0.985f) ? 0.35f : 0.9f;
++            menuSub_->SetColor(Color(0.5f, 0.8f, 1.0f, flick));
++        }
++        // Подсказка дышит альфой
++        if (menuHint_) {
++            menuHint_->SetColor(Color(0.7f, 0.75f, 0.8f, 0.55f + 0.35f * sinf(timeAcc_ * 2.0f)));
++        }
++        // Частицы летят вверх и респаунятся снизу
++        for (unsigned i = 0; i < menuParticles_.Size(); ++i) {
++            BorderImage* p = menuParticles_[i].Get();
++            float speed = menuParticleSpeed_[i];
++            float phase = menuParticlePhase_[i];
++            int py = sh - int(fmodf(timeAcc_ * speed + phase * sh, float(sh + 40))) + 20;
++            int px = int(menuParticleX_[i]) + int(sinf(timeAcc_ * 0.7f + phase * 6.283f) * 14.0f);
++            p->SetPosition(px, py);
++            // Затухание у верхнего края
++            float a = 0.55f * (float(py) / float(sh)) + 0.1f;
++            Color c = p->GetColor(); c.a_ = a; p->SetColor(c);
++        }
++        // Параллакс от мыши: панель чуть сдвигается за курсором (глубина)
++        auto* input = GetSubsystem<Input>();
++        IntVector2 mp = input->GetMousePosition();
++        float nx = (float(mp.x_) / sw - 0.5f);
++        float ny = (float(mp.y_) / sh - 0.5f);
++        if (menuPlate_) {
++            menuPlate_->SetX(sw / 2 - 320 + int(nx * 8.0f));
++            menuPlate_->SetY(sh / 2 - 250 + int(ny * 5.0f));
++        }
++        if (menuTitle_) {
++            menuTitle_->SetX(sw / 2 - 400 - int(nx * 6.0f));
++        }
++    }
++
+     void ShowMainMenu(bool show) {
+         inMenu_ = show;
+         if (show) {
+@@ -3170,10 +3363,21 @@ private:
+ 
+     void UpdateMainMenuSelection() {
+         static const char* labels[4] = { "ТИР (мишени)", "АРЕНА (волны роботов)", "НАСТРОЙКИ", "ВЫХОД" };
++        auto* gfx = GetSubsystem<Graphics>();
++        int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+         for (unsigned i = 0; i < mainMenuItems_.Size(); ++i) {
+             bool sel = ((int)i == menuSel_);
+-            mainMenuItems_[i]->SetText((sel ? ">  " : "   ") + String(labels[i]) + (sel ? "  <" : ""));
+-            mainMenuItems_[i]->SetColor(sel ? Color(1.0f, 0.85f, 0.2f, 1.0f) : Color(0.85f, 0.85f, 0.9f, 1.0f));
++            mainMenuItems_[i]->SetText((sel ? "\xe2\x96\xb6  " : "   ") + String(labels[i]) + (sel ? "  \xe2\x97\x80" : ""));
++            // Выбранный — золотой с лёгким свечением, остальные приглушённые
++            mainMenuItems_[i]->SetColor(sel ? Color(1.0f, 0.87f, 0.3f, 1.0f) : Color(0.55f, 0.6f, 0.7f, 1.0f));
++            // Подсветка строки-подложки под выбранным пунктом
++            UIElement* row = mainMenuPanel_ ? mainMenuPanel_->FindChild(String("MenuRow") + String(i), true) : nullptr;
++            if (row) {
++                BorderImage* bi = static_cast<BorderImage*>(row);
++                bi->SetColor(Color(0.05f, 0.14f, 0.22f, sel ? 0.5f : 0.0f));
++                // Золотая левая засечка у выбранной строки
++                bi->SetX(sw / 2 - 260 + (sel ? 4 : 0));
++            }
+         }
+     }
+ 
+@@ -3323,6 +3527,8 @@ private:
+     void EnsureRobotMaterials() {
+         if (robotBodyMat_) return;
+         robotBodyMat_ = MakeTinted(nullptr, nullptr, Color(150, 155, 165));
++        // Глаза роботов: светящиеся — glow-проход + bloom = «злые» глаза в темноте.
++        // Цвет глаз задаётся при спавне через SetGlowColor конкретного материала.
+         robotEyeMat_  = MakeTinted(nullptr, nullptr, Color(255, 40, 40));
+     }
+ 
+@@ -3372,6 +3578,14 @@ private:
+ 
+         static Vector<SharedPtr<Material>> eyeMats;
+         SharedPtr<Material> eyeMat = MakeTinted(nullptr, nullptr, eyeColor);
++        // Свечение глаз по типу: bloom делает роботов читаемыми и «живыми» в темноте
++        if (eyeMat) {
++            Color glow(1.0f, 0.12f, 0.05f);
++            if (type == E_CHARGER)      glow = Color(1.0f, 0.5f, 0.05f);
++            else if (type == E_SHOOTER) glow = Color(0.8f, 0.2f, 1.0f);
++            else if (elite)             glow = Color(1.0f, 0.75f, 0.1f);
++            eyeMat->SetGlowColor(glow);
++        }
+         eyeMats.Push(eyeMat);
+         Material* em = eyeMats.Back().Get();
+         Node* eyeL = head->CreateChild("EyeL");
+-- 
+2.39.5
+

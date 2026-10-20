@@ -1,17 +1,1 @@
-# Собранные бинарники и логи
-bin/MyShooter
-bin/*.exe
-*.log
-Urho3D.log
-
-# Временные файлы сборки и IDE
-.vscode/settings.json
-main.cpp.orig
-main_fix.hpp
-main_fix_top.hpp
-shell.nix
-a.out
-
-# Системные
-.DS_Store
-Thumbs.db
+patches/part_a*
