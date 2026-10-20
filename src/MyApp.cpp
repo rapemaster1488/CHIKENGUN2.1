@@ -190,7 +190,8 @@ static const WeaponDef WEAPON_DEFS[WEAPON_COUNT] = {
     { "PISTOL",  34.0f, 0.22f, 12,  96, 0.012f, 1.4f, 1, Color(120,120,130) },
     { "SMG",     18.0f, 0.075f, 30, 180, 0.030f, 2.0f, 1, Color( 90, 95,105) },
     { "RIFLE",   26.0f, 0.10f, 30, 150, 0.018f, 2.4f, 1, Color( 70, 80, 70) },
-    { "SHOTGUN", 12.0f, 0.85f,  6,  48, 0.060f, 2.8f, 8, Color(100, 70, 40) },
+    // ДРОБОВИК: урон 12->16 за дробину (8*16=128 в упор), разброс 0.060->0.045 — живёт дольше на дистанции
+    { "SHOTGUN", 16.0f, 0.85f,  6,  48, 0.045f, 2.8f, 8, Color(100, 70, 40) },
     { "SNIPER", 110.0f,1.20f,   5,  30, 0.002f, 3.2f, 1, Color( 60, 60, 66) },
     { "MINIGUN", 14.0f, 0.045f, 120, 400, 0.045f, 4.2f, 1, Color(110, 85, 60) },
     { "LAUNCHER",150.0f,1.50f,   4,  20, 0.020f, 3.6f, 1, Color( 70, 95, 70) },
@@ -341,6 +342,31 @@ private:
     float timeAcc_ = 0.0f;
     Vector<PendingRemove> pendingRemoves_;
 
+    // === GAME OVER / смерть игрока ===
+    bool gameOver_ = false;
+    SharedPtr<UIElement> gameOverPanel_;
+    SharedPtr<Text> gameOverStatsText_;
+
+    // === Game feel: hitmarker, низкое HP, трейсеры, снаряды врагов ===
+    float hitMarkerTimer_ = 0.0f;       // >0 — показывать крестик попадания
+    float hitKillTimer_ = 0.0f;         // >0 — красная версия (смертельный выстрел)
+    Vector<SharedPtr<UIElement>> hitMarkerBars_;
+    BorderImage* lowHealthVignette_ = nullptr; // пульсирующая красная рамка при HP<30
+    Vector<SharedPtr<BorderImage>> vignetteEdges_; // 4 полосы виньетки низкого HP
+    struct TracerData {
+        SharedPtr<Node> node_;
+        float ttl_ = 0.0f;
+    };
+    Vector<TracerData> tracers_;        // видимые трассеры пуль
+    struct ProjectileData {
+        SharedPtr<Node> node_;
+        Vector3 vel_;
+        float ttl_ = 0.0f;
+        float damage_ = 10.0f;
+    };
+    Vector<ProjectileData> enemyProjectiles_; // снаряды роботов-стрелков
+    bool minigunSpinupActive_ = false;    // миниган стреляет → игрок замедлен
+
     // Новый контент: режимы, оружие, скины, арена
     GameMode gameMode_ = MODE_RANGE;
 
@@ -360,16 +386,25 @@ private:
     SharedPtr<UIElement> settingsPanel_;
     Vector<SharedPtr<Text>> settingsItems_;
     // Арена: волны роботов-курят
+    enum EnemyType { E_MELEE = 0, E_CHARGER, E_SHOOTER, E_BOSS, E_TYPE_COUNT };
     struct EnemyData {
         WeakPtr<Node> node_;
         WeakPtr<RigidBody> body_;
         float health_ = 100.0f;
+        float maxHealth_ = 100.0f;
         bool alive_ = true;
         Vector3 patrolCenter_;
         float patrolRadius_ = 4.0f;
         float phase_ = 0.0f;
         float speed_ = 1.6f;
         int scoreValue_ = 150;
+        // === ИИ нового поколения ===
+        EnemyType type_ = E_MELEE;
+        float attackTimer_ = 0.0f;      // кулдаун контактной атаки / стрельбы
+        float strafePhase_ = 0.0f;      // петляние при сближении
+        float burstShots_ = 0.0f;       // очередь выстрелов стрелка
+        float burstTimer_ = 0.0f;       // таймер между одиночными в очереди
+        float recoilKick_ = 0.0f;       // визуальный «откат» стрелка
     };
     Vector<EnemyData> enemies_;
     Vector<SharedPtr<Node>> enemyNodes_;   // владение нодами до удаления
@@ -1442,6 +1477,125 @@ private:
         reloadOverlay_->SetSize(GetSubsystem<Graphics>()->GetWidth(), GetSubsystem<Graphics>()->GetHeight());
         reloadOverlay_->SetColor(Color(1.0f, 1.0f, 0.0f, 0.0f));
         reloadOverlay_->SetBlendMode(BLEND_ADD);
+
+        // === Game feel: хитмаркер (крестик X при попадании) ===
+        CreateHitMarker();
+
+        // === Виньетка низкого здоровья (4 красные полосы по краям экрана) ===
+        {
+            int sw = GetSubsystem<Graphics>()->GetWidth();
+            int sh = GetSubsystem<Graphics>()->GetHeight();
+            const int th = 90; // толщина полосы
+            BorderImage* t = ui->GetRoot()->CreateChild<BorderImage>();
+            t->SetSize(sw, th); t->SetPosition(0, 0);   t->SetBlendMode(BLEND_ADD); t->SetColor(Color(1,0,0,0));
+            BorderImage* b = ui->GetRoot()->CreateChild<BorderImage>();
+            b->SetSize(sw, th); b->SetPosition(0, sh-th); b->SetBlendMode(BLEND_ADD); b->SetColor(Color(1,0,0,0));
+            BorderImage* l = ui->GetRoot()->CreateChild<BorderImage>();
+            l->SetSize(th, sh); l->SetPosition(0, 0);   l->SetBlendMode(BLEND_ADD); l->SetColor(Color(1,0,0,0));
+            BorderImage* r = ui->GetRoot()->CreateChild<BorderImage>();
+            r->SetSize(th, sh); r->SetPosition(sw-th,0); r->SetBlendMode(BLEND_ADD); r->SetColor(Color(1,0,0,0));
+            // Храним в pendingRemoves? Нет — живут всё время игры; скрываем через SetVisible
+            lowHealthVignette_ = t; // ссылка на верхнюю для цвета; остальные ищем через children root
+            vignetteEdges_.Push(SharedPtr<BorderImage>(t));
+            vignetteEdges_.Push(SharedPtr<BorderImage>(b));
+            vignetteEdges_.Push(SharedPtr<BorderImage>(l));
+            vignetteEdges_.Push(SharedPtr<BorderImage>(r));
+        }
+
+        // === Экран GAME OVER ===
+        CreateGameOverPanel();
+    }
+
+    void CreateHitMarker() {
+        auto* ui = GetSubsystem<UI>();
+        auto* root = ui->GetRoot();
+        int cx = GetSubsystem<Graphics>()->GetWidth() / 2;
+        int cy = GetSubsystem<Graphics>()->GetHeight() / 2;
+        // 4 диагональные штриха, образующие «X» вокруг прицела
+        struct Seg { int x, y, w, h; };
+        const Seg segs[4] = {
+            { cx - 18, cy - 18, 10, 3 },  // верх-левый
+            { cx + 8,  cy - 18, 10, 3 },  // верх-правый
+            { cx - 18, cy + 15, 10, 3 },  // низ-левый
+            { cx + 8,  cy + 15, 10, 3 },  // низ-правый
+        };
+        for (int i = 0; i < 4; ++i) {
+            BorderImage* bar = root->CreateChild<BorderImage>();
+            bar->SetSize(segs[i].w, segs[i].h);
+            bar->SetPosition(segs[i].x, segs[i].y);
+            bar->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            bar->SetBlendMode(BLEND_ADD);
+            hitMarkerBars_.Push(SharedPtr<UIElement>(bar));
+        }
+    }
+
+    void ShowHitMarker(bool kill) {
+        hitMarkerTimer_ = kill ? 0.28f : 0.16f;
+        if (kill) hitKillTimer_ = 0.28f;
+    }
+
+    void UpdateHitMarker(float dt) {
+        Color c(0.0f, 0.0f, 0.0f, 0.0f);
+        if (hitMarkerTimer_ > 0.0f) {
+            hitMarkerTimer_ -= dt;
+            float a = Clamp(hitMarkerTimer_ / 0.16f, 0.0f, 1.0f);
+            bool kill = hitKillTimer_ > 0.0f;
+            if (kill) hitKillTimer_ -= dt;
+            c = kill ? Color(1.0f, 0.25f, 0.2f, a) : Color(1.0f, 1.0f, 1.0f, a * 0.9f);
+        }
+        for (unsigned i = 0; i < hitMarkerBars_.Size(); ++i)
+            hitMarkerBars_[i]->SetColor(c);
+    }
+
+    void UpdateLowHealthVignette(float dt) {
+        float ratio = player_.maxHealth_ > 0.0f ? player_.health_ / player_.maxHealth_ : 1.0f;
+        float a = 0.0f;
+        if (!gameOver_ && gameMode_ == MODE_ARENA && ratio < 0.3f && ratio > 0.0f) {
+            // Пульсация: быстрее, когда меньше HP
+            float pulseFreq = 3.0f + (0.3f - ratio) * 20.0f;
+            a = (0.25f + 0.2f * sinf(timeAcc_ * pulseFreq)) * (1.0f - ratio / 0.3f);
+        }
+        for (unsigned i = 0; i < vignetteEdges_.Size(); ++i)
+            vignetteEdges_[i]->SetColor(Color(1.0f, 0.05f, 0.05f, a));
+    }
+
+    void CreateGameOverPanel() {
+        auto* ui = GetSubsystem<UI>();
+        auto* root = ui->GetRoot();
+        int sw = GetSubsystem<Graphics>()->GetWidth();
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+
+        gameOverPanel_ = root->CreateChild<UIElement>("GameOverPanel");
+        gameOverPanel_->SetSize(sw, sh);
+
+        BorderImage* bg = gameOverPanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.05f, 0.0f, 0.0f, 0.78f));
+
+        Text* title = gameOverPanel_->CreateChild<Text>();
+        title->SetFont(font_, 72);
+        title->SetText("GAME OVER");
+        title->SetTextAlignment(HA_CENTER);
+        title->SetPosition(sw / 2 - 400, sh / 2 - 150);
+        title->SetWidth(800);
+        title->SetColor(Color(1.0f, 0.15f, 0.1f, 1.0f));
+
+        gameOverStatsText_ = gameOverPanel_->CreateChild<Text>();
+        gameOverStatsText_->SetFont(font_, 24);
+        gameOverStatsText_->SetTextAlignment(HA_CENTER);
+        gameOverStatsText_->SetPosition(sw / 2 - 400, sh / 2 - 40);
+        gameOverStatsText_->SetWidth(800);
+        gameOverStatsText_->SetColor(Color(0.95f, 0.9f, 0.85f, 1.0f));
+
+        Text* hint = gameOverPanel_->CreateChild<Text>();
+        hint->SetFont(font_, 20);
+        hint->SetText("ENTER — заново (арена)   |   ESC — главное меню");
+        hint->SetTextAlignment(HA_CENTER);
+        hint->SetPosition(sw / 2 - 400, sh / 2 + 120);
+        hint->SetWidth(800);
+        hint->SetColor(Color(1.0f, 0.85f, 0.3f, 1.0f));
+
+        gameOverPanel_->SetVisible(false);
     }
     
     void CreateCrosshair() {
@@ -1646,6 +1800,8 @@ private:
         using namespace Update;
         
         float dt = eventData[P_TIMESTEP].GetFloat();
+        // Страховка: большой шаг (окно после сворачивания) не должен «teleport'ить» ИИ/снаряды
+        if (dt > 0.1f) dt = 0.1f;
         timeAcc_ += dt;
         Vector<PendingRemove> alive;
         for (unsigned i = 0; i < pendingRemoves_.Size(); ++i) {
@@ -1693,12 +1849,15 @@ private:
         }
 
         // Автоогонь: удержание ЛКМ (не для дробовика/снайперки/гранатомёта)
-        if (!inMenu_ && !armoryOpen_ && !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
+        if (!inMenu_ && !gameOver_ && !armoryOpen_ && !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
             int wt = currentWeapon_;
             if (wt != W_SHOTGUN && wt != W_SNIPER && wt != W_LAUNCHER) {
                 TryFire();
             }
         }
+
+        // === Замедление движения при стрельбе из минигана (баланс долгой перезарядки) ===
+        minigunSpinupActive_ = (currentWeapon_ == W_MINIGUN && weapon_.fireTimer_ > 0.0f);
         
         // Восстанавливаем отдачу
         weapon_.recoilX_ = Lerp(weapon_.recoilX_, 0.0f, GameConstants::RECOIL_RECOVERY * dt);
@@ -1708,10 +1867,16 @@ private:
         ApplyRecoilToWeapon();
         
         // === ОБРАБОТКА ВВОДА ДЛЯ ДВИЖЕНИЯ ===
-        HandleMovement(dt);
-        
+        if (!gameOver_) HandleMovement(dt);
+
         // Обновляем анимацию покачивания оружия
         UpdateWeaponBob(dt);
+
+        // === Game feel: хитмаркер и виньетка низкого HP ===
+        UpdateHitMarker(dt);
+        UpdateLowHealthVignette(dt);
+        UpdateTracers(dt);
+        UpdateEnemyProjectiles(dt);
 
         // Камера медленно крутится вокруг арены, пока игрок в меню
         if (inMenu_) {
@@ -1792,6 +1957,13 @@ private:
         using namespace KeyDown;
         
         int key = eventData[P_KEY].GetI32();
+
+        // ===== Экран GAME OVER перехватывает весь ввод =====
+        if (gameOver_) {
+            if (key == KEY_RETURN || key == KEY_SPACE) { PlayUISound(); RestartArena(); }
+            else if (key == KEY_ESCAPE) { PlayUISound(); ShowGameOver(false); ShowMainMenu(true); }
+            return;
+        }
 
         // ===== Главное меню перехватывает весь ввод =====
         if (inMenu_) {
@@ -1965,6 +2137,8 @@ private:
         else if (isSprinting_ && wishDir.DotProduct(forward) > 0.0f && !isAiming_)
             speed *= GameConstants::PLAYER_SPRINT_MULTIPLIER;
         if (isAiming_) speed *= 0.6f;
+        // Миниган: стрелять на бегу нельзя — серьёзное замедление, оправдывает долгую перезарядку
+        if (minigunSpinupActive_) speed *= 0.35f;
 
         Vector3 targetVel = wishDir * speed;
         // Плавный разгон/торможение (ускорение и инерция)
@@ -2221,7 +2395,10 @@ private:
             
             Vector3 hitPosition = result.position_;
             Vector3 hitNormal = result.normal_;
-            
+
+            // === ТРЕЙСЕР: светящаяся трасса пули от дула до точки попадания ===
+            SpawnTracer(startPos + shootDirection * 0.6f, hitPosition);
+
             // Создаем эффект попадания
             CreateImpactEffect(hitPosition, hitNormal);
             
@@ -2232,6 +2409,7 @@ private:
                 ApplyExplosionDamage(hitPosition, damage);
                 PlayExplosionAt(hitPosition);
                 AddCameraShake(0.12f); // тряска камеры от взрыва
+                ShowHitMarker(false);
             } else {
                 CheckTargetHit(result.body_, damage);
             }
@@ -2246,6 +2424,32 @@ private:
         } else {
             // Пуля ушла в никуда - создаем эффект на максимальной дистанции
             CreateImpactEffect(endPos, Vector3(0, 1, 0));
+        }
+    }
+
+    // === Трассеры пуль: тонкий светящийся «бола» от дула до цели, живёт ~70 мс ===
+    void SpawnTracer(const Vector3& from, const Vector3& to) {
+        float len = (to - from).Length();
+        if (len < 0.5f || len > 120.0f) return;
+        Node* tr = scene_->CreateChild("Tracer", LOCAL);
+        tr->SetPosition((from + to) * 0.5f);
+        tr->LookAt(to);
+        StaticModel* sm = tr->CreateComponent<StaticModel>();
+        sm->SetModel(boxModel_);
+        SharedPtr<Material> mat = MakeTinted(nullptr, nullptr, Color(255, 230, 150));
+        sm->SetMaterial(mat.Get());
+        sm->SetCastShadows(false);
+        tr->SetScale(Vector3(0.02f, 0.02f, len));
+        tracers_.Push(TracerData{ SharedPtr<Node>(tr), 0.07f });
+    }
+
+    void UpdateTracers(float dt) {
+        for (unsigned i = tracers_.Size(); i-- > 0; ) {
+            tracers_[i].ttl_ -= dt;
+            if (tracers_[i].ttl_ <= 0.0f) {
+                if (tracers_[i].node_) tracers_[i].node_->Remove();
+                tracers_.Erase(i);
+            }
         }
     }
     
@@ -2267,6 +2471,8 @@ private:
         for (auto& target : targets_) {
             if (target.isActive_ && target.node_ == hitNode) {
                 // Попали в мишень!
+                bool killed = (target.health_ - damage <= 0.0f);
+                ShowHitMarker(killed);
                 target.health_ -= damage;
                 
                 CreateHitSpark(hitNode->GetPosition());
@@ -2578,6 +2784,76 @@ private:
                 if (target.health_ <= 0) DestroyTarget(target);
             }
         }
+        // Взрыв задевает и роботов арены
+        for (auto& e : enemies_) {
+            if (!e.alive_ || !e.node_) continue;
+            float dist = (e.node_->GetPosition() - center).Length();
+            if (dist <= radius) DamageEnemy(e, damage * (1.0f - dist / radius));
+        }
+        // === Self-damage: граната, кинутая вплотную к себе, обидит и игрока (как в нормальных шутерах) ===
+        if (cameraNode_) {
+            Vector3 camPos = cameraNode_->GetPosition();
+            float pdist = (camPos - center).Length();
+            if (pdist < radius && gameMode_ == MODE_ARENA && !gameOver_) {
+                float falloff = 1.0f - pdist / radius;
+                // Игрок получает только 40% урона — наказывает «самоубийственные» кампы в упор
+                DamagePlayer(damage * falloff * 0.4f);
+            }
+        }
+    }
+
+    // =========================================================================
+    // УРОН ПО ИГРОКУ + GAME OVER
+    // =========================================================================
+
+    void DamagePlayer(float amount) {
+        if (gameOver_ || amount <= 0.0f) return;
+        player_.health_ -= amount;
+        damageFlashTimer_ = 0.3f;              // красный флеш всего экрана
+        AddCameraShake(Clamp(amount / 60.0f, 0.05f, 0.25f)); // тряска пропорционально урону
+        UpdateHealthDisplay();
+        if (player_.health_ <= 0.0f) {
+            player_.health_ = 0.0f;
+            TriggerGameOver();
+        }
+    }
+
+    void TriggerGameOver() {
+        gameOver_ = true;
+        player_.health_ = 0.0f;
+        UpdateHealthDisplay();
+        // Финальный взрыв на позиции игрока + громкая тряски
+        if (cameraNode_) {
+            CreateExplosionEffect(cameraNode_->GetPosition());
+            PlayExplosionAt(cameraNode_->GetPosition());
+        }
+        AddCameraShake(0.5f);
+        if (player_.score_ > highScore_) {
+            highScore_ = player_.score_;
+            SaveSettingsFile();
+        }
+        if (gameOverStatsText_) {
+            gameOverStatsText_->SetText(
+                String("СЧЁТ: ") + String(player_.score_) + "   |   ВОЛНА: " + String(waveNum_) + "\n" +
+                String("УБИЙСТВ: ") + String(player_.kills_) + "   |   ЛУЧШЕЕ КОМБО: x" + String(bestCombo_) + "\n" +
+                String("ТОЧНОСТЬ: ") + String((int)player_.GetAccuracy()) + "%   |   РЕКОРД: " + String(highScore_));
+        }
+        ShowGameOver(true);
+    }
+
+    void ShowGameOver(bool show) {
+        gameOver_ = show;
+        if (gameOverPanel_) gameOverPanel_->SetVisible(show);
+        SetGameHudVisible(!show);
+        auto* input = GetSubsystem<Input>();
+        if (show) {
+            input->SetMouseVisible(false);
+        }
+    }
+
+    void RestartArena() {
+        ShowGameOver(false);
+        StartGameMode(MODE_ARENA);
     }
 
     void CycleSkin(int dir) {
@@ -3003,17 +3279,30 @@ private:
             if (enemyNodes_[i]) enemyNodes_[i]->Remove();
         enemyNodes_.Clear();
         enemies_.Clear();
+        // Снаряды роботов тоже чистим — иначе они «доживают» до новой волны
+        for (unsigned i = 0; i < enemyProjectiles_.Size(); ++i)
+            if (enemyProjectiles_[i].node_) enemyProjectiles_[i].node_->Remove();
+        enemyProjectiles_.Clear();
     }
 
     void StartGameMode(GameMode mode) {
         gameMode_ = mode;
         player_.score_ = 0;
         player_.kills_ = 0;
+        player_.shotsFired_ = 0;
+        player_.shotsHit_ = 0;
+        player_.health_ = player_.maxHealth_; // полный HP при старте режима / рестарте арены
+        bestCombo_ = 0;
         comboCount_ = 0;
         comboTimer_ = 0.0f;
         waveRespawnTimer_ = 0.0f;
         rangeRespawnTimer_ = 0.0f;
+        damageFlashTimer_ = 0.0f;
+        hitMarkerTimer_ = 0.0f;
+        hitKillTimer_ = 0.0f;
+        gameOver_ = false;
         ClearEnemies();
+        UpdateHealthDisplay();
 
         if (mode == MODE_ARENA) {
             waveNum_ = 0;
@@ -3037,20 +3326,36 @@ private:
         robotEyeMat_  = MakeTinted(nullptr, nullptr, Color(255, 40, 40));
     }
 
-    void SpawnEnemyRobot(const Vector3& pos, bool elite) {
+    void SpawnEnemyRobot(const Vector3& pos, EnemyType type) {
         EnsureRobotMaterials();
+        const bool elite = (type == E_BOSS);
         Node* rob = scene_->CreateChild("Enemy", LOCAL);
         rob->SetPosition(pos);
         rob->SetVar("enemy", true); rob->AddTag("Enemy");
 
+        // Внешний вид и цвет глаз по типу робота
         Material* bodyMat = robotBodyMat_.Get();
         Color eyeColor(255, 40, 40);
-        if (elite) {
+        if (type == E_CHARGER) {
+            static SharedPtr<Material> keepOrange;
+            if (!keepOrange) keepOrange = MakeTinted(nullptr, nullptr, Color(255, 130, 30));
+            bodyMat = keepOrange.Get();
+            eyeColor = Color(255, 90, 20);
+        } else if (type == E_SHOOTER) {
+            static SharedPtr<Material> keepViolet;
+            if (!keepViolet) keepViolet = MakeTinted(nullptr, nullptr, Color(160, 70, 220));
+            bodyMat = keepViolet.Get();
+            eyeColor = Color(220, 120, 255);
+        } else if (elite) {
             static SharedPtr<Material> keepCyan;
             if (!keepCyan) keepCyan = MakeTinted(nullptr, nullptr, Color(40, 220, 255));
             bodyMat = keepCyan.Get();
             eyeColor = Color(255, 200, 40);
         }
+
+        // Масштаб модели: босс крупнее, стрелок чуть «суше»
+        float scale = (type == E_BOSS) ? 1.8f : (type == E_SHOOTER ? 0.9f : 1.0f);
+        rob->SetScale(Vector3::ONE * scale);
 
         StaticModel* torso = rob->CreateComponent<StaticModel>();
         torso->SetModel(boxModel_);
@@ -3092,19 +3397,51 @@ private:
         EnemyData e;
         e.node_ = rob;
         e.body_ = rb;
-        e.health_ = elite ? 200.0f : 100.0f;
+        e.type_ = type;
+        switch (type) {
+            case E_CHARGER:
+                e.health_ = 80.0f;  e.speed_ = 3.4f;  e.scoreValue_ = 200;
+                e.patrolRadius_ = 3.0f; break;
+            case E_SHOOTER:
+                e.health_ = 70.0f;  e.speed_ = 1.5f;  e.scoreValue_ = 220;
+                e.patrolRadius_ = 7.0f; break;
+            case E_BOSS:
+                e.health_ = 400.0f; e.speed_ = 2.2f;  e.scoreValue_ = 800;
+                e.patrolRadius_ = 6.0f; break;
+            default: // E_MELEE — «штурмовик», идёт в плотную
+                e.health_ = 100.0f + (float)waveNum_ * 8.0f; // волны постепенно жирнее
+                e.speed_  = 1.9f; e.scoreValue_ = 150;
+                e.patrolRadius_ = 4.0f; break;
+        }
+        e.maxHealth_ = e.health_;
         e.alive_ = true;
         e.patrolCenter_ = pos;
-        e.patrolRadius_ = elite ? 6.0f : 4.0f;
         e.phase_ = (float)(rand() % 628) / 100.0f;
-        e.speed_ = elite ? 2.6f : 1.6f;
-        e.scoreValue_ = elite ? 300 : 150;
+        e.attackTimer_ = 0.5f + (float)(rand() % 100) / 100.0f; // разносим атаки по фазе
+        e.strafePhase_ = (float)(rand() % 628) / 100.0f;
+        e.burstShots_ = 0.0f;
+        e.burstTimer_ = 0.0f;
+        e.recoilKick_ = 0.0f;
         enemies_.Push(e);
         enemyNodes_.Push(SharedPtr<Node>(rob));
     }
 
+    // Выбор типа робота для спавна с учётом номера волны
+    EnemyType PickEnemyType(int slot, int total) {
+        if (waveNum_ >= 5 && slot == 0 && (waveNum_ % 5 == 0)) return E_BOSS;      // босс каждые 5 волн
+        if (waveNum_ >= 2) {                                                        // стрелки со 2-й волны
+            int roll = rand() % 100;
+            if (roll < 25) return E_SHOOTER;
+            if (roll < 50) return E_CHARGER;
+        } else if (waveNum_ >= 3 && (rand() % 100) < 20) {
+            return E_CHARGER;                                                       // чарджеры с 3-й волны в тире-миксе
+        }
+        return E_MELEE;
+    }
+
     void SpawnWave() {
         ++waveNum_;
+        const bool bossWave = (waveNum_ % 5 == 0) && waveNum_ >= 5;
         int count = Min(3 + waveNum_, 10);
         const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 6.0f;
         for (int i = 0; i < count; ++i) {
@@ -3113,15 +3450,107 @@ private:
             Vector3 pos(cosf(ang) * r, 1.0f, sinf(ang) * r);
             pos.x_ = Clamp(pos.x_, -half, half);
             pos.z_ = Clamp(pos.z_, -half, half);
-            bool elite = (waveNum_ >= 3) && ((rand() % 100) < 20);
-            SpawnEnemyRobot(pos, elite);
+            EnemyType t = PickEnemyType(i, count);
+            SpawnEnemyRobot(pos, t);
         }
-        ShowMessage("ВОЛНА " + String(waveNum_) + "! Роботов: " + String(count));
+        String msg = "ВОЛНА " + String(waveNum_) + "! Роботов: " + String(count);
+        if (bossWave) msg += "  [БОСС!]";
+        ShowMessage(msg);
         UpdateScoreDisplay();
+    }
+
+    // Проверка прямой видимости между двумя точками (препятствия: слой 1 — статика, 2 — роботы)
+    bool HasLineOfSight(const Vector3& from, const Vector3& to) {
+        if (!physicsWorld_) return true;
+        Vector3 dir = to - from;
+        float dist = dir.Length();
+        if (dist < 0.01f) return true;
+        Ray ray(from, dir / dist);
+        PhysicsRaycastResult r;
+        physicsWorld_->RaycastSingle(r, ray, dist - 0.3f);
+        return !r.body_;
+    }
+
+    // Спавн светящегося снаряда робота-стрелка в сторону игрока (с разбросом)
+    void SpawnEnemyProjectile(const Vector3& origin, const Vector3& targetCamPos, float damage) {
+        Vector3 dir = targetCamPos - origin;
+        float len = dir.Length();
+        if (len < 0.5f) return;
+        dir /= len;
+        // Разброс тем сильнее, чем дальше цель
+        float spread = 0.02f + len * 0.004f;
+        dir.x_ += ((float)(rand() % 1000 - 500) / 500.0f) * spread;
+        dir.y_ += ((float)(rand() % 1000 - 500) / 500.0f) * spread * 0.5f;
+        dir.Normalize();
+
+        Node* pr = scene_->CreateChild("EnemyShot", LOCAL);
+        pr->SetPosition(origin);
+        StaticModel* sm = pr->CreateComponent<StaticModel>();
+        sm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
+        SharedPtr<Material> mat = MakeTinted(nullptr, nullptr, Color(255, 80, 255));
+        sm->SetMaterial(mat.Get());
+        sm->SetCastShadows(false);
+        pr->SetScale(Vector3::ONE * 0.12f);
+
+        ProjectileData pd;
+        pd.node_ = pr;
+        pd.vel_ = dir * 26.0f; // скорость заметно ниже пули — игрок успевает увернуться
+        pd.ttl_ = 3.0f;
+        pd.damage_ = damage;
+        enemyProjectiles_.Push(pd);
+
+        // Короткий «звук» выстрела робота — тот же UI-клик на его источнике
+        PlayHitSound();
+    }
+
+    // Полёт снарядов роботов: движение, попадание по игроку (дистанционная проверка), пролёты мимо
+    void UpdateEnemyProjectiles(float dt) {
+        if (!cameraNode_) return;
+        Vector3 camPos = cameraNode_->GetPosition();
+        for (unsigned i = enemyProjectiles_.Size(); i-- > 0; ) {
+            ProjectileData& p = enemyProjectiles_[i];
+            p.ttl_ -= dt;
+            bool dead = (p.ttl_ <= 0.0f);
+            if (!dead && p.node_) {
+                Vector3 pos = p.node_->GetPosition();
+                Vector3 step = p.vel_ * dt;
+                Vector3 next = pos + step;
+                // Попадание по игроку: сфера радиуса ~0.7 вокруг камеры
+                Vector3 toCam = camPos - next;
+                if (toCam.LengthSquared() < 0.5f) {
+                    if (!gameOver_) DamagePlayer(p.damage_);
+                    CreateHitSpark(next);
+                    dead = true;
+                } else {
+                    // Столкновение со статикой: короткий рейкаст по направлению полёта
+                    if (physicsWorld_) {
+                        float stepLen = step.Length();
+                        if (stepLen > 0.001f) {
+                            Ray ray(pos, step / stepLen);
+                            PhysicsRaycastResult r;
+                            physicsWorld_->RaycastSingle(r, ray, stepLen);
+                            if (r.body_) {
+                                CreateHitSpark(r.position_);
+                                dead = true;
+                            }
+                        }
+                    }
+                    if (!dead) p.node_->SetPosition(next);
+                }
+            }
+            if (dead) {
+                if (p.node_) p.node_->Remove();
+                enemyProjectiles_.Erase(i);
+            }
+        }
     }
 
     void UpdateEnemies(float dt) {
         Vector3 camPos = cameraNode_ ? cameraNode_->GetPosition() : Vector3::ZERO;
+        // Сначала убираем «мёртвые» записи из массива (чистка памяти)
+        for (unsigned i = enemies_.Size(); i-- > 0; ) {
+            if (!enemies_[i].alive_) enemies_.Erase(i);
+        }
         for (unsigned i = 0; i < enemies_.Size(); ++i) {
             EnemyData& e = enemies_[i];
             if (!e.alive_) continue;
@@ -3131,22 +3560,101 @@ private:
             Vector3 p = n->GetPosition();
             Vector3 toCam = camPos - p; toCam.y_ = 0.0f;
             float dist = toCam.Length();
+            Vector3 toDir = dist > 0.01f ? toCam / dist : Vector3::FORWARD;
 
-            Vector3 targetPos = p;
-            if (dist > 14.0f) {
-                targetPos = p + toCam.Normalized() * (e.speed_ * dt);
-            } else if (dist < 5.0f) {
-                targetPos = p - toCam.Normalized() * (e.speed_ * 0.5f * dt);
-            } else {
-                e.phase_ += dt * 0.7f;
-                targetPos = e.patrolCenter_ + Vector3(cosf(e.phase_) * e.patrolRadius_, 0.0f,
-                                                     sinf(e.phase_ * 0.8f) * e.patrolRadius_);
-                Vector3 dir = targetPos - p; dir.y_ = 0.0f;
-                float dl = dir.Length();
-                if (dl > 0.001f) targetPos = p + dir / dl * Min(dl, e.speed_ * dt);
+            Vector3 move = Vector3::ZERO;
+            e.attackTimer_ -= dt;
+            e.strafePhase_ += dt * 2.2f;
+
+            switch (e.type_) {
+            case E_SHOOTER: {
+                // Держит дистанцию ~10-14 м, стреляет очередями только с прямой видимостью
+                bool los = HasLineOfSight(p + Vector3(0, 0.9f, 0), camPos);
+                if (dist > 13.0f)      move = toDir * e.speed_;
+                else if (dist < 8.0f)  move = -toDir * e.speed_;
+                else                   move = Vector3(-toDir.z_, 0, toDir.x_) * e.speed_ * 0.6f * sinf(e.strafePhase_);
+                // Очередь из 3 выстрелов каждые ~2.5 сек
+                if (e.burstShots_ > 0.0f) {
+                    e.burstTimer_ -= dt;
+                    if (e.burstTimer_ <= 0.0f) {
+                        e.burstShots_ -= 1.0f;
+                        e.burstTimer_ = 0.18f;
+                        e.recoilKick_ = 0.18f;
+                        SpawnEnemyProjectile(p + Vector3(0, 1.1f, 0) + toDir * 0.6f, camPos, 8.0f);
+                    }
+                } else if (los && e.attackTimer_ <= 0.0f && dist < 22.0f) {
+                    e.attackTimer_ = 2.2f + (float)(rand() % 80) / 100.0f;
+                    e.burstShots_ = 3.0f;
+                    e.burstTimer_ = 0.0f;
+                }
+                break;
+            }
+            case E_CHARGER: {
+                // Быстро рвётся в упор, петляет; контактный удар 20 урона, кулдаун 1.5 сек
+                Vector3 strafe(-toDir.z_, 0, toDir.x_);
+                move = (toDir + strafe * 0.35f * sinf(e.strafePhase_)) * e.speed_;
+                if (dist < 1.6f && e.attackTimer_ <= 0.0f) {
+                    e.attackTimer_ = 1.5f;
+                    e.recoilKick_ = 0.25f;
+                    DamagePlayer(20.0f);
+                    AddCameraShake(0.2f);
+                    CreateHitSpark((p + camPos) * 0.5f);
+                }
+                break;
+            }
+            case E_BOSS: {
+                // Босс: давит скоростью и контактными ударами, иногда «плюётся» залпом
+                move = toDir * e.speed_;
+                if (dist < 2.2f && e.attackTimer_ <= 0.0f) {
+                    e.attackTimer_ = 1.2f;
+                    e.recoilKick_ = 0.3f;
+                    DamagePlayer(30.0f);
+                    AddCameraShake(0.3f);
+                    CreateHitSpark((p + camPos) * 0.5f);
+                } else if (e.attackTimer_ <= 0.0f && dist > 6.0f && (rand() % 100) < 30) {
+                    e.attackTimer_ = 2.5f;
+                    SpawnEnemyProjectile(p + Vector3(0, 1.6f, 0) + toDir, camPos, 12.0f);
+                }
+                break;
+            }
+            default: { // E_MELEE — идёт к игроку, обходя препятствия рейкастом
+                Vector3 probePos = p + Vector3(0, 0.6f, 0);
+                bool blocked = false;
+                if (physicsWorld_ && dist > 1.5f) {
+                    Ray ray(probePos, toDir);
+                    PhysicsRaycastResult r;
+                    physicsWorld_->RaycastSingle(r, ray, 2.2f);
+                    if (r.body_) {
+                        blocked = true;
+                        // Скольжение вдоль нормали препятствия + лёгкий «инстинкт стаи»
+                        Vector3 slide = r.normal_.CrossProduct(Vector3::UP);
+                        slide.y_ = 0;
+                        if (slide.LengthSquared() > 0.001f)
+                            move = slide.Normalized() * e.speed_ * (sinf(e.strafePhase_) > 0 ? 1.0f : -1.0f);
+                    }
+                }
+                if (!blocked) move = toDir * e.speed_;
+                if (dist < 1.4f && e.attackTimer_ <= 0.0f) {
+                    e.attackTimer_ = 1.0f;
+                    e.recoilKick_ = 0.2f;
+                    DamagePlayer(10.0f);
+                    AddCameraShake(0.12f);
+                }
+                break;
+            }
             }
 
-            n->SetPosition(Vector3(targetPos.x_, 1.0f + 0.05f * sinf(timeAcc_ * 3.0f + e.phase_), targetPos.z_));
+            // Интеграция движения с ограничением по арене
+            Vector3 np = p + move * dt;
+            const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 2.0f;
+            np.x_ = Clamp(np.x_, -half, half);
+            np.z_ = Clamp(np.z_, -half, half);
+            float bob = 0.05f * sinf(timeAcc_ * 3.0f + e.phase_);
+            // Визуальный «откат» при выстреле/ударе: приседание модели
+            if (e.recoilKick_ > 0.0f) e.recoilKick_ = Max(0.0f, e.recoilKick_ - dt);
+            float kick = e.recoilKick_ * 0.6f;
+            n->SetPosition(Vector3(np.x_, 1.0f + bob - kick, np.z_));
+
             if (dist > 0.5f) {
                 float yawDeg = atan2f(toCam.x_, toCam.z_) * 57.29578f;
                 n->SetRotation(Quaternion(yawDeg, Vector3::UP));
