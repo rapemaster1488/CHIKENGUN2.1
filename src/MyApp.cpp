@@ -3323,7 +3323,7 @@ private:
             p->SetPosition(px, py);
             // Затухание у верхнего края
             float a = 0.55f * (float(py) / float(sh)) + 0.1f;
-            Color c = p->GetColor(CORNER_TOP_LEFT); c.a_ = a; p->SetColor(c);
+            Color c = p->GetColor(Urho3D::CORNER_TOPLEFT); c.a_ = a; p->SetColor(c);
         }
         // Параллакс от мыши: панель чуть сдвигается за курсором (глубина)
         auto* input = GetSubsystem<Input>();

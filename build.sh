@@ -62,37 +62,23 @@ SDL_CFLAGS="-D_REENTRANT"
 [ -n "$SDL_INC" ] && SDL_CFLAGS="-I$SDL_INC $SDL_CFLAGS"
 
 # ---- 2.5 Bullet Physics (чинит fatal error: Bullet/LinearMath/btIDebugDraw.h) ----
-# Urho3D делает #include <Bullet/...>, а distro кладут заголовки в /usr/include/bullet.
-BULLET_INC=""
-if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists bullet; then
-    for f in $(pkg-config --cflags-only-I bullet | tr ' ' '\n' | sed 's/^-I//'); do
-        if [ -f "$f/Bullet/LinearMath/btIDebugDraw.h" ]; then BULLET_INC="$f"; break; fi
-        if [ -f "$f/bullet/LinearMath/btIDebugDraw.h" ]; then BULLET_INC2_PARENT="$f"; fi
-    done
-fi
-if [ -z "$BULLET_INC" ]; then
-    for d in /usr/include /usr/local/include; do
-        if [ -f "$d/Bullet/LinearMath/btIDebugDraw.h" ]; then BULLET_INC="$d"; break; fi
-        if [ -f "$d/bullet/LinearMath/btIDebugDraw.h" ]; then BULLET_INC2_PARENT="$d"; fi
-    done
-fi
-if [ -z "$BULLET_INC" ] && [ -n "$BULLET_INC2_PARENT" ]; then
-    # нет пути Bullet/... — создаём симлинк bullet -> Bullet (или наоборот)
-    if [ ! -e "$BULLET_INC2_PARENT/Bullet" ]; then
-        if ln -s "$BULLET_INC2_PARENT/bullet" "$BULLET_INC2_PARENT/Bullet" 2>/dev/null; then
-            echo "Создан симлинк: $BULLET_INC2_PARENT/Bullet -> $BULLET_INC2_PARENT/bullet"
-        fi
+# ВАЖНО: distro-пакет libbullet-dev (Bullet 2.x) НЕ СОВМЕСТИМ с заголовками Urho3D —
+# Urho собран против Bullet 3 (libBullet3Collision), и компиляция падает с ошибкой
+# "isVisible ... marked override, but does not override". Поэтому заголовки ищем
+# ТОЛЬКО внутри самого Urho3D (ThirdParty/Bullet/src). Если не найдём — просто
+# ругаемся подсказкой, но НЕ добавляем несовместимый include (ошибка всё равно не лечится).
+BULLET_CFLAGS=""
+for d in "$URHO_INC/Urho3D/ThirdParty/Bullet/src" "$HOME/urho3d/src/ThirdParty/Bullet/src" "$HOME/urho3d/ThirdParty/Bullet/src"; do
+    if [ -f "$d/Bullet/LinearMath/btIDebugDraw.h" ] || [ -f "$d/LinearMath/btIDebugDraw.h" ]; then
+        BULLET_CFLAGS="-I$d"
+        echo "Bullet includes (из Urho3D): $d"
+        break
     fi
-    [ -f "$BULLET_INC2_PARENT/Bullet/LinearMath/btIDebugDraw.h" ] && BULLET_INC="$BULLET_INC2_PARENT"
+done
+if [ -z "$BULLET_CFLAGS" ]; then
+    echo "Подсказка: если компилятор упадёт на Bullet/*.h — пересобери Urho3D из исходников"
+    echo "(его ThirdParty/Bullet подставит нужные заголовки автоматически)."
 fi
-if [ -z "$BULLET_INC" ]; then
-    echo "!! Не найден заголовок Bullet/LinearMath/btIDebugDraw.h."
-    echo "   Выполни одну команду и повтори сборку:"
-    echo "   sudo apt install -y libbullet-dev && sudo ln -sfn /usr/include/bullet /usr/include/Bullet"
-    exit 1
-fi
-BULLET_CFLAGS="-I$BULLET_INC"
-echo "Bullet includes: $BULLET_INC"
 
 # ---- 3. Путь к libUrho3D ----
 if [ -d "$HOME/urho3d/build/lib" ]; then
@@ -114,6 +100,7 @@ $CXX "$SRC" \
     $BULLET_CFLAGS \
     -L"$URHO_LIBDIR" \
     -lUrho3D \
+    $( [ -f "$URHO_LIBDIR/libBullet3Collision.so" ] || ls "$URHO_LIBDIR"/libBullet3Collision.so* >/dev/null 2>&1 && echo "-lBullet3Collision -lBullet3Dynamics -lBullet3Geometry -lBulletInverseDynamics" ) \
     $SDL_LIBS \
     -lGL \
     -lX11 \
