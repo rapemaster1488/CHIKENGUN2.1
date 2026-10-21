@@ -652,9 +652,10 @@ public:
             for (const char* b : bases)
                 candidates.Push(String(b) + "/Data/CoreData");
             bool coreAdded = false;
+            FileSystem* fs = GetSubsystem<FileSystem>();
             for (unsigned i = 0; i < candidates.Size(); ++i) {
-                if (Dir(candidates[i]).Exists()) {
-                    cache->AddResourceDir(candidates[i], "");
+                if (fs && fs->DirectoryExists(candidates[i])) {
+                    cache->AddResourceDir(candidates[i]); // 2-й аргумент — priority (int), не строка
                     URHO3D_LOGINFO("CoreData найден и добавлен: " + candidates[i]);
                     coreAdded = true;
                     break;
