@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
+#include <unistd.h> // readlink для поиска CoreData рядом с бинарником
 
 // ВАЖНО: Urho3D/Math/Vector3.h подключается ДО всего остального, иначе
 // заголовки Graphics/Input/UI (через Variant->Color->Vector4->Vector3)
@@ -630,29 +631,37 @@ public:
         // Инициализация случайных чисел
         srand((unsigned int)time(nullptr));
 
-        // Фикс "Failed to add resource path 'CoreData'": сами ищем Data/CoreData
-        // относительно папки запуска/билда и прописываем их как префиксные пути.
+        // Фикс "Failed to add resource path 'CoreData'": ищем CoreData рядом с
+        // запущенным бинарником и добавляем его через API текущей сборки Urho3D.
         {
             ResourceCache* cache = GetSubsystem<ResourceCache>();
-            Vector<String> prefixes;
-            const char* bases[] = { ".", "..", "../..", "./build", "build" };
-            String foundData;
-            for (const char* b : bases) {
-                String p = String(b) + "/Data";
-                if (DirectoryExists(p)) { foundData = p; break; }
+            // Путь исполняемого файла -> его директория
+            String exeDir;
+            {
+                char link[4096];
+                ssize_t n = readlink("/proc/self/exe", link, sizeof(link) - 1);
+                if (n > 0) {
+                    link[n] = '\0';
+                    String exePath(link);
+                    exeDir = exePath.Substring(0, exePath.FindLast('/'));
+                }
             }
-            if (!foundData.Empty_) {
-                prefixes.Push(foundData);
-                String core = foundData + "/CoreData";
-                if (DirectoryExists(core))
-                    prefixes.Push(core);
-                else if (DirectoryExists("CoreData"))
-                    prefixes.Push(String("CoreData"));
-                cache->SetResourcePrefixPaths(prefixes);
-                URHO3D_LOGINFO("Resource prefix paths: " + Join(prefixes, ", "));
-            } else {
-                URHO3D_LOGWARNING("Папка Data/ не найдена рядом с запуском. Запускай из корня проекта: ./build/MyShooter (рядом должна лежать папка Data/)");
+            const char* bases[] = { ".", "..", "./build", "build" };
+            Vector<String> candidates;
+            if (!exeDir.Empty()) candidates.Push(exeDir + "/CoreData");
+            for (const char* b : bases)
+                candidates.Push(String(b) + "/Data/CoreData");
+            bool coreAdded = false;
+            for (unsigned i = 0; i < candidates.Size(); ++i) {
+                if (Dir(candidates[i]).Exists()) {
+                    cache->AddResourceDir(candidates[i], "");
+                    URHO3D_LOGINFO("CoreData найден и добавлен: " + candidates[i]);
+                    coreAdded = true;
+                    break;
+                }
             }
+            if (!coreAdded)
+                URHO3D_LOGWARNING("Папка Data/CoreData не найдена. Скопируй ресурсы: cp -r ~/urho3d/bin/Data ./Data (из корня проекта), затем запусти ./build/MyShooter");
         }
 
         // Настройка движка
