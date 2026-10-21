@@ -38,6 +38,7 @@
 #include <Urho3D/Graphics/Camera.h>
 #include <Urho3D/Graphics/Light.h>
 #include <Urho3D/Graphics/Material.h>
+#include <Urho3D/Graphics/Technique.h>
 #include <Urho3D/Graphics/Model.h>
 #include <Urho3D/Graphics/StaticModel.h>
 #include <Urho3D/Graphics/ParticleEmitter.h>
@@ -592,10 +593,12 @@ private:
     Material* hdMetal_ = nullptr;
     Material* hdCrate_ = nullptr;
     Material* skyMaterial_ = nullptr;
+    Material* fallbackMat_ = nullptr; // гарантия непустого материала, если ни один xml не найден
     Texture* skyTexture_ = nullptr;
     Vector<SharedPtr<Material>> weaponTintMats_;
     ParticleEffect* sparkEffect_ = nullptr;
     ParticleEffect* smokeEffect_ = nullptr;
+    bool haveParticles_ = false; // Spark.pfx/Smoke.pfx реально загружены (пустые .pfx -> багы рендера)
     Font* font_ = nullptr;
     
     // Звуки (процедурно-синтезированные WAV в Data/Sounds)
@@ -715,7 +718,7 @@ public:
                     }
                 }
                 // докидываем отсутствующие стандартные подпапки (Fonts, Models, Textures...)
-                const char* stdDirs[] = {"Fonts", "Models", "Textures", "Sounds", "Scripts", "Matrices", "Shaders", "Techniques"};
+                const char* stdDirs[] = {"Fonts", "Models", "Textures", "Sounds", "Scripts", "Matrices", "Shaders", "Techniques", "Particle", "Music", "Materials"};
                 for (const char* sd : stdDirs) {
                     String dSrc = srcRoot + "/" + sd;
                     String dDst = dst + "/" + sd;
@@ -871,16 +874,32 @@ private:
     
     // Хранилище для unlit-материалов, созданных MakeTinted (владеем указателями, чтобы они не удалились)
     Vector<SharedPtr<Material>> tintedMatStore_;
+    SharedPtr<Material> baseMat_; // кэш: валидный материал-база для тинтов (или null, если искали и не нашли)
 
     SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<Texture>& norm, const Color& c) {
         auto* cache = GetSubsystem<ResourceCache>();
-        // Готовый unlit-материал из xml (базовая техника уже в нём) — Technique.h недоступен в этой сборке Urho3D
-        //SharedPtr<Material> m = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
-        Material* raw_m = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
-        SharedPtr<Material> m(raw_m);
-        if (!m) return m;
-
-        m = m->Clone();
+        // Кэш: ищем ПЕРВЫЙ валидный материал-базу один раз. Если Data неполный и xml не грузятся —
+        // строим технику программно (DiffUnlit.xml из CoreData). Пустой Material без техники = segfault рендера.
+        if (!baseMat_) {
+            static const char* kBaseMats[] = {
+                "Materials/Game/TintUnlit.xml", "Materials/VColored.xml",
+                "Materials/StoneTiled.xml", "Materials/DefaultGrey.xml"
+            };
+            for (const char* cand : kBaseMats) {
+                SharedPtr<Material> t = cache->GetResource<Material>(String(cand));
+                if (t && t->GetTechniques().Size()) { baseMat_ = t; break; }
+            }
+            if (!baseMat_) {
+                baseMat_ = new Material(context_);
+                SharedPtr<Technique> tech(new Technique(context_));
+                if (tech->LoadXml(cache->GetResourceFile("Techniques/DiffUnlit.xml")))
+                    baseMat_->SetTechnique(0, tech);
+                else
+                    URHO3D_LOGERROR("MakeTinted: DiffUnlit.xml не найден — объекты могут не отрисовываться");
+                URHO3D_LOGINFO("MakeTinted: xml-материалы не найдены, базовая техника собрана программно");
+            }
+        }
+        SharedPtr<Material> m = baseMat_->Clone();
         if (diff) { m->SetTexture(TU_DIFFUSE, diff); }
         // SetDiffuseColor нет — цвет через шейдерный параметр MatDiffColor (0..1)
         m->SetShaderParameter("MatDiffColor", Variant(Color(c.r_ / 255.0f, c.g_ / 255.0f, c.b_ / 255.0f, 1.0f)));
@@ -890,6 +909,7 @@ private:
 
  void CreateMaterials() {
      auto* cache = GetSubsystem<ResourceCache>();
+     if (!fallbackMat_) { fallbackMat_ = new Material(context_); tintedMatStore_.Push(SharedPtr<Material>(fallbackMat_)); }
      // --- HD текстуры (сгенерированы tools/gen_textures.py) ---
      hdStone_  = cache->GetResource<Material>("Materials/Game/StoneHD.xml");
      hdFloor_  = cache->GetResource<Material>("Materials/Game/FloorTile.xml");
@@ -956,43 +976,34 @@ private:
     
     void CreateParticleEffects() {
         auto* cache = GetSubsystem<ResourceCache>();
-        
-        // Эффект искр
-        sparkEffect_ = cache->GetResource<ParticleEffect>("Particle/Spark.pfx");
-        if (!sparkEffect_) {
-            sparkEffect_ = CreateSparkEffect();
+
+        // Ищем НАСТОЯЩИЙ валидный pfx: сначала Spark.pfx из Data проекта,
+        // затем стандартные эффекты движка (Urho3D bin/Data/Particle/*).
+        // Пустые/битые файлы дают "unknown resource type" и опасны для эмиттера.
+        static const char* kSparkCandidates[] = {
+            "Particle/Spark.pfx", "Particle/SparkBig.pfx",
+            "Particle/Fireworks.pfx", "Particle/ExplosionBig.pfx",
+            "Particle/Torch.pfx", "Particle/Flame.pfx"
+        };
+        for (const char* p : kSparkCandidates) {
+            ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
+            if (e && e->GetTechnique()) { sparkEffect_ = e; break; }
         }
-        
-        // Эффект дыма
-        smokeEffect_ = cache->GetResource<ParticleEffect>("Particle/Smoke.pfx");
-        if (!smokeEffect_) {
-            smokeEffect_ = CreateSmokeEffect();
+        static const char* kSmokeCandidates[] = {
+            "Particle/Smoke.pfx", "Particle/Dust.mist", "Particle/Mist.pfx"
+        };
+        for (const char* p : kSmokeCandidates) {
+            ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
+            if (e && e->GetTechnique()) { smokeEffect_ = e; break; }
         }
-    }
-    
-    ParticleEffect* CreateSparkEffect() {
-        auto* effect = new ParticleEffect(context_);
-        
-        // Настройки эмиттера
-        effect->SetMinEmissionRate(50.0f); effect->SetMaxEmissionRate(50.0f);
-        effect->SetNumParticles(100);
-        effect->SetMinTimeToLive(0.5f); effect->SetMaxTimeToLive(0.5f);
-        
-        // Настройки частиц
-        effect->SetMinVelocity(1.0f);
-        effect->SetMaxVelocity(3.0f);
-        return effect;
-    }
-    
-    ParticleEffect* CreateSmokeEffect() {
-        auto* effect = new ParticleEffect(context_);
-        
-        effect->SetMinEmissionRate(30.0f); effect->SetMaxEmissionRate(30.0f);
-        effect->SetNumParticles(50);
-        effect->SetMinTimeToLive(1.0f); effect->SetMaxTimeToLive(1.0f);
-        effect->SetMinVelocity(1.0f);
-        effect->SetMaxVelocity(3.0f);
-        return effect;
+
+        // Эмиттер без SetEffect не рендерит ничего и НЕ крашится — это наш
+        // безопасный путь. haveParticles_ включаем только при реальном эффекте.
+        haveParticles_ = (sparkEffect_ != nullptr) || (smokeEffect_ != nullptr);
+        if (haveParticles_)
+            URHO3D_LOGINFO(String("Частицы активны: ") + (sparkEffect_ ? "искры " : "") + (smokeEffect_ ? "дым" : ""));
+        else
+            URHO3D_LOGINFO("Частицы выключены (нет валидных .pfx) — игра работает стабильно без них.");
     }
 
     // =========================================================================
@@ -1044,21 +1055,12 @@ private:
     void CreateSky() {
         // Небо через Skybox: рисуется до сцены на бесконечности — не мерцает с геометрией
         Node* skyNode = scene_->CreateChild("Sky");
-        auto* cache = GetSubsystem<ResourceCache>();
-        // Техника берётся из xml-материала (Technique.h недоступен в этой сборке Urho3D)
+        // Техника берётся из xml-материала; если TintUnlit.xml нет — MakeTinted построит материал сам
         {
-            //SharedPtr<Material> skyBase = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
-            Material* raw_skyBase = cache->GetResource<Material>("Materials/Game/TintUnlit.xml");
-            SharedPtr<Material> skyBase(raw_skyBase);
-            if (skyBase) {
-                SharedPtr<Material> skyClone = skyBase->Clone();
-                skyMaterial_ = skyClone.Get();
-                tintedMatStore_.Push(skyClone);   // держим ссылку, чтобы материал не удалился
-            } else {
-                skyMaterial_ = new Material(context_);
-                tintedMatStore_.Push(SharedPtr<Material>(skyMaterial_));
-            }
+            SharedPtr<Material> skyM = MakeTinted(nullptr, nullptr, Color(150, 185, 235));
+            skyMaterial_ = skyM.Get();
         }
+        if (!skyMaterial_) { skyMaterial_ = new Material(context_); tintedMatStore_.Push(SharedPtr<Material>(skyMaterial_)); }
         if (skyTexture_) skyMaterial_->SetTexture(TU_DIFFUSE, skyTexture_);
         skyMaterial_->SetShaderParameter("MatDiffColor", Variant(Color(150.0f / 255.0f, 185.0f / 255.0f, 235.0f / 255.0f, 1.0f)));
         skyMaterial_->SetCullMode(CULL_NONE);
@@ -1147,7 +1149,7 @@ private:
             head->SetScale(0.6f);
             StaticModel* hm = head->CreateComponent<StaticModel>();
             hm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
-            hm->SetMaterial(MakeTinted(nullptr, nullptr, Color(255, 230, 160)).Get());
+            { SharedPtr<Material> hmM = MakeTinted(nullptr, nullptr, Color(255, 230, 160)); if (hmM) hm->SetMaterial(hmM.Get()); }
             Node* ln2 = scene_->CreateChild("LampLight");
             ln2->SetPosition(lp + Vector3(0, 5.0f, 0));
             Light* l2 = ln2->CreateComponent<Light>();
@@ -1557,7 +1559,7 @@ private:
         n->SetScale(scale);
         StaticModel* sm = n->CreateComponent<StaticModel>();
         sm->SetModel(model ? model : boxModel_);
-        sm->SetMaterial(mat);
+        sm->SetMaterial(mat ? mat : fallbackMat_);
         sm->SetCastShadows(false);
         return n;
     }
@@ -2766,7 +2768,7 @@ private:
         
         // Эмиттер искр
         ParticleEmitter* emitter = effectNode->CreateComponent<ParticleEmitter>();
-        emitter->SetEffect(sparkEffect_);
+        if (sparkEffect_) emitter->SetEffect(sparkEffect_);
         
         // Автоудаление через 1 секунду
         { PendingRemove pr; pr.node_ = effectNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr); }
@@ -2778,7 +2780,7 @@ private:
         
         // Эмиттер дыма
         ParticleEmitter* smokeEmitter = effectNode->CreateComponent<ParticleEmitter>();
-        smokeEmitter->SetEffect(smokeEffect_);
+        if (smokeEffect_) smokeEmitter->SetEffect(smokeEffect_);
         
         // Точечный свет для вспышки
         Node* lightNode = effectNode->CreateChild("ExplosionLight");
@@ -4123,7 +4125,7 @@ private:
             debrisLite_.Push(d);
         }
 
-        if (sparkEffect_) {
+        if (haveParticles_ && sparkEffect_) {
             Node* sparks = scene_->CreateChild("DebrisSparks");
             sparks->SetPosition(pos);
             ParticleEmitter* pe = sparks->CreateComponent<ParticleEmitter>();
@@ -4135,7 +4137,7 @@ private:
     }
 
     void CreateHitSpark(const Vector3& pos) {
-        if (!sparkEffect_) return;
+        if (!haveParticles_ || !sparkEffect_) return;
         Node* sparkNode = scene_->CreateChild("HitSpark");
         sparkNode->SetPosition(pos);
         ParticleEmitter* emitter = sparkNode->CreateComponent<ParticleEmitter>();

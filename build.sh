@@ -111,17 +111,31 @@ $CXX "$SRC" \
 
 echo "Готово: $OUT"
 
-# ---- 5. Проверка ресурсов Data/CoreData (чинит "Failed to add resource path 'CoreData'") ----
-if [ ! -d "Data" ]; then
-    echo ""
-    echo "!! ВНИМАНИЕ: рядом с проектом нет папки Data/ (в ней должны лежать Models, Fonts, Textures и CoreData)."
-    echo "   Скопируй ресурсы из сборки Urho3D одной командой:"
-    echo "   cp -r ~/urho3d/bin/Data ./Data   # или bin/CoreData -> ./Data/CoreData"
-    echo "   И запускай игру из корня проекта:  ./build/MyShooter"
-elif [ ! -d "Data/CoreData" ] && [ ! -d "CoreData" ]; then
-    echo ""
-    echo "!! Папка Data есть, но внутри нет CoreData. Добавь её:"
-    echo "   cp -r ~/urho3d/bin/CoreData ./Data/CoreData"
+# ---- 4.5 Автосинхронизация ресурсов в build/Data (чинит 'Could not find resource' и segfault) ----
+# Игра запускается из build/ и грузит ONLY build/Data/. Если там неполная копия — докатываем
+# недостающие файлы из ./Data и из ~/urho3d/bin/{Data,CoreData}, не перезаписывая имеющиеся.
+sync_dir() {
+    local src="$1" dst="build/Data"
+    [ -d "$src" ] || return 0
+    mkdir -p "$dst"
+    cp -rn "$src"/. "$dst"/ 2>/dev/null || true
+}
+for base in "Data" "$HOME/urho3d/bin/Data" "/usr/local/share/Urho3D/Data"; do
+    sync_dir "$base"
+done
+# CoreData кладём и в build/CoreData (путь, который регистрирует движок), и в build/Data/CoreData
+for cd_src in "CoreData" "Data/CoreData" "$HOME/urho3d/bin/CoreData" "/usr/local/share/Urho3D/CoreData"; do
+    if [ -d "$cd_src" ]; then
+        mkdir -p build/CoreData build/Data/CoreData
+        cp -rn "$cd_src"/. build/CoreData/ 2>/dev/null || true
+        cp -rn "$cd_src"/. build/Data/CoreData/ 2>/dev/null || true
+        break
+    fi
+done
+if [ -d "build/Data/Materials/Game" ]; then
+    echo "Ресурсы синхронизированы в build/Data (Materials/Game на месте)."
 else
-    echo "Ресурсы на месте: Data/$( [ -d Data/CoreData ] && echo '+ CoreData' ) — можно запускать: ./build/MyShooter"
+    echo ""
+    echo "!! ВНИМАНИЕ: Materials/Game не найдены ни в ./Data, ни в ~/urho3d/bin/Data."
+    echo "   Скопируй полный комплект ресурсов проекта (папка Data репо) рядом с проектом и повтори ./build.sh"
 fi
