@@ -622,7 +622,6 @@ private:
     Vector<String> loadSteps_;
     int loadStepIndex_ = 0;
 
-public:
     MyApp(Context* context) : Application(context) {}
 
     // Реализации всех методов встроены ниже в тело класса.
@@ -632,11 +631,13 @@ public:
         // Инициализация случайных чисел
         srand((unsigned int)time(nullptr));
 
-        // Фикс "Failed to add resource path 'CoreData'": ищем CoreData рядом с
-        // запущенным бинарником и добавляем его через API текущей сборки Urho3D.
+        // Фикс "Failed to add resource path 'Data'/'CoreData'".
+        // Application уже добавил абсолютный путь Data/ (от exeDir или cwd).
+        // Если он не существует — удаляем и пересоздаём в правильной директории,
+        // затем добавляем CoreData как отдельный префикс.
         {
             ResourceCache* cache = GetSubsystem<ResourceCache>();
-            // Путь исполняемого файла -> его директория
+            // Директория исполняемого файла
             String exeDir;
             {
                 char link[4096];
@@ -647,44 +648,82 @@ public:
                     exeDir = exePath.Substring(0, exePath.FindLast('/'));
                 }
             }
-            const char* bases[] = { ".", "..", "./build", "build" };
-            Vector<String> candidates;
-            if (!exeDir.Empty()) candidates.Push(exeDir + "/CoreData");
-            for (const char* b : bases)
-                candidates.Push(String(b) + "/Data/CoreData");
-            // Также проверяем вариант из Urho3D-сборки: bin/CoreData
-            String binDir;
-            if (!exeDir.Empty() && exeDir.EndsWith("bin"))
-                binDir = exeDir + "/CoreData";
-            else if (!exeDir.Empty())
-                binDir = exeDir + "/../bin/CoreData";
-            if (!binDir.Empty()) candidates.Push(binDir);
-            bool coreAdded = false;
-            // Проверка существования папки без FileSystem::DirectoryExists
-            // (в этой сборке Urho3D такого метода нет): используем POSIX stat().
             auto dirOk = [](const String& p) -> bool {
                 struct stat st;
                 return !p.Empty() && stat(p.CString(), &st) == 0 && S_ISDIR(st.st_mode);
             };
-            for (unsigned i = 0; i < candidates.Size(); ++i) {
-                if (dirOk(candidates[i])) {
-                    cache->AddResourceDir(candidates[i]); // 2-й аргумент — priority (int), не строка
-                    URHO3D_LOGINFO("CoreData найден и добавлен: " + candidates[i]);
+
+            // 1) Корректный абсолютный путь к Data/
+            String goodData;
+            if (dirOk(exeDir + "/Data"))               goodData = exeDir + "/Data";        // build/Data
+            else if (dirOk(exeDir + "/../Data"))       goodData = exeDir + "/../Data";     // ../Data от build/
+            else if (dirOk("./Data"))                  goodData = "./Data";               // запуск из корня
+            else if (dirOk("../Data"))                 goodData = "../Data";              // запуск из build/
+
+            // 2) Ставим правильный Data ПЕРВЫМ префиксом.
+            //    Методы Get/SetResourcePrefixPaths в этой сборке private —
+            //    но AddResourceDir(path, priority=0) вставляет путь перед
+            //    стандартным PRIORITY_LAST-записями Application, т.е. выше битого Data/.
+            if (!goodData.Empty()) {
+                cache->AddResourceDir(goodData, 0);
+                URHO3D_LOGINFO("Папка ресурсов добавлена (priority 0): " + goodData);
+            } else {
+                URHO3D_LOGWARNING("Папка Data/ не найдена ни рядом с бинарником, ни в cwd! Скопируй: cp -r ~/urho3d/bin/Data ./Data");
+            }
+
+            // 3) CoreData: ищем рядом с Data и добавляем отдельным префиксом
+            Vector<String> coreCandidates;
+            if (!goodData.Empty())   coreCandidates.Push(goodData + "/CoreData");
+            if (!exeDir.Empty()) {
+                coreCandidates.Push(exeDir + "/CoreData");
+                coreCandidates.Push(exeDir + "/../CoreData");
+                coreCandidates.Push(exeDir + "/../../bin/CoreData");
+            }
+            coreCandidates.Push("./Data/CoreData");
+            coreCandidates.Push("../Data/CoreData");
+            coreCandidates.Push("./CoreData");
+            bool coreAdded = false;
+            for (unsigned i = 0; i < coreCandidates.Size(); ++i) {
+                if (dirOk(coreCandidates[i])) {
+                    cache->AddResourceDir(coreCandidates[i]);
+                    URHO3D_LOGINFO("CoreData найден и добавлен: " + coreCandidates[i]);
                     coreAdded = true;
                     break;
                 }
             }
-            // Дополнительно регистрируем пользовательскую папку Data/ (Models, Fonts, Textures)
-            for (const char* b : bases) {
-                String dataDir = String(b) + "/Data";
-                if (dirOk(dataDir)) {
-                    cache->AddResourceDir(dataDir);
-                    URHO3D_LOGINFO("Папка ресурсов добавлена: " + dataDir);
-                    break;
+            if (!coreAdded)
+                URHO3D_LOGWARNING("CoreData не найден! Положи папку: mkdir -p Data && cp -r ~/urho3d/bin/CoreData Data/CoreData (из корня проекта)");
+
+            // 4) Копируем CoreData/ и прочие стандартные ресурсы движка в папку
+            //    бинарника (build/Data), если там их нет. После этого Application
+            //    при следующем запуске сам найдёт корректный абсолютный путь
+            //    build/Data/ — ошибка 'Failed to add resource path' исчезнет совсем.
+            if (!exeDir.Empty() && !goodData.Empty()) {
+                String dst = exeDir + "/Data";
+                auto copyTree = [](const char* cmd) { int rc = system(cmd); (void)rc; };
+                String srcRoot = goodData; // источник ресурсов (проекта или urho3d)
+                // CoreData
+                if (!dirOk(exeDir + "/Data/CoreData")) {
+                    for (unsigned i = 0; i < coreCandidates.Size(); ++i) {
+                        if (dirOk(coreCandidates[i])) {
+                            String cmd = "cp -r '" + coreCandidates[i] + "' '" + dst + "/' 2>/dev/null";
+                            copyTree(cmd.CString());
+                            URHO3D_LOGINFO("CoreData скопирован в " + dst + "/CoreData");
+                            break;
+                        }
+                    }
+                }
+                // докидываем отсутствующие стандартные подпапки (Fonts, Models, Textures...)
+                const char* stdDirs[] = {"Fonts", "Models", "Textures", "Sounds", "Scripts", "Matrices", "Shaders", "Techniques"};
+                for (const char* sd : stdDirs) {
+                    String dSrc = srcRoot + "/" + sd;
+                    String dDst = dst + "/" + sd;
+                    if (dirOk(dSrc) && !dirOk(dDst)) {
+                        String cmd = "cp -r '" + dSrc + "' '" + dDst + "' 2>/dev/null";
+                        copyTree(cmd.CString());
+                    }
                 }
             }
-            if (!coreAdded)
-                URHO3D_LOGWARNING("Папка Data/CoreData не найдена. Скопируй ресурсы: cp -r ~/urho3d/bin/Data ./Data (из корня проекта), затем запусти ./build/MyShooter");
         }
 
         // Настройка движка
