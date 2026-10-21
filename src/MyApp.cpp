@@ -727,6 +727,36 @@ public:
                         copyTree(cmd.CString());
                     }
                 }
+                // Игровые HD-ресурсы: Materials/Game/*.xml из bin/Data проекта
+                // (без них материалы пола/стен/ящиков не грузятся -> серая сцена).
+                {
+                    String gameMatSrc = srcRoot + "/Materials/Game";
+                    if (dirOk(gameMatSrc) && !dirOk(dst + "/Materials/Game")) {
+                        String cmd = "mkdir -p '" + dst + "/Materials' && cp -r '" + gameMatSrc + "' '" + dst + "/Materials/' 2>/dev/null";
+                        copyTree(cmd.CString());
+                        URHO3D_LOGINFO("Materials/Game скопирован в " + dst + "/Materials/Game");
+                    }
+                }
+            }
+
+            // Текстуры HD подключаются отдельным текстурным путём, если лежат в
+            // bin/Data/TexturesHD (генерируются tools/gen_textures.py).
+            {
+                Vector<String> texHdCandidates;
+                if (!goodData.Empty())   texHdCandidates.Push(goodData + "/TexturesHD");
+                if (!exeDir.Empty())     texHdCandidates.Push(exeDir + "/../bin/Data/TexturesHD");
+                texHdCandidates.Push("./bin/Data/TexturesHD");
+                texHdCandidates.Push("../bin/Data/TexturesHD");
+                auto fileOk = [](const String& p) -> bool {
+                    struct stat st; return !p.Empty() && stat(p.CString(), &st) == 0;
+                };
+                for (unsigned i = 0; i < texHdCandidates.Size(); ++i) {
+                    if (fileOk(texHdCandidates[i] + "/StoneHDDiffuse.png")) {
+                        cache->AddTextureDir(texHdCandidates[i]);
+                        URHO3D_LOGINFO("TexturesHD подключён: " + texHdCandidates[i]);
+                        break;
+                    }
+                }
             }
         }
 
@@ -941,6 +971,24 @@ private:
      stoneMaterial_ = hdStone_ ? hdStone_ : cache->GetResource<Material>("Materials/Stone.xml");
      if (!stoneMaterial_) stoneMaterial_ = new Material(context_);
      metalMaterial_ = hdMetal_ ? hdMetal_ : stoneMaterial_;
+
+     // --- Тайлинг HD-материалов: у процедурных текстур нет UV-тайлинга в модели,
+     // поэтому ставим UOffset/VOffset (как в стоковом Materials/StoneTiled.xml).
+     // Без этого одна текстура 1024px растягивается на весь пол — «мыло» без деталей.
+     {
+         auto tileMat = [](Material* m, float tiles) {
+             if (!m) return;
+             m->SetShaderParameter("UOffset", Variant(Vector4(tiles, 0, 0, 0)));
+             m->SetShaderParameter("VOffset", Variant(Vector4(0, tiles, 0, 0)));
+         };
+         tileMat(hdStone_, 8.0f);    // стены/платформы
+         tileMat(hdFloor_, 32.0f);   // пол арены — мелкая плитка
+         tileMat(hdPanel_, 6.0f);    // панели
+         tileMat(hdMetal_, 4.0f);    // металл
+         tileMat(hdCrate_, 1.0f);    // ящики: текстура = вся грань
+         URHO3D_LOGINFO(String("HD-материалы: ") + (hdStone_ ? "камень OK " : "камень NULL ")
+             + (hdFloor_ ? "пол OK " : "пол NULL ") + (hdCrate_ ? "ящики OK" : "ящики NULL"));
+     }
      // Мишени: яркие процедурные unlit-материалы, чтобы были видны всегда
      {
          SharedPtr<Texture> white;

@@ -139,3 +139,22 @@ else
     echo "!! ВНИМАНИЕ: Materials/Game не найдены ни в ./Data, ни в ~/urho3d/bin/Data."
     echo "   Скопируй полный комплект ресурсов проекта (папка Data репо) рядом с проектом и повтори ./build.sh"
 fi
+
+# ---- 4.6 HD-текстуры: генерируем/синхронизируем TexturesHD -> build/Data/Textures ----
+# Материалы Materials/Game/*.xml ссылаются на Textures/StoneHDDiffuse.png и т.д.
+# Если PNG нет — генерируем процедурно (stdlib python3), потом копим в build/Data/Textures.
+if [ ! -f "bin/Data/TexturesHD/StoneHDDiffuse.png" ] && [ ! -f "Data/TexturesHD/StoneHDDiffuse.png" ]; then
+    if command -v python3 >/dev/null 2>&1 && [ -f tools/gen_textures.py ]; then
+        echo "Генерирую HD-текстуры (tools/gen_textures.py -> bin/Data/TexturesHD)..."
+        mkdir -p bin/Data/TexturesHD
+        python3 tools/gen_textures.py bin/Data/TexturesHD || echo "!! Генерация текстур упала — сцена будет без HD-текстур"
+    fi
+fi
+for hd in "bin/Data/TexturesHD" "Data/TexturesHD"; do
+    if [ -d "$hd" ]; then
+        mkdir -p build/Data/Textures
+        cp -n "$hd"/*.png "$hd"/*.bmp build/Data/Textures/ 2>/dev/null || true
+        echo "HD-текстуры синхронизированы: $hd -> build/Data/Textures/"
+        break
+    fi
+done
