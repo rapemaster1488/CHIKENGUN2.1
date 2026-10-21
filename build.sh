@@ -27,14 +27,39 @@ if [ -z "$URHO_INC" ]; then
 fi
 echo "Urho3D includes: $URHO_INC"
 
-# ---- 2. SDL2 через pkg-config (чинит fatal error: SDL/SDL_joystick.h) ----
+# ---- 2. SDL2 (чинит fatal error: SDL/SDL_joystick.h) ----
+# Urho3D делает #include <SDL/SDL_joystick.h>, а distro кладут заголовки в /usr/include/SDL2.
+# Варианты: pkg-config дал путь .../include/SDL2, либо симлинк SDL -> SDL2, либо fallback.
+SDL_INC=""
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists sdl2; then
-    SDL_CFLAGS=$(pkg-config --cflags sdl2)
     SDL_LIBS=$(pkg-config --libs sdl2)
+    for f in $(pkg-config --cflags-only-I sdl2 | tr ' ' '\n' | sed 's/^-I//'); do
+        if [ -f "$f/SDL/SDL_joystick.h" ]; then SDL_INC="$f"; break; fi
+        if [ -f "$f/SDL2/SDL_joystick.h" ]; then SDL_INC2="$f"; fi
+    done
 else
-    SDL_CFLAGS="-I/usr/include/SDL2 -D_REENTRANT"
     SDL_LIBS="-lSDL2"
+    if [ -f /usr/include/SDL/SDL_joystick.h ]; then SDL_INC="/usr/include"; fi
+    if [ -f /usr/include/SDL2/SDL_joystick.h ]; then SDL_INC2="/usr/include"; fi
 fi
+
+if [ -z "$SDL_INC" ] && [ -n "$SDL_INC2" ]; then
+    # нет пути SDL/... — пробуем создать симлинк SDL2 -> SDL (нужен root или права на include)
+    if [ ! -e "$SDL_INC2/SDL" ] && ln -s "$SDL_INC2/SDL2" "$SDL_INC2/SDL" 2>/dev/null; then
+        echo "Создан симлинк: $SDL_INC2/SDL -> $SDL_INC2/SDL2"
+    fi
+    if [ -f "$SDL_INC2/SDL/SDL_joystick.h" ]; then
+        SDL_INC="$SDL_INC2"
+    else
+        echo "!! Не найден заголовок SDL/SDL_joystick.h."
+        echo "   Выполни одну команду и повтори сборку:"
+        echo "   sudo apt install -y libsdl2-dev && sudo ln -sfn /usr/include/SDL2 /usr/include/SDL"
+        exit 1
+    fi
+fi
+
+SDL_CFLAGS="-D_REENTRANT"
+[ -n "$SDL_INC" ] && SDL_CFLAGS="-I$SDL_INC $SDL_CFLAGS"
 
 # ---- 3. Путь к libUrho3D ----
 if [ -d "$HOME/urho3d/build/lib" ]; then
