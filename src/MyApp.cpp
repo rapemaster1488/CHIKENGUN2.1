@@ -629,7 +629,32 @@ public:
     void Start() override {
         // Инициализация случайных чисел
         srand((unsigned int)time(nullptr));
-        
+
+        // Фикс "Failed to add resource path 'CoreData'": сами ищем Data/CoreData
+        // относительно папки запуска/билда и прописываем их как префиксные пути.
+        {
+            ResourceCache* cache = GetSubsystem<ResourceCache>();
+            Vector<String> prefixes;
+            const char* bases[] = { ".", "..", "../..", "./build", "build" };
+            String foundData;
+            for (const char* b : bases) {
+                String p = String(b) + "/Data";
+                if (DirectoryExists(p)) { foundData = p; break; }
+            }
+            if (!foundData.Empty_) {
+                prefixes.Push(foundData);
+                String core = foundData + "/CoreData";
+                if (DirectoryExists(core))
+                    prefixes.Push(core);
+                else if (DirectoryExists("CoreData"))
+                    prefixes.Push(String("CoreData"));
+                cache->SetResourcePrefixPaths(prefixes);
+                URHO3D_LOGINFO("Resource prefix paths: " + Join(prefixes, ", "));
+            } else {
+                URHO3D_LOGWARNING("Папка Data/ не найдена рядом с запуском. Запускай из корня проекта: ./build/MyShooter (рядом должна лежать папка Data/)");
+            }
+        }
+
         // Настройка движка
         SetupEngineSettings();
 
@@ -709,9 +734,9 @@ private:
     bool LoadResources() {
         auto* cache = GetSubsystem<ResourceCache>();
         
-        // Добавляем директории ресурсов
-        cache->AddResourceDir("Data", false);
-        cache->AddResourceDir("CoreData", false);
+        // Директории ресурсов уже настроены в Start() через SetResourcePrefixPaths
+        // (поиск Data/ и CoreData/ относительно папки запуска). Старые вызовы
+        // AddResourceDir("CoreData") удаляем — они и давали ошибку "Failed to add resource path".
         
         // Загружаем базовые модели
         boxModel_ = cache->GetResource<Model>("Models/Box.mdl");

@@ -110,3 +110,18 @@ $CXX "$SRC" \
     -lm
 
 echo "Готово: $OUT"
+
+# ---- 5. Проверка ресурсов Data/CoreData (чинит "Failed to add resource path 'CoreData'") ----
+if [ ! -d "Data" ]; then
+    echo ""
+    echo "!! ВНИМАНИЕ: рядом с проектом нет папки Data/ (в ней должны лежать Models, Fonts, Textures и CoreData)."
+    echo "   Скопируй ресурсы из сборки Urho3D одной командой:"
+    echo "   cp -r ~/urho3d/bin/Data ./Data   # или bin/CoreData -> ./Data/CoreData"
+    echo "   И запускай игру из корня проекта:  ./build/MyShooter"
+elif [ ! -d "Data/CoreData" ] && [ ! -d "CoreData" ]; then
+    echo ""
+    echo "!! Папка Data есть, но внутри нет CoreData. Добавь её:"
+    echo "   cp -r ~/urho3d/bin/CoreData ./Data/CoreData"
+else
+    echo "Ресурсы на месте: Data/$( [ -d Data/CoreData ] && echo '+ CoreData' ) — можно запускать: ./build/MyShooter"
+fi
