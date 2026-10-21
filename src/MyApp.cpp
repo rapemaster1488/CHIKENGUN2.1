@@ -78,7 +78,7 @@
 // =========================================================================
 namespace Lite {
 
-using ::Vector3; // в этой сборке Urho3D/Math/Vector3.h определяет Vector3 в ГЛОБАЛЬНОМ пространстве имён
+using Urho3D::Vector3; // Vector3 живёт в namespace Urho3D (проверено по заголовкам этой сборки)
 
 struct Collider {
     Vector3 center;
@@ -3380,7 +3380,7 @@ private:
             p->SetPosition(px, py);
             // Затухание у верхнего края
             float a = 0.55f * (float(py) / float(sh)) + 0.1f;
-            Color c = p->GetColor(CORNER_TOPLEFT); c.a_ = a; p->SetColor(c);
+            Color c = p->GetColor(C_TOPLEFT); c.a_ = a; p->SetColor(c);
         }
         // Параллакс от мыши: панель чуть сдвигается за курсором (глубина)
         auto* input = GetSubsystem<Input>();
