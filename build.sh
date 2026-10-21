@@ -120,11 +120,11 @@ sync_dir() {
     mkdir -p "$dst"
     cp -rn "$src"/. "$dst"/ 2>/dev/null || true
 }
-for base in "Data" "$HOME/urho3d/bin/Data" "/usr/local/share/Urho3D/Data"; do
+for base in "Data" "bin/Data" "$HOME/urho3d/bin/Data" "/usr/local/share/Urho3D/Data"; do
     sync_dir "$base"
 done
 # CoreData кладём и в build/CoreData (путь, который регистрирует движок), и в build/Data/CoreData
-for cd_src in "CoreData" "Data/CoreData" "$HOME/urho3d/bin/CoreData" "/usr/local/share/Urho3D/CoreData"; do
+for cd_src in "CoreData" "Data/CoreData" "bin/CoreData" "$HOME/urho3d/bin/CoreData" "/usr/local/share/Urho3D/CoreData"; do
     if [ -d "$cd_src" ]; then
         mkdir -p build/CoreData build/Data/CoreData
         cp -rn "$cd_src"/. build/CoreData/ 2>/dev/null || true
