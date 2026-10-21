@@ -66,10 +66,51 @@
 #include <Urho3D/Audio/SoundSource.h>
 #include <Urho3D/Audio/SoundSource3D.h>
 
-#include <Urho3D/Physics/PhysicsWorld.h>
-#include <Urho3D/Physics/RigidBody.h>
-#include <Urho3D/Physics/CollisionShape.h>
-#include <Urho3D/Physics/PhysicsEvents.h>
+// =========================================================================
+// ЛЁГКИЙ ФИЗИЧЕСКИЙ ДВИЖОК (без Bullet). Заголовки Urho3D/Physics/* тянут
+// Bullet и ломают компиляцию при несовпадении версий ("isVisible ... marked
+// override"). Вся физика игры — собственный рейкаст по AABB-коллайдерам.
+// =========================================================================
+namespace Lite {
+
+struct Collider {
+    Vector3 center;
+    Vector3 half;      // box half-extents (или radius в x_ для sphere)
+    bool sphere = false;
+    int tag = 0;       // 0 static, 1 target, 2 enemy, 4 moving target, 7 removed
+    void* ptr = nullptr;
+};
+
+inline float RaySphere(const Vector3& o, const Vector3& d, const Vector3& c, float r) {
+    Vector3 oc = o - c;
+    float b = oc.DotProduct(d);
+    float cc = oc.DotProduct(oc) - r * r;
+    float disc = b * b - cc;
+    if (disc < 0.0f) return -1.0f;
+    float t = -b - sqrtf(disc);
+    return t > 0.0f ? t : -1.0f;
+}
+
+inline float RayBox(const Vector3& o, const Vector3& d, const Vector3& c, const Vector3& h) {
+    float tmin = 0.0f, tmax = 1e9f;
+    const float* oo = &o.x_; const float* dd = &d.x_; const float* cc = &c.x_; const float* hh = &h.x_;
+    for (int a = 0; a < 3; ++a) {
+        if (fabsf(dd[a]) < 1e-7f) {
+            if (oo[a] < cc[a] - hh[a] || oo[a] > cc[a] + hh[a]) return -1.0f;
+        } else {
+            float inv = 1.0f / dd[a];
+            float t1 = (cc[a] - hh[a] - oo[a]) * inv;
+            float t2 = (cc[a] + hh[a] - oo[a]) * inv;
+            if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
+            if (t1 > tmin) tmin = t1;
+            if (t2 < tmax) tmax = t2;
+            if (tmin > tmax) return -1.0f;
+        }
+    }
+    return tmin;
+}
+
+} // namespace Lite
 
 #include <Urho3D/IO/Log.h>
 #include <Urho3D/IO/File.h>
@@ -287,7 +328,55 @@ private:
     float wallHeight_ = 5.0f;
     
     // Компоненты
-    SharedPtr<PhysicsWorld> physicsWorld_;
+    // === Лёгкая физика: реестр коллайдеров уровня (см. namespace Lite) ===
+    Vector<Lite::Collider> colliders_;
+    int AddBoxCollider(const Vector3& c, const Vector3& half, int tag = 0, void* ptr = nullptr) {
+        Lite::Collider col; col.center = c; col.half = half; col.sphere = false; col.tag = tag; col.ptr = ptr;
+        colliders_.Push(col);
+        return (int)colliders_.Size() - 1;
+    }
+    int AddSphereCollider(const Vector3& c, float r, int tag = 0, void* ptr = nullptr) {
+        Lite::Collider col; col.center = c; col.half = Vector3(r, r, r); col.sphere = true; col.tag = tag; col.ptr = ptr;
+        colliders_.Push(col);
+        return (int)colliders_.Size() - 1;
+    }
+    void RemoveColliderLite(int idx) {
+        if (idx >= 0 && idx < (int)colliders_.Size()) colliders_[(unsigned)idx].tag = 7;
+    }
+    Vector3 HitNormalLite(const Vector3& point, const Vector3& center, const Vector3& half) const {
+        Vector3 d = point - center;
+        float ax = fabsf(d.x_), ay = fabsf(d.y_), az = fabsf(d.z_);
+        float sx = ax / Max(half.x_, 0.001f), sy = ay / Max(half.y_, 0.001f), sz = az / Max(half.z_, 0.001f);
+        if (sx >= sy && sx >= sz) return Vector3(d.x_ > 0 ? 1 : -1, 0, 0);
+        if (sy >= sx && sy >= sz) return Vector3(0, d.y_ > 0 ? 1 : -1, 0);
+        return Vector3(0, 0, d.z_ > 0 ? 1 : -1);
+    }
+    bool RaycastLite(const Vector3& origin, const Vector3& dir, float maxDist, int tagMask,
+                     float& outDist, Vector3& outPoint, int* outTag = nullptr, void** outPtr = nullptr,
+                     Vector3* outNormal = nullptr) const {
+        float best = maxDist; int bestTag = -1; void* bestPtr = nullptr; bool hit = false;
+        Vector3 bestCenter = Vector3::ZERO, bestHalf = Vector3::ONE; bool bestSphere = false;
+        for (unsigned i = 0; i < colliders_.Size(); ++i) {
+            const Lite::Collider& c = colliders_[i];
+            if (!(tagMask & (1 << c.tag))) continue;
+            float t = c.sphere ? Lite::RaySphere(origin, dir, c.center, c.half.x_)
+                               : Lite::RayBox(origin, dir, c.center, c.half);
+            if (t >= 0.0f && t < best) {
+                best = t; bestTag = c.tag; bestPtr = c.ptr; hit = true;
+                bestCenter = c.center; bestHalf = c.half; bestSphere = c.sphere;
+            }
+        }
+        if (hit) {
+            outDist = best; outPoint = origin + dir * best;
+            if (outTag) *outTag = bestTag;
+            if (outPtr) *outPtr = bestPtr;
+            if (outNormal) {
+                if (bestSphere) *outNormal = (outPoint - bestCenter).Normalized();
+                else *outNormal = HitNormalLite(outPoint, bestCenter, bestHalf);
+            }
+        }
+        return hit;
+    }
     SharedPtr<DebugRenderer> debugRenderer_;
     
     // UI элементы
@@ -783,8 +872,7 @@ private:
         scene_ = new Scene(context_);
         
         // Создаем физику
-        physicsWorld_ = scene_->CreateComponent<PhysicsWorld>();
-        physicsWorld_->SetGravity(Vector3(0.0f, -9.81f, 0.0f));
+        // Физика — лёгкий движок (Lite), компонент PhysicsWorld/Bullet не создаётся
         
         // Отладочный рендерер
         debugRenderer_ = scene_->CreateComponent<DebugRenderer>();
@@ -891,10 +979,7 @@ private:
             SharedPtr<Material> tintedWood = MakeTinted(nullptr, nullptr,
                 Color(180 + (rand()%50), 140 + (rand()%40), 90 + (rand()%30)));
             cm->SetMaterial(hdCrate_ ? hdCrate_ : tintedWood.Get());
-            RigidBody* rb = crate->CreateComponent<RigidBody>();
-            rb->SetFriction(0.8f);
-            CollisionShape* cs = crate->CreateComponent<CollisionShape>();
-            cs->SetBox(Vector3::ONE);
+            AddBoxCollider(pos, Vector3(1.0f, 1.0f, 1.0f)); // Lite-коллайдер вместо Bullet
         }
 
         // Бочки с металлической HD-текстурой (укрытия в центре)
@@ -912,11 +997,7 @@ private:
             SharedPtr<Material> barrelTint = MakeTinted(nullptr, nullptr,
                 Color(60 + (rand()%40), 90 + (rand()%60), 110 + (rand()%50)));
             bm2->SetMaterial(hdMetal_ ? hdMetal_ : barrelTint.Get());
-            RigidBody* rb = barrel->CreateComponent<RigidBody>();
-            rb->SetMass(40.0f);
-            rb->SetFriction(0.7f);
-            CollisionShape* cs = barrel->CreateComponent<CollisionShape>();
-            cs->SetBox(Vector3(1.0f, 1.6f, 1.0f));
+            AddBoxCollider(bp, Vector3(0.55f, 0.9f, 0.55f)); // Lite-коллайдер вместо Bullet
         }
 
         // Фонари вдоль дорожек — тёплый свет
@@ -956,10 +1037,7 @@ private:
             StaticModel* cm2 = crate2->CreateComponent<StaticModel>();
             cm2->SetModel(boxModel_);
             cm2->SetMaterial(hdCrate_ ? hdCrate_ : stoneMaterial_);
-            RigidBody* rb2 = crate2->CreateComponent<RigidBody>();
-            rb2->SetFriction(0.8f);
-            CollisionShape* cs2 = crate2->CreateComponent<CollisionShape>();
-            cs2->SetBox(Vector3::ONE);
+            AddBoxCollider(sp, Vector3(0.7f, 0.7f, 0.7f)); // Lite-коллайдер вместо Bullet
         }
 
         // Антенны-вышки по углам с красными маяками
@@ -1007,13 +1085,7 @@ private:
                 bool isLight = ((x + z) % 2) == 0;
                 model->SetMaterial(isLight ? floorMaterialLight_ : floorMaterialDark_);
                 
-                // Физика для пола
-                RigidBody* rb = tileNode->CreateComponent<RigidBody>();
-                rb->SetFriction(0.8f);
-                rb->SetRestitution(0.1f);
-                
-                CollisionShape* cs = tileNode->CreateComponent<CollisionShape>();
-                cs->SetBox(Vector3(1.0f, 0.1f, 1.0f));
+                // Пол в Lite-физике — плоскость y=-0.1 (см. RaycastLite), коллайдер на тайл не нужен
             }
         }
     }
@@ -1058,12 +1130,8 @@ private:
         model->SetModel(boxModel_);
         model->SetMaterial(stoneMaterial_);
         
-        // Физика
-        RigidBody* rb = wallNode->CreateComponent<RigidBody>();
-        rb->SetFriction(0.7f);
-        
-        CollisionShape* cs = wallNode->CreateComponent<CollisionShape>();
-        cs->SetBox(Vector3::ONE);
+        // Физика: Lite-коллайдер (половина scale = half-extents)
+        AddBoxCollider(position, scale * 0.5f);
     }
     
     void CreateCeiling() {
@@ -1095,11 +1163,7 @@ private:
             model->SetModel(boxModel_);
             model->SetMaterial(metalMaterial_);
             
-            RigidBody* rb = columnNode->CreateComponent<RigidBody>();
-            rb->SetFriction(0.6f);
-            
-            CollisionShape* cs = columnNode->CreateComponent<CollisionShape>();
-            cs->SetBox(Vector3::ONE);
+            AddBoxCollider(pos, Vector3(0.75f, columnHeight/2, 0.75f)); // Lite
         }
         
         // Центральная платформа
@@ -1111,11 +1175,7 @@ private:
         platformModel->SetModel(boxModel_);
         platformModel->SetMaterial(stoneMaterial_);
         
-        RigidBody* platformRb = platformNode->CreateComponent<RigidBody>();
-        platformRb->SetFriction(0.8f);
-        
-        CollisionShape* platformCs = platformNode->CreateComponent<CollisionShape>();
-        platformCs->SetBox(Vector3::ONE);
+        AddBoxCollider(Vector3(0, 0.5f, 0), Vector3(5.0f, 0.5f, 5.0f)); // Lite-платформа
         
         // Пандусы
         CreateRamp(Vector3(8.0f, 0.5f, 0), Vector3(0, 0, 1));
@@ -1132,11 +1192,7 @@ private:
         model->SetModel(boxModel_);
         model->SetMaterial(metalMaterial_);
         
-        RigidBody* rb = rampNode->CreateComponent<RigidBody>();
-        rb->SetFriction(0.7f);
-        
-        CollisionShape* cs = rampNode->CreateComponent<CollisionShape>();
-        cs->SetBox(Vector3::ONE);
+        AddBoxCollider(position + Vector3(0, 1.2f, direction.z_*1.2f), Vector3(2.0f, 1.8f, 4.0f)); // Lite-аппроксимация пандуса
     }
     
     void CreateTargets() {
@@ -1946,6 +2002,8 @@ private:
         UpdateLowHealthVignette(dt);
         UpdateTracers(dt);
         UpdateEnemyProjectiles(dt);
+        UpdateMovingTargetsLite(dt);
+        UpdateDebrisLite(dt);
 
         // Камера медленно крутится вокруг арены, пока игрок в меню
         if (inMenu_) {
@@ -3496,6 +3554,8 @@ private:
     // =========================================================================
 
     void ClearEnemies() {
+        for (unsigned i = 0; i < enemies_.Size(); ++i)
+            RemoveColliderLite(enemies_[i].colliderIdx_); // чистим Lite-реестр роботов
         for (unsigned i = 0; i < enemyNodes_.Size(); ++i)
             if (enemyNodes_[i]) enemyNodes_[i]->Remove();
         enemyNodes_.Clear();
@@ -3776,11 +3836,44 @@ private:
         }
     }
 
+    // Движение «летучих» мишеней тира без Bullet: простая интеграция + отскок от границ
+    void UpdateMovingTargetsLite(float dt) {
+        const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 3.0f;
+        for (unsigned i = 0; i < movingTargetsLite_.Size(); ++i) {
+            MovingTargetLite& mt = movingTargetsLite_[i];
+            if (!mt.node_) continue;
+            Vector3 p = mt.node_->GetPosition();
+            p += mt.vel_ * dt;
+            if (fabsf(p.x_) > half) { mt.vel_.x_ = -mt.vel_.x_; p.x_ = Clamp(p.x_, -half, half); }
+            if (fabsf(p.z_) > half) { mt.vel_.z_ = -mt.vel_.z_; p.z_ = Clamp(p.z_, -half, half); }
+            mt.node_->SetPosition(p);
+            MoveColliderLite(mt.colliderIdx_, p);
+        }
+    }
+
+    // Мини-физика осколков: гравитация, отскок от пола y=0.05, затухание
+    void UpdateDebrisLite(float dt) {
+        for (unsigned i = debrisLite_.Size(); i-- > 0; ) {
+            DebrisData& d = debrisLite_[i];
+            if (!d.node_ || !d.node_->GetScene()) { debrisLite_.Erase(i); continue; }
+            d.vel_.y_ -= GameConstants::GRAVITY * dt;
+            d.pos_ += d.vel_ * dt;
+            if (d.pos_.y_ < 0.05f) {
+                d.pos_.y_ = 0.05f;
+                d.vel_.y_ = -d.vel_.y_ * 0.35f;       // restitution
+                d.vel_.x_ *= 0.7f; d.vel_.z_ *= 0.7f; // трение о пол
+            }
+            d.node_->SetPosition(d.pos_);
+            d.node_->SetRotation(Quaternion(d.spin_.x_ * dt * 57.3f, Vector3(1,0,0)) *
+                                 Quaternion(d.spin_.y_ * dt * 57.3f, Vector3(0,1,0)));
+        }
+    }
+
     void UpdateEnemies(float dt) {
         Vector3 camPos = cameraNode_ ? cameraNode_->GetPosition() : Vector3::ZERO;
         // Сначала убираем «мёртвые» записи из массива (чистка памяти)
         for (unsigned i = enemies_.Size(); i-- > 0; ) {
-            if (!enemies_[i].alive_) enemies_.Erase(i);
+            if (!enemies_[i].alive_) { RemoveColliderLite(enemies_[i].colliderIdx_); enemies_.Erase(i); }
         }
         for (unsigned i = 0; i < enemies_.Size(); ++i) {
             EnemyData& e = enemies_[i];
