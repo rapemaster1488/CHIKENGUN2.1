@@ -1,1 +1,5 @@
 patches/
+build/
+Urho3D.log
+*.o
+Data/
