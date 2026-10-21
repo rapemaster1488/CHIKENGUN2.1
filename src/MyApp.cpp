@@ -397,6 +397,10 @@ private:
     SharedPtr<Text> gameOverStats_;
     SharedPtr<Text> gameOverHint_;
     float gameOverPulse_ = 0.0f;
+    IntVector2 goBasePos_;   bool goBasePosSet_ = false;   // база для пульсации GAME OVER
+    IntVector2 menuTitleBase_, menuPlateBase_, menuBarBase_;
+    bool menuBasesSet_ = false;                              // базы параллакса меню
+    Vector<UIElement*> menuRows_;                            // подложки строк меню (MenuRow0..3)
     SharedPtr<UIElement> settingsPanel_;
     Vector<SharedPtr<Text>> settingsItems_;
     // Арена: волны роботов-курят
@@ -686,11 +690,10 @@ private:
              "Textures/SkyDay.png"
          };
          for (const char* tn : hdTexNames) {
-            SharedPtr<Texture> t = cache->GetResource<Texture>(String(tn));
+            // В этой сборке Urho3D GetResource возвращает голый указатель — не оборачиваем в SharedPtr
+            Texture* t = cache->GetResource<Texture>(String(tn));
             if (t) {
-                t->SetMipLevels(10);              // 1024px -> 10 уровней
-                t->SetFilterMode(FILTER_ANISOTROPIC);
-                t->SetAnisotropy(8);
+                t->SetFilterMode(FILTER_ANISOTROPIC); // анизотропная фильтрация для пола под углом
             }
         }
      }
@@ -1650,8 +1653,10 @@ private:
         if (gameOverTitle_) {
             float beat = powf(0.5f + 0.5f * sinf(gameOverPulse_ * 3.2f), 2.0f);
             gameOverTitle_->SetColor(Color(0.75f + 0.25f * beat, 0.1f + 0.08f * beat, 0.08f, 1.0f));
-            gameOverTitle_->SetY(sh / 2 - 150 + int(beat * 4.0f));
-            gameOverTitle_->SetX(sw / 2 - 400 + int(sinf(gameOverPulse_ * 9.0f) * beat * 3.0f));
+            // SetX/SetY нет в UIElement — только SetPosition (абсолютный пиксельный сдвиг)
+            if (!goBasePosSet_) { goBasePos_ = gameOverTitle_->GetPosition(); goBasePosSet_ = true; }
+            gameOverTitle_->SetPosition(goBasePos_.x_ + int(sinf(gameOverPulse_ * 9.0f) * beat * 3.0f),
+                                        goBasePos_.y_ + int(beat * 4.0f));
         }
         if (gameOverHint_) {
             gameOverHint_->SetColor(Color(1.0f, 0.85f, 0.3f, 0.55f + 0.45f * sinf(gameOverPulse_ * 2.4f)));
@@ -3254,6 +3259,7 @@ private:
             rowBg->SetSize(520, 40);
             rowBg->SetColor(Color(0.05f, 0.12f, 0.2f, i == menuSel_ ? 0.45f : 0.0f));
             rowBg->SetName(String("MenuRow") + String(i));
+            menuRows_.Push(rowBg);   // кэшируем: FindChild по имени недоступен в этой сборке
 
             Text* it = mainMenuPanel_->CreateChild<Text>();
             it->SetFont(font_, 28);
@@ -3281,17 +3287,21 @@ private:
         auto* gfx = GetSubsystem<Graphics>();
         int sw = gfx->GetWidth(), sh = gfx->GetHeight();
 
-        // Золотое «дыхание» заголовка + лёгкий дрейф
+        // Золотое «дыхание» заголовка + лёгкий дрейф (SetX/SetY нет — только SetPosition)
+        if (!menuBasesSet_) {
+            if (menuTitle_)      menuTitleBase_  = menuTitle_->GetPosition();
+            if (menuPlate_)      menuPlateBase_  = menuPlate_->GetPosition();
+            if (menuAccentBar_)  menuBarBase_    = menuAccentBar_->GetPosition();
+            menuBasesSet_ = true;
+        }
         if (menuTitle_) {
             float pulse = 0.75f + 0.25f * sinf(timeAcc_ * 1.6f);
             menuTitle_->SetColor(Color(pulse, pulse * 0.82f, pulse * 0.28f, 1.0f));
-            menuTitle_->SetY(sh / 2 - 220 + int(sinf(timeAcc_ * 0.8f) * 3.0f));
         }
         // Пульс акцентной черты (ширина туда-сюда)
         if (menuAccentBar_) {
             int w = 300 + int(120.0f * (0.5f + 0.5f * sinf(timeAcc_ * 1.2f)));
             menuAccentBar_->SetSize(w, 2);
-            menuAccentBar_->SetX(sw / 2 - w / 2);
             menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.55f + 0.45f * sinf(timeAcc_ * 2.4f)));
         }
         // Мерцание подзаголовка (редкое «неоновое» мигание)
@@ -3313,7 +3323,7 @@ private:
             p->SetPosition(px, py);
             // Затухание у верхнего края
             float a = 0.55f * (float(py) / float(sh)) + 0.1f;
-            Color c = p->GetColor(); c.a_ = a; p->SetColor(c);
+            Color c = p->GetColor(CORNER_TOP_LEFT); c.a_ = a; p->SetColor(c);
         }
         // Параллакс от мыши: панель чуть сдвигается за курсором (глубина)
         auto* input = GetSubsystem<Input>();
@@ -3321,11 +3331,16 @@ private:
         float nx = (float(mp.x_) / sw - 0.5f);
         float ny = (float(mp.y_) / sh - 0.5f);
         if (menuPlate_) {
-            menuPlate_->SetX(sw / 2 - 320 + int(nx * 8.0f));
-            menuPlate_->SetY(sh / 2 - 250 + int(ny * 5.0f));
+            menuPlate_->SetPosition(menuPlateBase_.x_ + int(nx * 8.0f),
+                                    menuPlateBase_.y_ + int(ny * 5.0f));
         }
         if (menuTitle_) {
-            menuTitle_->SetX(sw / 2 - 400 - int(nx * 6.0f));
+            menuTitle_->SetPosition(menuTitleBase_.x_ - int(nx * 6.0f),
+                                    menuTitleBase_.y_ + int(sinf(timeAcc_ * 0.8f) * 3.0f));
+        }
+        if (menuAccentBar_) {
+            int w = menuAccentBar_->GetWidth();
+            menuAccentBar_->SetPosition(sw / 2 - w / 2 - int(nx * 4.0f), menuBarBase_.y_);
         }
     }
 
@@ -3370,13 +3385,15 @@ private:
             mainMenuItems_[i]->SetText((sel ? "\xe2\x96\xb6  " : "   ") + String(labels[i]) + (sel ? "  \xe2\x97\x80" : ""));
             // Выбранный — золотой с лёгким свечением, остальные приглушённые
             mainMenuItems_[i]->SetColor(sel ? Color(1.0f, 0.87f, 0.3f, 1.0f) : Color(0.55f, 0.6f, 0.7f, 1.0f));
-            // Подсветка строки-подложки под выбранным пунктом
-            UIElement* row = mainMenuPanel_ ? mainMenuPanel_->FindChild(String("MenuRow") + String(i), true) : nullptr;
-            if (row) {
-                BorderImage* bi = static_cast<BorderImage*>(row);
-                bi->SetColor(Color(0.05f, 0.14f, 0.22f, sel ? 0.5f : 0.0f));
-                // Золотая левая засечка у выбранной строки
-                bi->SetX(sw / 2 - 260 + (sel ? 4 : 0));
+            // Подсветка строки-подложки под выбранным пунктом (кэш menuRows_, FindChild по имени нет)
+            if ((int)menuRows_.Size() > (int)i && i < mainMenuItems_.Size()) {
+                BorderImage* bi = static_cast<BorderImage*>(menuRows_[i]);
+                if (bi) {
+                    bi->SetColor(Color(0.05f, 0.14f, 0.22f, sel ? 0.5f : 0.0f));
+                    // Золотая «засечка»: у выбранной строки сдвигаем подложку на 4px вправо
+                    IntVector2 base = bi->GetPosition();
+                    bi->SetPosition(sw / 2 - 260 + (sel ? 4 : 0), base.y_);
+                }
             }
         }
     }
@@ -3578,13 +3595,13 @@ private:
 
         static Vector<SharedPtr<Material>> eyeMats;
         SharedPtr<Material> eyeMat = MakeTinted(nullptr, nullptr, eyeColor);
-        // Свечение глаз по типу: bloom делает роботов читаемыми и «живыми» в темноте
+        // Свечение глаз по типу: яркие ядовитые цвета читаются в темноте даже без bloom-пасса
         if (eyeMat) {
-            Color glow(1.0f, 0.12f, 0.05f);
-            if (type == E_CHARGER)      glow = Color(1.0f, 0.5f, 0.05f);
-            else if (type == E_SHOOTER) glow = Color(0.8f, 0.2f, 1.0f);
-            else if (elite)             glow = Color(1.0f, 0.75f, 0.1f);
-            eyeMat->SetGlowColor(glow);
+            Color glow(1.0f, 0.25f, 0.15f);
+            if (type == E_CHARGER)      glow = Color(1.0f, 0.55f, 0.05f);
+            else if (type == E_SHOOTER) glow = Color(0.85f, 0.3f, 1.0f);
+            else if (elite)             glow = Color(1.0f, 0.8f, 0.15f);
+            eyeMat->SetShaderParameter("MatDiffColor", Variant(glow));
         }
         eyeMats.Push(eyeMat);
         Material* em = eyeMats.Back().Get();
