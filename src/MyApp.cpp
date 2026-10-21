@@ -16,6 +16,7 @@
 #include <ctime>
 #include <cmath>
 #include <unistd.h> // readlink для поиска CoreData рядом с бинарником
+#include <sys/stat.h> // stat()/S_ISDIR для проверки папок ресурсов
 
 // ВАЖНО: Urho3D/Math/Vector3.h подключается ДО всего остального, иначе
 // заголовки Graphics/Input/UI (через Variant->Color->Vector4->Vector3)
@@ -651,13 +652,34 @@ public:
             if (!exeDir.Empty()) candidates.Push(exeDir + "/CoreData");
             for (const char* b : bases)
                 candidates.Push(String(b) + "/Data/CoreData");
+            // Также проверяем вариант из Urho3D-сборки: bin/CoreData
+            String binDir;
+            if (!exeDir.Empty() && exeDir.EndsWith("bin"))
+                binDir = exeDir + "/CoreData";
+            else if (!exeDir.Empty())
+                binDir = exeDir + "/../bin/CoreData";
+            if (!binDir.Empty()) candidates.Push(binDir);
             bool coreAdded = false;
-            FileSystem* fs = GetSubsystem<FileSystem>();
+            // Проверка существования папки без FileSystem::DirectoryExists
+            // (в этой сборке Urho3D такого метода нет): используем POSIX stat().
+            auto dirOk = [](const String& p) -> bool {
+                struct stat st;
+                return !p.Empty() && stat(p.CString(), &st) == 0 && S_ISDIR(st.st_mode);
+            };
             for (unsigned i = 0; i < candidates.Size(); ++i) {
-                if (fs && fs->DirectoryExists(candidates[i])) {
+                if (dirOk(candidates[i])) {
                     cache->AddResourceDir(candidates[i]); // 2-й аргумент — priority (int), не строка
                     URHO3D_LOGINFO("CoreData найден и добавлен: " + candidates[i]);
                     coreAdded = true;
+                    break;
+                }
+            }
+            // Дополнительно регистрируем пользовательскую папку Data/ (Models, Fonts, Textures)
+            for (const char* b : bases) {
+                String dataDir = String(b) + "/Data";
+                if (dirOk(dataDir)) {
+                    cache->AddResourceDir(dataDir);
+                    URHO3D_LOGINFO("Папка ресурсов добавлена: " + dataDir);
                     break;
                 }
             }
