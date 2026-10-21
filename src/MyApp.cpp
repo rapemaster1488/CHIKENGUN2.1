@@ -622,6 +622,7 @@ private:
     Vector<String> loadSteps_;
     int loadStepIndex_ = 0;
 
+public:
     MyApp(Context* context) : Application(context) {}
 
     // Реализации всех методов встроены ниже в тело класса.
