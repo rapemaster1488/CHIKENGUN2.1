@@ -16,6 +16,11 @@
 #include <ctime>
 #include <cmath>
 
+// ВАЖНО: Urho3D/Math/Vector3.h подключается ДО всего остального, иначе
+// заголовки Graphics/Input/UI (через Variant->Color->Vector4->Vector3)
+// могут быть раскрыты раньше и Vector3 не будет виден в глобальной области.
+#include <Urho3D/Math/Vector3.h>
+
 #include <Urho3D/Engine/Application.h>
 #include <Urho3D/Engine/Engine.h>
 #include <Urho3D/Engine/EngineDefs.h>
@@ -73,6 +78,8 @@
 // =========================================================================
 namespace Lite {
 
+using ::Vector3; // в этой сборке Urho3D/Math/Vector3.h определяет Vector3 в ГЛОБАЛЬНОМ пространстве имён
+
 struct Collider {
     Vector3 center;
     Vector3 half;      // box half-extents (или radius в x_ для sphere)
@@ -92,15 +99,23 @@ inline float RaySphere(const Vector3& o, const Vector3& d, const Vector3& c, flo
 }
 
 inline float RayBox(const Vector3& o, const Vector3& d, const Vector3& c, const Vector3& h) {
+    // ВАЖНО: у Urho3D::Vector3 члены НЕ лежат подряд (выравнивание/padding),
+    // поэтому обращаемся к x_/y_/z_ явно, а не через указатель+индекс.
+    struct Axis { float ox, dx, cx, hx; };
+    const Axis axes[3] = {
+        { o.x_, d.x_, c.x_, h.x_ },
+        { o.y_, d.y_, c.y_, h.y_ },
+        { o.z_, d.z_, c.z_, h.z_ },
+    };
     float tmin = 0.0f, tmax = 1e9f;
-    const float* oo = &o.x_; const float* dd = &d.x_; const float* cc = &c.x_; const float* hh = &h.x_;
     for (int a = 0; a < 3; ++a) {
-        if (fabsf(dd[a]) < 1e-7f) {
-            if (oo[a] < cc[a] - hh[a] || oo[a] > cc[a] + hh[a]) return -1.0f;
+        const Axis& A = axes[a];
+        if (fabsf(A.dx) < 1e-7f) {
+            if (A.ox < A.cx - A.hx || A.ox > A.cx + A.hx) return -1.0f;
         } else {
-            float inv = 1.0f / dd[a];
-            float t1 = (cc[a] - hh[a] - oo[a]) * inv;
-            float t2 = (cc[a] + hh[a] - oo[a]) * inv;
+            float inv = 1.0f / A.dx;
+            float t1 = (A.cx - A.hx - A.ox) * inv;
+            float t2 = (A.cx + A.hx - A.ox) * inv;
             if (t1 > t2) { float tmp = t1; t1 = t2; t2 = tmp; }
             if (t1 > tmin) tmin = t1;
             if (t2 < tmax) tmax = t2;
@@ -191,6 +206,7 @@ namespace GameConstants {
 
 struct TargetData {
     WeakPtr<Node> node_;
+    int colliderIdx_ = -1;   // Lite-коллайдер мишени (tag 1, ptr = Node*)
     float health_;
     bool isActive_;
     int scoreValue_;
@@ -343,6 +359,9 @@ private:
     void RemoveColliderLite(int idx) {
         if (idx >= 0 && idx < (int)colliders_.Size()) colliders_[(unsigned)idx].tag = 7;
     }
+    void MoveColliderLite(int idx, const Vector3& center) {
+        if (idx >= 0 && idx < (int)colliders_.Size()) colliders_[(unsigned)idx].center = center;
+    }
     Vector3 HitNormalLite(const Vector3& point, const Vector3& center, const Vector3& half) const {
         Vector3 d = point - center;
         float ax = fabsf(d.x_), ay = fabsf(d.y_), az = fabsf(d.z_);
@@ -358,7 +377,7 @@ private:
         Vector3 bestCenter = Vector3::ZERO, bestHalf = Vector3::ONE; bool bestSphere = false;
         for (unsigned i = 0; i < colliders_.Size(); ++i) {
             const Lite::Collider& c = colliders_[i];
-            if (!(tagMask & (1 << c.tag))) continue;
+            if (c.tag == 7 || !(tagMask & (1 << c.tag))) continue; // 7 = удалён
             float t = c.sphere ? Lite::RaySphere(origin, dir, c.center, c.half.x_)
                                : Lite::RayBox(origin, dir, c.center, c.half);
             if (t >= 0.0f && t < best) {
@@ -496,7 +515,7 @@ private:
     enum EnemyType { E_MELEE = 0, E_CHARGER, E_SHOOTER, E_BOSS, E_TYPE_COUNT };
     struct EnemyData {
         WeakPtr<Node> node_;
-        WeakPtr<RigidBody> body_;
+        int colliderIdx_ = -1;           // индекс в Lite-реестре коллайдеров
         float health_ = 100.0f;
         float maxHealth_ = 100.0f;
         bool alive_ = true;
@@ -515,6 +534,21 @@ private:
     };
     Vector<EnemyData> enemies_;
     Vector<SharedPtr<Node>> enemyNodes_;   // владение нодами до удаления
+    // === Lite-мишени и Lite-осколки (без Bullet) ===
+    struct MovingTargetLite {
+        SharedPtr<Node> node_;
+        Vector3 vel_ = Vector3::ZERO;
+        int colliderIdx_ = -1;
+    };
+    Vector<MovingTargetLite> movingTargetsLite_;
+    struct DebrisData {
+        SharedPtr<Node> node_;
+        Vector3 pos_ = Vector3::ZERO;
+        Vector3 vel_ = Vector3::ZERO;
+        Vector3 spin_ = Vector3::ZERO;
+        float ttl_ = 4.0f;
+    };
+    Vector<DebrisData> debrisLite_;
     int waveNum_ = 0;
     float waveRespawnTimer_ = 0.0f;
     // Комбо и рекорды
@@ -871,8 +905,8 @@ private:
     void CreateScene() {
         scene_ = new Scene(context_);
         
-        // Создаем физику
         // Физика — лёгкий движок (Lite), компонент PhysicsWorld/Bullet не создаётся
+        colliders_.Clear(); // на случай повторного создания сцены (рестарт)
         
         // Отладочный рендерер
         debugRenderer_ = scene_->CreateComponent<DebugRenderer>();
@@ -1246,17 +1280,10 @@ private:
         bossModel->SetModel(boxModel_);
         bossModel->SetMaterial(targetMaterial_);
         
-        // Физика для босс-мишени
-        RigidBody* bossRb = bossTargetNode->CreateComponent<RigidBody>();
-        bossRb->SetMass(10.0f);
-        bossRb->SetFriction(0.5f);
-        bossRb->SetRestitution(0.3f);
-        
-        CollisionShape* bossCs = bossTargetNode->CreateComponent<CollisionShape>();
-        bossCs->SetBox(Vector3::ONE);
-        
+        // Физика для босс-мишени: Lite-коллайдер (tag 1, ptr = узел)
         TargetData bossData;
         bossData.node_ = bossTargetNode;
+        bossData.colliderIdx_ = AddBoxCollider(bossTargetNode->GetPosition(), Vector3(2.0f, 2.0f, 0.2f), 1, bossTargetNode);
         bossData.health_ = GameConstants::TARGET_HEALTH * 3.0f;
         bossData.isActive_ = true;
         bossData.scoreValue_ = 500;
@@ -1279,17 +1306,10 @@ private:
         model->SetModel(boxModel_);
         model->SetMaterial(targetMaterial_);
         
-        // Физика
-        RigidBody* rb = targetNode->CreateComponent<RigidBody>();
-        rb->SetMass(1.0f);  // Легкая мишень
-        rb->SetFriction(0.5f);
-        rb->SetRestitution(0.5f);
-        
-        CollisionShape* cs = targetNode->CreateComponent<CollisionShape>();
-        cs->SetBox(Vector3::ONE);
-        
+        // Физика: Lite-коллайдер мишени
         TargetData data;
         data.node_ = targetNode;
+        data.colliderIdx_ = AddBoxCollider(position, Vector3(0.6f, 0.6f, 0.2f), 1, targetNode);
         data.health_ = GameConstants::TARGET_HEALTH;
         data.isActive_ = true;
         data.scoreValue_ = 100;
@@ -1305,19 +1325,16 @@ private:
         model->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
         model->SetMaterial(targetMaterial_);
         
-        // Физика для движущейся мишени
-        RigidBody* rb = targetNode->CreateComponent<RigidBody>();
-        rb->SetMass(2.0f);
-        rb->SetLinearVelocity(Vector3((float)(rand() % 5 - 2), 0, (float)(rand() % 5 - 2)));
-        rb->SetAngularDamping(0.9f);
-        rb->SetFriction(0.3f);
-        rb->SetRestitution(0.7f);
-        
-        CollisionShape* cs = targetNode->CreateComponent<CollisionShape>();
-        cs->SetSphere(0.5f);
-        
+        // Физика для движущейся мишени: Lite-сфера + интеграция в UpdateMovingTargetsLite
+        MovingTargetLite mt;
+        mt.node_ = targetNode;
+        mt.vel_ = Vector3((float)(rand() % 5 - 2), 0, (float)(rand() % 5 - 2));
+        mt.colliderIdx_ = AddSphereCollider(startPosition, 0.5f, 4, targetNode);
+        movingTargetsLite_.Push(mt);
+
         TargetData data;
         data.node_ = targetNode;
+        data.colliderIdx_ = mt.colliderIdx_;
         data.health_ = GameConstants::TARGET_HEALTH * 1.5f;
         data.isActive_ = true;
         data.scoreValue_ = 150;
@@ -2205,18 +2222,17 @@ private:
     // =========================================================================
 
     float ProbeGround(const Vector3& feetPos) {
-        // Ищем верхнюю поверхность под ногами (4 луча по краям «стопы»)
+        // Ищем верхнюю поверхность под ногами (4 луча по краям «стопы») — Lite-рейкаст
         float bestY = -1e6f;
         const float probeTop = feetPos.y_ + eyeHeight_ * 0.5f;
         const float probeLen = eyeHeight_ + 3.0f;
         for (int sx = -1; sx <= 1; sx += 2) {
             for (int sz = -1; sz <= 1; sz += 2) {
                 Vector3 offset(sx * 0.22f, 0.0f, sz * 0.22f);
-                Ray down(Vector3(feetPos.x_ + offset.x_, probeTop, feetPos.z_ + offset.z_), Vector3(0, -1, 0));
-                PhysicsRaycastResult r;
-                physicsWorld_->RaycastSingle(r, down, probeLen);
-                if (r.body_ && r.distance_ > 0.0f) {
-                    bestY = Max(bestY, probeTop - r.distance_);
+                float dist; Vector3 hitPoint;
+                if (RaycastLite(Vector3(feetPos.x_ + offset.x_, probeTop, feetPos.z_ + offset.z_),
+                                Vector3(0, -1, 0), probeLen, 1 | 8 | 16, dist, hitPoint)) {
+                    bestY = Max(bestY, hitPoint.y_);
                 }
             }
         }
@@ -2224,11 +2240,13 @@ private:
     }
 
     bool HeadBlocked(const Vector3& feetPos) {
-        // Нет ли препятствия над головой (нельзя встать из приседа под низкими объектами)
-        Ray up(Vector3(feetPos.x_, feetPos.y_ + 0.1f, feetPos.z_), Vector3(0, 1, 0));
-        PhysicsRaycastResult r;
-        physicsWorld_->RaycastSingle(r, up, GameConstants::PLAYER_HEIGHT + 0.1f);
-        return r.body_ != nullptr && r.distance_ > 0.05f && r.distance_ < GameConstants::PLAYER_HEIGHT;
+        // Нет ли препятствия над головой (нельзя встать из приседа под низкие объекты)
+        float dist; Vector3 hitPoint;
+        if (RaycastLite(Vector3(feetPos.x_, feetPos.y_ + 0.1f, feetPos.z_),
+                        Vector3(0, 1, 0), GameConstants::PLAYER_HEIGHT + 0.1f, 1 | 8 | 16, dist, hitPoint)) {
+            return dist > 0.05f && dist < GameConstants::PLAYER_HEIGHT;
+        }
+        return false;
     }
 
     void HandleMovement(float dt) {
@@ -2300,11 +2318,10 @@ private:
         const Vector3 dirs[4] = { Vector3(1,0,0), Vector3(-1,0,0), Vector3(0,0,1), Vector3(0,0,-1) };
         Vector3 push = Vector3::ZERO;
         for (int i = 0; i < 4; ++i) {
-            Ray h(testFeet, dirs[i]);
-            PhysicsRaycastResult r;
-            physicsWorld_->RaycastSingle(r, h, radius + 0.15f);
-            if (r.body_ && r.distance_ > 0.0f && r.distance_ < radius + 0.15f) {
-                float penetration = (radius + 0.15f) - r.distance_;
+            float dist; Vector3 hitPoint;
+            if (RaycastLite(testFeet, dirs[i], radius + 0.15f, 1 | 8 | 16, dist, hitPoint)
+                && dist > 0.0f && dist < radius + 0.15f) {
+                float penetration = (radius + 0.15f) - dist;
                 push -= dirs[i] * penetration;
             }
         }
@@ -2512,16 +2529,12 @@ private:
         // Конец луча
         Vector3 endPos = startPos + shootDirection * GameConstants::BULLET_RANGE;
         
-        // Выполняем рейкаст
-        Ray ray(startPos, shootDirection);
-    PhysicsRaycastResult result;
-    physicsWorld_->RaycastSingle(result, ray, GameConstants::BULLET_RANGE);
-        
-        if (result.body_) {
+        // Выполняем рейкаст (Lite-физика: статика + мишени + роботы)
+        float hitDist = 0.0f; Vector3 hitPosition; Vector3 hitNormal; int hitTag = -1; void* hitPtr = nullptr;
+        bool anyHit = RaycastLite(startPos, shootDirection, GameConstants::BULLET_RANGE,
+                                  1 | 2 | 4 | 8 | 16, hitDist, hitPosition, &hitTag, &hitPtr, &hitNormal);
+        if (anyHit) {
             player_.shotsHit_++;
-            
-            Vector3 hitPosition = result.position_;
-            Vector3 hitNormal = result.normal_;
 
             // === ТРЕЙСЕР: светящаяся трасса пули от дула до точки попадания ===
             SpawnTracer(startPos + shootDirection * 0.6f, hitPosition);
@@ -2538,7 +2551,7 @@ private:
                 AddCameraShake(0.12f); // тряска камеры от взрыва
                 ShowHitMarker(false);
             } else {
-                CheckTargetHit(result.body_, damage);
+                CheckTargetHit(hitTag, hitPtr, hitPosition, damage);
             }
             
             // Отладочная визуализация
@@ -2580,54 +2593,40 @@ private:
         }
     }
     
-    void CheckTargetHit(RigidBody* hitBody, float damage) {
-        if (!hitBody) return;
+    void CheckTargetHit(int hitTag, void* hitPtr, const Vector3& hitPosition, float damage) {
+        Node* hitNode = nullptr;
+        if ((hitTag == 1 || hitTag == 2 || hitTag == 4) && hitPtr)
+            hitNode = static_cast<Node*>(hitPtr);   // 1/4 — мишень тира, 2 — робот
+        if (!hitNode) return;
 
-        Node* hn0 = hitBody->GetNode();
-        if (hn0 && hn0->HasTag("Enemy")) {
-            for (auto& e : enemies_) {
-                if (e.alive_ && e.node_ == hn0) { DamageEnemy(e, damage); break; }
+        if (hitTag == 2) {
+            for (unsigned ei = 0; ei < enemies_.Size(); ++ei) {
+                if (enemies_[ei].alive_ && enemies_[ei].node_ == hitNode) { DamageEnemy(enemies_[ei], damage); break; }
             }
             return;
         }
-        
-        Node* hitNode = hitBody->GetNode();
-        if (!hitNode) return;
-        
+
         // Ищем мишень, соответствующую попавшему узлу
-        for (auto& target : targets_) {
+        for (unsigned ti = 0; ti < targets_.Size(); ++ti) {
+            TargetData& target = targets_[ti];
             if (target.isActive_ && target.node_ == hitNode) {
-                // Попали в мишень!
                 bool killed = (target.health_ - damage <= 0.0f);
                 ShowHitMarker(killed);
                 target.health_ -= damage;
-                
                 CreateHitSpark(hitNode->GetPosition());
-
-                // Визуальный эффект попадания
                 StaticModel* model = hitNode->GetComponent<StaticModel>();
-                if (model) {
-                    model->SetMaterial(targetHitMaterial_);
-                }
-                
-                // Звук попадания
+                if (model) model->SetMaterial(targetHitMaterial_);
                 PlayHitSound();
-                
-                // Если мишень уничтожена
-                if (target.health_ <= 0) {
-                    DestroyTarget(target);
-                } else {
-                    // Возвращаем материал через некоторое время
-                    // (упрощенно - сразу, в реальной игре нужен таймер)
-                }
-                
+                if (target.health_ <= 0) DestroyTarget(target);
                 break;
             }
         }
     }
-    
+
     void DestroyTarget(TargetData& target) {
         target.isActive_ = false;
+        RemoveColliderLite(target.colliderIdx_); // мишень больше не участвует в рейкастах
+        target.colliderIdx_ = -1;
         
         // Комбо-очки (серия убийств подряд)
         AddScoreWithCombo(target.scoreValue_);
@@ -3381,7 +3380,7 @@ private:
             p->SetPosition(px, py);
             // Затухание у верхнего края
             float a = 0.55f * (float(py) / float(sh)) + 0.1f;
-            Color c = p->GetColor(Urho3D::CORNER_TOPLEFT); c.a_ = a; p->SetColor(c);
+            Color c = p->GetColor(CORNER_TOPLEFT); c.a_ = a; p->SetColor(c);
         }
         // Параллакс от мыши: панель чуть сдвигается за курсором (глубина)
         auto* input = GetSubsystem<Input>();
@@ -3676,18 +3675,12 @@ private:
         StaticModel* erm = eyeR->CreateComponent<StaticModel>();
         erm->SetModel(boxModel_); erm->SetMaterial(em);
 
-        RigidBody* rb = rob->CreateComponent<RigidBody>();
-        rb->SetMass(3.0f);
-        rb->SetCollisionLayer(2);
-        rb->SetCollisionMask(3);
-        rb->SetLinearDamping(4.0f);
-        rb->SetAngularDamping(10.0f);
-        CollisionShape* cs = rob->CreateComponent<CollisionShape>();
-        cs->SetBox(Vector3(0.8f, 1.8f, 0.6f));
+        // Lite-коллайдер робота: tag 2, ptr = узел (рейкасты пуль и LOS проходят через него)
+        int colIdx = AddBoxCollider(pos + Vector3(0, 0.9f, 0), Vector3(0.4f, 0.9f, 0.3f), 2, rob);
 
         EnemyData e;
         e.node_ = rob;
-        e.body_ = rb;
+        e.colliderIdx_ = colIdx;
         e.type_ = type;
         switch (type) {
             case E_CHARGER:
@@ -3752,17 +3745,15 @@ private:
 
     // Проверка прямой видимости между двумя точками (препятствия: слой 1 — статика, 2 — роботы)
     bool HasLineOfSight(const Vector3& from, const Vector3& to) {
-        if (!physicsWorld_) return true;
         Vector3 dir = to - from;
         float dist = dir.Length();
         if (dist < 0.01f) return true;
-        Ray ray(from, dir / dist);
-        PhysicsRaycastResult r;
-        physicsWorld_->RaycastSingle(r, ray, dist - 0.3f);
-        return !r.body_;
+        dir /= dist;
+        float outDist; Vector3 outPoint;
+        // Битовая маска: (1<<0) статика | (1<<4) движущиеся мишени — роботы не перекрывают LOS друг другу
+        return !RaycastLite(from, dir, dist - 0.3f, (1 << 0) | (1 << 4), outDist, outPoint);
     }
 
-    // Спавн светящегося снаряда робота-стрелка в сторону игрока (с разбросом)
     void SpawnEnemyProjectile(const Vector3& origin, const Vector3& targetCamPos, float damage) {
         Vector3 dir = targetCamPos - origin;
         float len = dir.Length();
@@ -3813,17 +3804,13 @@ private:
                     CreateHitSpark(next);
                     dead = true;
                 } else {
-                    // Столкновение со статикой: короткий рейкаст по направлению полёта
-                    if (physicsWorld_) {
-                        float stepLen = step.Length();
-                        if (stepLen > 0.001f) {
-                            Ray ray(pos, step / stepLen);
-                            PhysicsRaycastResult r;
-                            physicsWorld_->RaycastSingle(r, ray, stepLen);
-                            if (r.body_) {
-                                CreateHitSpark(r.position_);
-                                dead = true;
-                            }
+                    // Столкновение со статикой/мишенями: короткий Lite-рейкаст по направлению полёта
+                    float stepLen = step.Length();
+                    if (stepLen > 0.001f) {
+                        float outDist; Vector3 outPoint;
+                        if (RaycastLite(pos, step / stepLen, stepLen, (1 << 0) | (1 << 1) | (1 << 4), outDist, outPoint)) {
+                            CreateHitSpark(outPoint);
+                            dead = true;
                         }
                     }
                     if (!dead) p.node_->SetPosition(next);
@@ -3856,6 +3843,8 @@ private:
         for (unsigned i = debrisLite_.Size(); i-- > 0; ) {
             DebrisData& d = debrisLite_[i];
             if (!d.node_ || !d.node_->GetScene()) { debrisLite_.Erase(i); continue; }
+            d.ttl_ -= dt;
+            if (d.ttl_ <= 0.0f) { d.node_->Remove(); debrisLite_.Erase(i); continue; }
             d.vel_.y_ -= GameConstants::GRAVITY * dt;
             d.pos_ += d.vel_ * dt;
             if (d.pos_.y_ < 0.05f) {
@@ -3944,14 +3933,12 @@ private:
             default: { // E_MELEE — идёт к игроку, обходя препятствия рейкастом
                 Vector3 probePos = p + Vector3(0, 0.6f, 0);
                 bool blocked = false;
-                if (physicsWorld_ && dist > 1.5f) {
-                    Ray ray(probePos, toDir);
-                    PhysicsRaycastResult r;
-                    physicsWorld_->RaycastSingle(r, ray, 2.2f);
-                    if (r.body_) {
+                if (dist > 1.5f) {
+                    float outDist; Vector3 outPoint; Vector3 outNormal;
+                    if (RaycastLite(probePos, toDir, 2.2f, (1 << 0) | (1 << 4), outDist, outPoint, nullptr, nullptr, &outNormal)) {
                         blocked = true;
                         // Скольжение вдоль нормали препятствия + лёгкий «инстинкт стаи»
-                        Vector3 slide = r.normal_.CrossProduct(Vector3::UP);
+                        Vector3 slide = outNormal.CrossProduct(Vector3::UP);
                         slide.y_ = 0;
                         if (slide.LengthSquared() > 0.001f)
                             move = slide.Normalized() * e.speed_ * (sinf(e.strafePhase_) > 0 ? 1.0f : -1.0f);
@@ -3977,7 +3964,9 @@ private:
             // Визуальный «откат» при выстреле/ударе: приседание модели
             if (e.recoilKick_ > 0.0f) e.recoilKick_ = Max(0.0f, e.recoilKick_ - dt);
             float kick = e.recoilKick_ * 0.6f;
-            n->SetPosition(Vector3(np.x_, 1.0f + bob - kick, np.z_));
+            Vector3 newPos(np.x_, 1.0f + bob - kick, np.z_);
+            n->SetPosition(newPos);
+            MoveColliderLite(e.colliderIdx_, newPos + Vector3(0, -0.1f, 0)); // рейкасты пуль идут за роботом
 
             if (dist > 0.5f) {
                 float yawDeg = atan2f(toCam.x_, toCam.z_) * 57.29578f;
@@ -3993,12 +3982,8 @@ private:
         if (n) {
             CreateHitSpark(n->GetPosition() + Vector3(0, 0.5f, 0));
             PlayHitSound();
-            RigidBody* rb = e.body_.Get();
-            if (rb) {
-                Vector3 camPos = cameraNode_ ? cameraNode_->GetPosition() : Vector3::ZERO;
-                Vector3 kb = n->GetPosition() - camPos; kb.y_ = 0.2f;
-                rb->ApplyImpulse(kb.Normalized() * 6.0f);
-            }
+            // Визуальный «откид» без физики: короткий наклон модели робота
+            e.recoilKick_ = 0.35f;
         }
         if (e.health_ <= 0.0f) {
             e.alive_ = false;
@@ -4021,26 +4006,25 @@ private:
     // =========================================================================
 
     void CreateDebrisBurst(const Vector3& pos) {
-        Node* debrisRoot = scene_->CreateChild("Debris");
-        debrisRoot->SetPosition(pos);
+        // Lite-осколки: интеграция положения/скорости в UpdateDebrisLite, без Bullet
         for (int i = 0; i < 8; ++i) {
-            Node* frag = debrisRoot->CreateChild("Frag");
+            Node* frag = scene_->CreateChild("Frag", LOCAL);
+            frag->SetPosition(pos);
             frag->SetScale(Vector3(0.08f, 0.08f, 0.08f));
             StaticModel* sm = frag->CreateComponent<StaticModel>();
             sm->SetModel(boxModel_);
             sm->SetMaterial(robotBodyMat_ ? robotBodyMat_.Get() : metalMaterial_);
-            RigidBody* rb = frag->CreateComponent<RigidBody>();
-            rb->SetMass(0.2f);
-            rb->SetCollisionLayer(0);
-            rb->SetRestitution(0.4f);
-            CollisionShape* cs = frag->CreateComponent<CollisionShape>();
-            cs->SetBox(Vector3::ONE);
+            sm->SetCastShadows(false);
             float a = (float)(rand() % 628) / 100.0f;
             float up = 3.0f + (float)(rand() % 40) / 10.0f;
-            rb->SetLinearVelocity(Vector3(cosf(a) * 4.0f, up, sinf(a) * 4.0f));
-            rb->SetAngularVelocity(Vector3((float)(rand() % 400 - 200), (float)(rand() % 400 - 200), (float)(rand() % 400 - 200)));
+            DebrisData d;
+            d.node_ = frag;
+            d.pos_ = pos;
+            d.vel_ = Vector3(cosf(a) * 4.0f, up, sinf(a) * 4.0f);
+            d.spin_ = Vector3((float)(rand() % 400 - 200), (float)(rand() % 400 - 200), (float)(rand() % 400 - 200)) * 0.02f;
+            d.ttl_ = 4.0f;
+            debrisLite_.Push(d);
         }
-        PendingRemove pr; pr.node_ = debrisRoot; pr.ttl_ = 4.0f; pendingRemoves_.Push(pr);
 
         if (sparkEffect_) {
             Node* sparks = scene_->CreateChild("DebrisSparks");
