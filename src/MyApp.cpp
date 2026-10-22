@@ -1065,6 +1065,54 @@ private:
             URHO3D_LOGINFO(String("Частицы активны: ") + (sparkEffect_ ? "искры " : "") + (smokeEffect_ ? "дым" : ""));
         else
             URHO3D_LOGINFO("Частицы выключены (нет валидных .pfx) — игра работает стабильно без них.");
+
+        // Если ни один .pfx не загрузился (Data неполный / битые файлы), строим
+        // эффекты ПРЯМО В ПАМЯТИ из XML движка: <material><technique name=.../></material>.
+        // Technique грузится по абсолютному пути CoreData, поэтому материал всегда валиден.
+        if (!sparkEffect_) sparkEffectStore_ = BuildFallbackEffect("Materials/Particle.xml", 400, 120, 0.1f, 0.4f, 0.6f, true);
+        if (!smokeEffect_) smokeEffectStore_ = BuildFallbackEffect("Materials/Smoke.xml", 150, 40, 0.6f, 1.4f, 2.5f, false);
+        if (!sparkEffect_) sparkEffect_ = sparkEffectStore_;
+        if (!smokeEffect_) smokeEffect_ = smokeEffectStore_;
+        haveParticles_ = (sparkEffect_ != nullptr) || (smokeEffect_ != nullptr);
+        if (haveParticles_)
+            URHO3D_LOGINFO("Частицы: fallback-эффекты построены в памяти (искры/дым работают без .pfx)");
+    }
+
+    SharedPtr<ParticleEffect> sparkEffectStore_, smokeEffectStore_; // владение fallback-эффектами
+
+    // Программный ParticleEffect из стоковых материалов CoreData.
+    SharedPtr<ParticleEffect> BuildFallbackEffect(const char* matName, unsigned numP, float rate,
+                                                  float sizeMin, float sizeMax, float ttl, bool additive) {
+        auto* cache = GetSubsystem<ResourceCache>();
+        SharedPtr<Material> pm = cache->GetResource<Material>(String(matName));
+        if (!pm) return SharedPtr<ParticleEffect>();
+        SharedPtr<ParticleEffect> e(new ParticleEffect(context_));
+        e->SetNumEmitters(1);
+        ParticleEmitter* em = e->GetEmitter(0);
+        if (!em) return SharedPtr<ParticleEffect>();
+        em->SetMaterial(pm);
+        em->SetNumParticles(numP);
+        em->SetEmissionRateMinMax(rate * 0.8f, rate);
+        em->SetParticleSizeMinMax(Vector2(sizeMin, sizeMin), Vector2(sizeMax, sizeMax));
+        em->SetTimeToLiveMinMax(ttl * 0.7f, ttl);
+        em->SetVelocityMinMax(2.0f, 6.0f);
+        em->SetDirectionMin(Vector3(-0.4f, 0.2f, -0.4f));
+        em->SetDirectionMax(Vector3(0.4f, 1.0f, 0.4f));
+        em->SetConstantForce(Vector3(0.0f, additive ? 2.0f : 0.6f, 0.0f));
+        em->SetDampingForce(1.5f);
+        em->SetSizeMultiplyMin(Vector2(0.4f, 0.4f));
+        em->SetSizeMultiplyMax(Vector2(0.6f, 0.6f));
+        if (additive) {
+            em->SetColorPeriods(3);
+            em->SetColorStop(0, Color(1.0f, 0.85f, 0.4f), 0.0f);
+            em->SetColorStop(1, Color(1.0f, 0.45f, 0.15f), 0.5f);
+            em->SetColorStop(2, Color(0.0f, 0.0f, 0.0f, 0.0f), 1.0f);
+        } else {
+            em->SetColorPeriods(2);
+            em->SetColorStop(0, Color(0.55f, 0.55f, 0.58f, 0.55f), 0.0f);
+            em->SetColorStop(1, Color(0.35f, 0.35f, 0.38f, 0.0f), 1.0f);
+        }
+        return e;
     }
 
     // =========================================================================

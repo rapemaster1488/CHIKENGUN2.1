@@ -167,6 +167,17 @@ if [ ! -f build/Data/Particle/Spark.pfx ]; then
         echo "!! Нет paxRusConverter и нет tools/pax_convert.py — частицы будут выключены (игра стабильна, но без искр)."
     fi
 fi
+# ---- 4.56 Чистим Data И build/Data от мусора, перекрывающего CoreData ----
+# Мусорные xml в ./Data (0 байт или "<material><technique ...>" одной строкой без тела)
+# имеют приоритет над CoreData и дают 'unknown resource type' + пустые материалы.
+for d in "Data" "build/Data"; do
+    [ -d "$d" ] || continue
+    find "$d" -name "*.xml" -size -2c -delete 2>/dev/null || true
+    # явный контроль: Materials/Particle.xml и Smoke.xml должны ссылаться на техники DiffUnlitParticle*
+    for mf in "$d/Materials/Particle.xml" "$d/Materials/Smoke.xml"; do
+        if [ -f "$mf" ] && ! grep -q "Techniques/" "$mf"; then rm -f "$mf"; echo "Удалён мусор: $mf"; fi
+    done
+done
 ls build/Data/Particle/*.pfx >/dev/null 2>&1 && echo "Particle .pfx на месте: $(ls build/Data/Particle/*.pfx | wc -l) шт."
 # CoreData кладём и в build/CoreData (путь, который регистрирует движок), и в build/Data/CoreData
 for cd_src in "CoreData" "Data/CoreData" "bin/CoreData" "$HOME/urho3d/bin/CoreData" "/usr/local/share/Urho3D/CoreData"; do

@@ -96,7 +96,11 @@ def main():
     # material
     m = get("material")
     mat_name = m.get("name") if m is not None else "Materials/Particle.xml"
-    short_str(mat_name or "Materials/Particle.xml")
+    # ВАЖНО: Urho3D сериализует String как unsigned length (LE32) + байты.
+    # Ошибка с uint8-длиной давала битый .pfx -> "unknown resource type 2B8AF19B".
+    b = (mat_name or "Materials/Particle.xml").encode("utf-8")
+    out.extend(struct.pack("<I", len(b)))
+    out.extend(b)
 
     def val(tag, dflt=None, node=None):
         e = (node or root).find(tag)
