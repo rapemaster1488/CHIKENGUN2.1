@@ -39,8 +39,7 @@
 #include <Urho3D/Graphics/Camera.h>
 #include <Urho3D/Graphics/Light.h>
 #include <Urho3D/Graphics/Material.h>
-#include <Urho3D/Graphics/Technique.h>
-#include <Urho3D/Graphics/Pass.h>
+#include <Urho3D/Graphics/Technique.h> // класс Pass уже определён внутри Technique.h — отдельного Pass.h в этом Urho3D нет
 #include <Urho3D/Graphics/Model.h>
 #include <Urho3D/Graphics/StaticModel.h>
 #include <Urho3D/Graphics/ParticleEmitter.h>
