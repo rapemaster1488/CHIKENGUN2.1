@@ -17,6 +17,7 @@
 #include <cmath>
 #include <unistd.h> // readlink для поиска CoreData рядом с бинарником
 #include <sys/stat.h> // stat()/S_ISDIR для проверки папок ресурсов
+#include <cstring>    // strlen для программной техники
 
 // ВАЖНО: Urho3D/Math/Vector3.h подключается ДО всего остального, иначе
 // заголовки Graphics/Input/UI (через Variant->Color->Vector4->Vector3)
@@ -39,6 +40,7 @@
 #include <Urho3D/Graphics/Light.h>
 #include <Urho3D/Graphics/Material.h>
 #include <Urho3D/Graphics/Technique.h>
+#include <Urho3D/Graphics/Pass.h>
 #include <Urho3D/Graphics/Model.h>
 #include <Urho3D/Graphics/StaticModel.h>
 #include <Urho3D/Graphics/ParticleEmitter.h>
@@ -752,7 +754,8 @@ public:
                 };
                 for (unsigned i = 0; i < texHdCandidates.Size(); ++i) {
                     if (fileOk(texHdCandidates[i] + "/StoneHDDiffuse.png")) {
-                        cache->AddTextureDir(texHdCandidates[i]);
+                        // AddTextureDir не существует — кладём папку в общий реестр ресурсов
+                        cache->AddResourceDir(texHdCandidates[i], 1);
                         URHO3D_LOGINFO("TexturesHD подключён: " + texHdCandidates[i]);
                         break;
                     }
@@ -916,16 +919,31 @@ private:
                 "Materials/StoneTiled.xml", "Materials/DefaultGrey.xml"
             };
             for (const char* cand : kBaseMats) {
-                SharedPtr<Material> t = cache->GetResource<Material>(String(cand));
+                Material* t = cache->GetResource<Material>(String(cand)); // сырой указатель!
                 if (t && t->GetTechniques().Size()) { baseMat_ = t; break; }
             }
             if (!baseMat_) {
+                // Собираем технику ПРОГРАММНО через XML-текст (без файлов): стандартный
+                // DiffBlinn из Shaders/ в CoreData. Это валидный материал с lighting,
+                // цвета объектов дают через MatDiffColor.
+                static const char* kTechXml =
+                    "<technique vs=\"DiffBlinn\" ps=\"DiffBlinn\" vsdefines=\"VERTEXPOSITION NORMAL LIGHTDIFFUSELIGHTSPECULARMAPS\"\n"
+                    " psdefines=\"BLENDOPADD TECHNIQUE0 DIFFUSEMAPS0\">\n"
+                    " <pass name=\"opaque\"><state name=\"CULL_BACK\"/><state name=\"COLORMASK_ALL\"/>\n"
+                    "  <state name=\"DEPTH_ENABLE\"/><state name=\"DEPTH_FUNCTION_COMPARISON_LESS_EQUAL\"/>\n"
+                    "  <state name=\"STENCIL_ENABLE\"/>\n"
+                    "  <state name=\"BLEND_OPAQUE\"/></pass>\n"
+                    "</technique>\n";
+                SharedPtr<Buffer> buf(new Buffer(context_));
+                buf->SetData(kTechXml, (unsigned)strlen(kTechXml) + 1);
                 baseMat_ = new Material(context_);
                 SharedPtr<Technique> tech(new Technique(context_));
-                if (tech->LoadXml(cache->GetResourceFile("Techniques/DiffUnlit.xml")))
+                if (tech->BeginLoad("Programmatic/DiffBlinn.xml") && tech->Load(*buf))
+                    tech->EndLoad();
+                if (tech->GetNumPasses() > 0)
                     baseMat_->SetTechnique(0, tech);
                 else
-                    URHO3D_LOGERROR("MakeTinted: DiffUnlit.xml не найден — объекты могут не отрисовываться");
+                    URHO3D_LOGERROR("MakeTinted: программная техника не собралась — сцена может быть серой");
                 URHO3D_LOGINFO("MakeTinted: xml-материалы не найдены, базовая техника собрана программно");
             }
         }
@@ -1035,14 +1053,15 @@ private:
         };
         for (const char* p : kSparkCandidates) {
             ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
-            if (e && e->GetTechnique()) { sparkEffect_ = e; break; }
+            // Валидность проверяем по числу техник (GetTechnique у ParticleEffect отсутствует)
+            if (e && e->GetNumTechniques() > 0) { sparkEffect_ = e; break; }
         }
         static const char* kSmokeCandidates[] = {
             "Particle/Smoke.pfx", "Particle/Dust.mist", "Particle/Mist.pfx"
         };
         for (const char* p : kSmokeCandidates) {
             ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
-            if (e && e->GetTechnique()) { smokeEffect_ = e; break; }
+            if (e && e->GetNumTechniques() > 0) { smokeEffect_ = e; break; }
         }
 
         // Эмиттер без SetEffect не рендерит ничего и НЕ крашится — это наш
