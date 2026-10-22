@@ -922,17 +922,24 @@ private:
                 if (t && t->GetTechniques().Size()) { baseMat_ = t; break; }
             }
             if (!baseMat_) {
-                // Собираем технику ПРОГРАММНО через XML-текст (без файлов): стандартный
-                // DiffBlinn из Shaders/ в CoreData. Это валидный материал с lighting,
-                // цвета объектов дают через MatDiffColor.
-                static const char* kTechXml =
-                    "<technique vs=\"DiffBlinn\" ps=\"DiffBlinn\" vsdefines=\"VERTEXPOSITION NORMAL LIGHTDIFFUSELIGHTSPECULARMAPS\"\n"
-                    " psdefines=\"BLENDOPADD TECHNIQUE0 DIFFUSEMAPS0\">\n"
-                    " <pass name=\"opaque\"><state name=\"CULL_BACK\"/><state name=\"COLORMASK_ALL\"/>\n"
-                    "  <state name=\"DEPTH_ENABLE\"/><state name=\"DEPTH_FUNCTION_COMPARISON_LESS_EQUAL\"/>\n"
-                    "  <state name=\"STENCIL_ENABLE\"/>\n"
-                    "  <state name=\"BLEND_OPAQUE\"/></pass>\n"
-                    "</technique>\n";
+                // Финальный fallback: берём ЛЮБОЙ валидный материал из CoreData
+                // (их техники уже описаны в xml — достаточно просто скопировать материал).
+                static const char* kCoreMats[] = {
+                    "Materials/Stone.xml", "Materials/RoughStoneBump1.xml",
+                    "Materials/Water.xml", "Materials/BlurY.xml",
+                    "Materials/VColUnlit.xml", "Materials/DefaultDiffuse.xml"
+                };
+                for (const char* cand : kCoreMats) {
+                    Material* t = cache->GetResource<Material>(String(cand), true);
+                    if (t && t->GetTechniques().Size()) { baseMat_ = t; break; }
+                }
+                if (!baseMat_) {
+                    baseMat_ = new Material(context_);
+                    URHO3D_LOGERROR("MakeTinted: ни один материал не найден даже в CoreData — сцена будет без шейдеров");
+                } else {
+                    URHO3D_LOGINFO("MakeTinted: база для тинтов взята из CoreData");
+                }
+            }
         }
         SharedPtr<Material> m = baseMat_->Clone();
         if (diff) { m->SetTexture(TU_DIFFUSE, diff); }
