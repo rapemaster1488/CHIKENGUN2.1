@@ -933,7 +933,6 @@ private:
                     "  <state name=\"STENCIL_ENABLE\"/>\n"
                     "  <state name=\"BLEND_OPAQUE\"/></pass>\n"
                     "</technique>\n";
-                    tech->EndLoad();
                 if (tech->GetNumPasses() > 0)
                     baseMat_->SetTechnique(0, tech);
                 else
