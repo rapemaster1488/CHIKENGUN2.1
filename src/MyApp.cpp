@@ -933,11 +933,6 @@ private:
                     "  <state name=\"STENCIL_ENABLE\"/>\n"
                     "  <state name=\"BLEND_OPAQUE\"/></pass>\n"
                     "</technique>\n";
-                SharedPtr<Buffer> buf(new Buffer(context_));
-                buf->SetData(kTechXml, (unsigned)strlen(kTechXml) + 1);
-                baseMat_ = new Material(context_);
-                SharedPtr<Technique> tech(new Technique(context_));
-                if (tech->BeginLoad("Programmatic/DiffBlinn.xml") && tech->Load(*buf))
                     tech->EndLoad();
                 if (tech->GetNumPasses() > 0)
                     baseMat_->SetTechnique(0, tech);
@@ -1053,14 +1048,14 @@ private:
         for (const char* p : kSparkCandidates) {
             ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
             // Валидность проверяем по числу техник (GetTechnique у ParticleEffect отсутствует)
-            if (e && e->GetNumTechniques() > 0) { sparkEffect_ = e; break; }
+            if (e && !e->GetName().Empty()) { sparkEffect_ = e; break; }
         }
         static const char* kSmokeCandidates[] = {
             "Particle/Smoke.pfx", "Particle/Dust.mist", "Particle/Mist.pfx"
         };
         for (const char* p : kSmokeCandidates) {
             ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
-            if (e && e->GetNumTechniques() > 0) { smokeEffect_ = e; break; }
+            if (e && !e->GetName().Empty()) { smokeEffect_ = e; break; }
         }
 
         // Эмиттер без SetEffect не рендерит ничего и НЕ крашится — это наш
