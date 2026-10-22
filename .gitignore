@@ -1,5 +1,2 @@
-*.o
-*.obj
-*.swp
-*.swo
-.DS_Store
+*.bundle
+*.patch

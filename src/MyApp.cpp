@@ -1051,7 +1051,7 @@ private:
             if (e && !e->GetName().Empty()) { sparkEffect_ = e; break; }
         }
         static const char* kSmokeCandidates[] = {
-            "Particle/Smoke.pfx", "Particle/Dust.mist", "Particle/Mist.pfx"
+            "Particle/Smoke.pfx", "Particle/Mist.pfx", "Particle/Dust.pfx"
         };
         for (const char* p : kSmokeCandidates) {
             ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));

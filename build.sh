@@ -123,6 +123,51 @@ sync_dir() {
 for base in "Data" "bin/Data" "$HOME/urho3d/bin/Data" "/usr/local/share/Urho3D/Data"; do
     sync_dir "$base"
 done
+
+# ---- 4.55 Чистим build/Data от мусора, который вызывает 'unknown resource type' ----
+# bin/Data содержит вложенный bin/Data/Data (двойная копия) и бинарные .mat-остатки —
+# движок пытается грузить их как неизвестные типы (2B8AF19B) и спамит ошибками.
+rm -rf build/Data/Data 2>/dev/null || true
+find build/Data -name "*.mat" ! -path "*Materials*" -delete 2>/dev/null || true
+# Пустые/битые файлы ресурсов (0 байт) тоже дают ошибки загрузки — удаляем,
+# синхронизация ниже докатит валидные копии.
+find build/Data build/CoreData -type f -size 0 -delete 2>/dev/null || true
+
+# ---- 4.57 Particle-эффекты: конвертируем XML-эффекты движка в .pfx ----
+# В репозитории лежат только Particle/*.xml (Urho не грузит их как ParticleEffect),
+# а код ищет Spark.pfx/Smoke.pfx -> 'Could not find resource' и отключённые искры.
+# Если у пользователя есть собранный urho3d — берём готовый paxRusConverter;
+# иначе пишем свой мини-конвертер (XML -> бинарный формат .pfx).
+PAX_CONV=""
+for c in "$HOME/urho3d/build/bin/paxRusConverter" "$HOME/urho3d/bin/paxRusConverter" \
+         "$(command -v paxRusConverter 2>/dev/null)" "/usr/local/bin/paxRusConverter"; do
+    [ -x "$c" ] && PAX_CONV="$c" && break
+done
+mkdir -p build/Data/Particle
+if [ ! -f build/Data/Particle/Spark.pfx ]; then
+    if [ -n "$PAX_CONV" ]; then
+        echo "Конвертирую Particle/*.xml -> .pfx через $PAX_CONV"
+        for x in bin/Data/Particle/*.xml Data/Particle/*.xml "$HOME/urho3d/bin/Data/Particle/"*.xml; do
+            [ -f "$x" ] || continue
+            "$PAX_CONV" "$x" >/dev/null 2>&1 || true
+        done
+        # paxRusConverter кладёт .pfx рядом с исходным xml — собираем их в build/Data/Particle
+        for p in bin/Data/Particle/*.pfx Data/Particle/*.pfx "$HOME/urho3d/bin/Data/Particle/"*.pfx; do
+            [ -f "$p" ] && cp -n "$p" build/Data/Particle/ 2>/dev/null || true
+        done
+    elif command -v python3 >/dev/null 2>&1 && [ -f tools/pax_convert.py ]; then
+        echo "Конвертирую Particle/*.xml -> .pfx своим мини-конвертером (tools/pax_convert.py)"
+        mkdir -p bin/Data/Particle
+        for pair in "Fire:Spark" "Smoke:Smoke" "Dust:Dust" "Burst:SparkBig" "Disco:Fireworks" "SnowExplosionBig:ExplosionBig" "SnowExplosion:Torch" "Flame:Flame" "SmokeStack:Mist"; do
+            src="${pair%%:*}"; dst="${pair##*:}"
+            [ -f "bin/Data/Particle/$src.xml" ] || continue
+            python3 tools/pax_convert.py "bin/Data/Particle/$src.xml" "build/Data/Particle/$dst" || true
+        done
+    else
+        echo "!! Нет paxRusConverter и нет tools/pax_convert.py — частицы будут выключены (игра стабильна, но без искр)."
+    fi
+fi
+ls build/Data/Particle/*.pfx >/dev/null 2>&1 && echo "Particle .pfx на месте: $(ls build/Data/Particle/*.pfx | wc -l) шт."
 # CoreData кладём и в build/CoreData (путь, который регистрирует движок), и в build/Data/CoreData
 for cd_src in "CoreData" "Data/CoreData" "bin/CoreData" "$HOME/urho3d/bin/CoreData" "/usr/local/share/Urho3D/CoreData"; do
     if [ -d "$cd_src" ]; then
