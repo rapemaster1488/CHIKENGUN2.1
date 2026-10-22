@@ -1069,8 +1069,8 @@ private:
         // Если ни один .pfx не загрузился (Data неполный / битые файлы), строим
         // эффекты ПРЯМО В ПАМЯТИ из XML движка: <material><technique name=.../></material>.
         // Technique грузится по абсолютному пути CoreData, поэтому материал всегда валиден.
-        if (!sparkEffect_) sparkEffectStore_ = BuildFallbackEffect("Materials/Particle.xml", 400, 120, 0.1f, 0.4f, 0.6f, true);
-        if (!smokeEffect_) smokeEffectStore_ = BuildFallbackEffect("Materials/Smoke.xml", 150, 40, 0.6f, 1.4f, 2.5f, false);
+        if (!sparkEffect_) sparkEffectStore_.Clear();
+        if (!smokeEffect_) smokeEffectStore_.Clear();
         if (!sparkEffect_) sparkEffect_ = sparkEffectStore_;
         if (!smokeEffect_) smokeEffect_ = smokeEffectStore_;
         haveParticles_ = (sparkEffect_ != nullptr) || (smokeEffect_ != nullptr);
@@ -1081,9 +1081,6 @@ private:
     SharedPtr<ParticleEffect> sparkEffectStore_, smokeEffectStore_; // владение fallback-эффектами
 
     // Программный ParticleEffect из стоковых материалов CoreData.
-    SharedPtr<ParticleEffect> BuildFallbackEffect(const char* matName, unsigned numP, float rate,
-                                                  float sizeMin, float sizeMax, float ttl, bool additive) {
-        auto* cache = GetSubsystem<ResourceCache>();
         SharedPtr<Material> pm = cache->GetResource<Material>(String(matName));
         if (!pm) return SharedPtr<ParticleEffect>();
         SharedPtr<ParticleEffect> e(new ParticleEffect(context_));
