@@ -933,12 +933,6 @@ private:
                     "  <state name=\"STENCIL_ENABLE\"/>\n"
                     "  <state name=\"BLEND_OPAQUE\"/></pass>\n"
                     "</technique>\n";
-                if (tech->GetNumPasses() > 0)
-                    baseMat_->SetTechnique(0, tech);
-                else
-                    URHO3D_LOGERROR("MakeTinted: программная техника не собралась — сцена может быть серой");
-                URHO3D_LOGINFO("MakeTinted: xml-материалы не найдены, базовая техника собрана программно");
-            }
         }
         SharedPtr<Material> m = baseMat_->Clone();
         if (diff) { m->SetTexture(TU_DIFFUSE, diff); }
