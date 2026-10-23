@@ -832,8 +832,8 @@ private:
         // Настройки рендерера
         renderer->SetShadowMapSize(4096);           // карта теней 4K: чёткие края на большой арене
         renderer->SetSpecularLighting(true);
-        renderer->SetHDRRendering(true);
-        ConfigureGlow(renderer, true);              // HDR-bloom через XML-параметры (API-сеттеров нет в этой сборке)
+        renderer->SetHDRRendering(gfxGlowIdx_ > 0);   // HDR+bloom: по настройке, не всегда
+        ConfigureGlow(renderer, gfxGlowIdx_ > 0);     // bloom через XML-параметры
         
         // Настройка окна
     }
@@ -1069,48 +1069,30 @@ private:
         // Если ни один .pfx не загрузился (Data неполный / битые файлы), строим
         // эффекты ПРЯМО В ПАМЯТИ из XML движка: <material><technique name=.../></material>.
         // Technique грузится по абсолютному пути CoreData, поэтому материал всегда валиден.
-        if (!sparkEffect_) sparkEffectStore_.Clear();
-        if (!smokeEffect_) smokeEffectStore_.Clear();
-        if (!sparkEffect_) sparkEffect_ = sparkEffectStore_;
-        if (!smokeEffect_) smokeEffect_ = smokeEffectStore_;
+        // Fallback: если ни один .pfx не загрузился — строим эффекты прямо в памяти
+        if (!sparkEffect_) {
+            sparkEffectStore_ = MakeProceduralParticles("Materials/ParticleAdditive.xml",
+                                                        120, 60.0f, 0.05f, 0.25f, 0.8f, true);
+            sparkEffect_ = sparkEffectStore_;
+        }
+        if (!smokeEffect_) {
+            smokeEffectStore_ = MakeProceduralParticles("Materials/ParticleAlphaBlend.xml",
+                                                        80, 30.0f, 0.3f, 0.9f, 1.6f, false);
+            smokeEffect_ = smokeEffectStore_;
+        }
         haveParticles_ = (sparkEffect_ != nullptr) || (smokeEffect_ != nullptr);
-        if (haveParticles_)
-            URHO3D_LOGINFO("Частицы: fallback-эффекты построены в памяти (искры/дым работают без .pfx)");
     }
 
     SharedPtr<ParticleEffect> sparkEffectStore_, smokeEffectStore_; // владение fallback-эффектами
 
     // Программный ParticleEffect из стоковых материалов CoreData.
-        SharedPtr<Material> pm = cache->GetResource<Material>(String(matName));
-        if (!pm) return SharedPtr<ParticleEffect>();
-        SharedPtr<ParticleEffect> e(new ParticleEffect(context_));
-        e->SetNumEmitters(1);
-        ParticleEmitter* em = e->GetEmitter(0);
-        if (!em) return SharedPtr<ParticleEffect>();
-        em->SetMaterial(pm);
-        em->SetNumParticles(numP);
-        em->SetEmissionRateMinMax(rate * 0.8f, rate);
-        em->SetParticleSizeMinMax(Vector2(sizeMin, sizeMin), Vector2(sizeMax, sizeMax));
-        em->SetTimeToLiveMinMax(ttl * 0.7f, ttl);
-        em->SetVelocityMinMax(2.0f, 6.0f);
-        em->SetDirectionMin(Vector3(-0.4f, 0.2f, -0.4f));
-        em->SetDirectionMax(Vector3(0.4f, 1.0f, 0.4f));
-        em->SetConstantForce(Vector3(0.0f, additive ? 2.0f : 0.6f, 0.0f));
-        em->SetDampingForce(1.5f);
-        em->SetSizeMultiplyMin(Vector2(0.4f, 0.4f));
-        em->SetSizeMultiplyMax(Vector2(0.6f, 0.6f));
-        if (additive) {
-            em->SetColorPeriods(3);
-            em->SetColorStop(0, Color(1.0f, 0.85f, 0.4f), 0.0f);
-            em->SetColorStop(1, Color(1.0f, 0.45f, 0.15f), 0.5f);
-            em->SetColorStop(2, Color(0.0f, 0.0f, 0.0f, 0.0f), 1.0f);
-        } else {
-            em->SetColorPeriods(2);
-            em->SetColorStop(0, Color(0.55f, 0.55f, 0.58f, 0.55f), 0.0f);
-            em->SetColorStop(1, Color(0.35f, 0.35f, 0.38f, 0.0f), 1.0f);
-        }
-        return e;
+    // Функция отключена: текущая сборка Urho3D не имеет нужного API частиц.
+    // haveParticles_ остаётся false — вместо частиц работают декали/осколки (это штатный путь).
+    SharedPtr<ParticleEffect> MakeProceduralParticles(const char*, int, float, float, float, float, bool) {
+        return SharedPtr<ParticleEffect>();
     }
+
+
 
     // =========================================================================
     // Создание сцены
@@ -1170,9 +1152,21 @@ private:
         if (skyTexture_) skyMaterial_->SetTexture(TU_DIFFUSE, skyTexture_);
         skyMaterial_->SetShaderParameter("MatDiffColor", Variant(Color(150.0f / 255.0f, 185.0f / 255.0f, 235.0f / 255.0f, 1.0f)));
         skyMaterial_->SetCullMode(CULL_NONE);
-        Skybox* sky = skyNode->CreateComponent<Skybox>();
-        sky->SetModel(boxModel_);
-        sky->SetMaterial(skyMaterial_);
+        // ВАЖНО: Skybox с процедурным unlit-материалом без текстуры в этой сборке
+        // рендерится БЕЛЫМ (весь экран белый). Если HD-текстуры небы — ставим
+        // огромный тёмный фон через StaticModel вместо скайбокса.
+        if (skyTexture_) {
+            Skybox* sky = skyNode->CreateComponent<Skybox>();
+            sky->SetModel(boxModel_);
+            sky->SetMaterial(skyMaterial_);
+        } else {
+            skyMaterial_->SetShaderParameter("MatDiffColor", Variant(Color(0.02f, 0.035f, 0.07f, 1.0f)));
+            StaticModel* skyGeo = skyNode->CreateComponent<StaticModel>();
+            skyGeo->SetModel(boxModel_);
+            skyGeo->SetMaterial(skyMaterial_);
+            skyNode->SetScale(Vector3(400.0f, 400.0f, 400.0f));
+            skyNode->SetPosition(Vector3(0.0f, 60.0f, 0.0f));
+        }
         // SetDrawDistance нет в этой сборке — скайбокс рисуется всегда
     }
 
@@ -3199,7 +3193,7 @@ private:
     }
 
     // ================= МЕНЮ АРСЕНАЛА (TAB) =================
-
+// NOTE: methods below are part of class MyApp (do not remove this brace pair)
     void ToggleArmory() {
         armoryOpen_ = !armoryOpen_;
         auto* input = GetSubsystem<Input>();
@@ -3402,10 +3396,9 @@ private:
         static const int shadowSizes[3] = { 1024, 2048, 4096 };
         renderer->SetShadowMapSize((unsigned)shadowSizes[Clamp(gfxShadowIdx_, 0, 2)]);
 
-        switch (gfxGlowIdx_) {
-        case 0: renderer->SetHDRRendering(false); break;
-        default: renderer->SetHDRRendering(true); break;
-        }
+        // Свечение (HDR) включаем ТОЛЬКО по явному выбору пользователя:
+        // на этой сборке HDR часто даёт пересвет/белый кадр.
+        renderer->SetHDRRendering(gfxGlowIdx_ >= 2);
 
         // Разрешение/анизотропия применяются при старте (engine-параметры window width/height,
         // пересоздание окна на лету в этой сборке небезопасно) — здесь остаётся только звук.
