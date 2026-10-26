@@ -1,0 +1,7 @@
+<material>
+    <technique name="Techniques/DiffNormal.xml" quality="1" />
+    <technique name="Techniques/Diff.xml" quality="0" />
+    <texture unit="diffuse" name="Textures/BrushedMetalDiffuse.png" tiled="true" />
+    <texture unit="normal" name="Textures/BrushedMetalNormal.png" tiled="true" />
+    <parameter name="MatSpecColor" value="0.7 0.7 0.75 128" />
+</material>

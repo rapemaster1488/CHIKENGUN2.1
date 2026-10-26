@@ -133,68 +133,6 @@ find build/Data -name "*.mat" ! -path "*Materials*" -delete 2>/dev/null || true
 # синхронизация ниже докатит валидные копии.
 find build/Data build/CoreData -type f -size 0 -delete 2>/dev/null || true
 
-# ---- 4.57 Particle-эффекты: конвертируем XML-эффекты движка в .pfx ----
-# В репозитории лежат только Particle/*.xml (Urho не грузит их как ParticleEffect),
-# а код ищет Spark.pfx/Smoke.pfx -> 'Could not find resource' и отключённые искры.
-# Если у пользователя есть собранный urho3d — берём готовый paxRusConverter;
-# иначе пишем свой мини-конвертер (XML -> бинарный формат .pfx).
-PAX_CONV=""
-for c in "$HOME/urho3d/build/bin/paxRusConverter" "$HOME/urho3d/bin/paxRusConverter" \
-         "$(command -v paxRusConverter 2>/dev/null)" "/usr/local/bin/paxRusConverter"; do
-    [ -x "$c" ] && PAX_CONV="$c" && break
-done
-mkdir -p build/Data/Particle
-if [ ! -f build/Data/Particle/Spark.pfx ]; then
-    if [ -n "$PAX_CONV" ]; then
-        echo "Конвертирую Particle/*.xml -> .pfx через $PAX_CONV"
-        for x in bin/Data/Particle/*.xml Data/Particle/*.xml "$HOME/urho3d/bin/Data/Particle/"*.xml; do
-            [ -f "$x" ] || continue
-            "$PAX_CONV" "$x" >/dev/null 2>&1 || true
-        done
-        # paxRusConverter кладёт .pfx рядом с исходным xml — собираем их в build/Data/Particle
-        for p in bin/Data/Particle/*.pfx Data/Particle/*.pfx "$HOME/urho3d/bin/Data/Particle/"*.pfx; do
-            [ -f "$p" ] && cp -n "$p" build/Data/Particle/ 2>/dev/null || true
-        done
-    elif command -v python3 >/dev/null 2>&1 && [ -f tools/pax_convert.py ]; then
-        echo "Конвертирую Particle/*.xml -> .pfx своим мини-конвертером (tools/pax_convert.py)"
-        mkdir -p bin/Data/Particle
-        for pair in "Fire:Spark" "Smoke:Smoke" "Dust:Dust" "Burst:SparkBig" "Disco:Fireworks" "SnowExplosionBig:ExplosionBig" "SnowExplosion:Torch" "Flame:Flame" "SmokeStack:Mist"; do
-            src="${pair%%:*}"; dst="${pair##*:}"
-            [ -f "bin/Data/Particle/$src.xml" ] || continue
-            python3 tools/pax_convert.py "bin/Data/Particle/$src.xml" "build/Data/Particle/$dst" || true
-        done
-    else
-        echo "!! Нет paxRusConverter и нет tools/pax_convert.py — частицы будут выключены (игра стабильна, но без искр)."
-    fi
-fi
-# ---- 4.56 Чистим Data И build/Data от мусора, перекрывающего CoreData ----
-# Мусорные xml в ./Data (0 байт или "<material><technique ...>" одной строкой без тела)
-# имеют приоритет над CoreData и дают 'unknown resource type' + пустые материалы.
-for d in "Data" "build/Data"; do
-    [ -d "$d" ] || continue
-    find "$d" -name "*.xml" -size -2c -delete 2>/dev/null || true
-    # явный контроль: Materials/Particle.xml и Smoke.xml должны ссылаться на техники DiffUnlitParticle*
-    for mf in "$d/Materials/Particle.xml" "$d/Materials/Smoke.xml"; do
-        if [ -f "$mf" ] && ! grep -q "Techniques/" "$mf"; then rm -f "$mf"; echo "Удалён мусор: $mf"; fi
-    done
-done
-ls build/Data/Particle/*.pfx >/dev/null 2>&1 && echo "Particle .pfx на месте: $(ls build/Data/Particle/*.pfx | wc -l) шт."
-# CoreData кладём и в build/CoreData (путь, который регистрирует движок), и в build/Data/CoreData
-for cd_src in "CoreData" "Data/CoreData" "bin/CoreData" "$HOME/urho3d/bin/CoreData" "/usr/local/share/Urho3D/CoreData"; do
-    if [ -d "$cd_src" ]; then
-        mkdir -p build/CoreData build/Data/CoreData
-        cp -rn "$cd_src"/. build/CoreData/ 2>/dev/null || true
-        cp -rn "$cd_src"/. build/Data/CoreData/ 2>/dev/null || true
-        break
-    fi
-done
-if [ -d "build/Data/Materials/Game" ]; then
-    echo "Ресурсы синхронизированы в build/Data (Materials/Game на месте)."
-else
-    echo ""
-    echo "!! ВНИМАНИЕ: Materials/Game не найдены ни в ./Data, ни в ~/urho3d/bin/Data."
-    echo "   Скопируй полный комплект ресурсов проекта (папка Data репо) рядом с проектом и повтори ./build.sh"
-fi
 
 # ---- 4.6 HD-текстуры: генерируем/синхронизируем TexturesHD -> build/Data/Textures ----
 # Материалы Materials/Game/*.xml ссылаются на Textures/StoneHDDiffuse.png и т.д.
