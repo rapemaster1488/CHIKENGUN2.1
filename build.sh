@@ -152,3 +152,8 @@ for hd in "bin/Data/TexturesHD" "Data/TexturesHD"; do
         break
     fi
 done
+
+# Добиваем .pfx из CoreData движка (иначе спам "unknown resource type" при старте)
+for d in "$HOME/urho3d/bin/CoreData" "$HOME/urho3d/bin/Data" "$HOME/urho3d/build/CoreData"; do
+    [ -d "$d" ] && find "$d" -iname '*.pfx' -delete 2>/dev/null
+done
