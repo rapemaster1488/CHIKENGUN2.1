@@ -353,6 +353,8 @@ private:
     SharedPtr<Scene> scene_;
     Node* cameraNode_ = nullptr;
     Node* weaponNode_ = nullptr;
+    Node* wingHandL_ = nullptr;   // куриные «руки» в виде крыльев на вьюмодели
+    Node* wingHandR_ = nullptr;
     Node* weaponModelNode_ = nullptr;
     Light* muzzleLight_ = nullptr;
     Node* muzzleLightNode_ = nullptr;
@@ -645,6 +647,9 @@ private:
         float burstShots_ = 0.0f;       // очередь выстрелов стрелка
         float burstTimer_ = 0.0f;       // таймер между одиночными в очереди
         float recoilKick_ = 0.0f;       // визуальный «откат» стрелка
+        // === Куриная анимация (ходьба, клевки, взмахи) ===
+        WeakPtr<Node> headNode_, wingLNode_, wingRNode_, legLNode_, legRNode_, tailNode_;
+        float animPhase_ = 0.0f;
     };
     Vector<EnemyData> enemies_;
     // enemyNodes_ убран: он держал SharedPtr на уже удалённых роботов (утечка узла на каждое убийство).
@@ -685,22 +690,50 @@ private:
     int highScore_ = 0;
     float rangeRespawnTimer_ = 0.0f;
     SharedPtr<Material> robotBodyMat_;
+
+    // === Куриные материалы (перья, гребень, клюв, лапы, яйца) ===
+    SharedPtr<Material> chickWhite_, chickBrown_, chickBlack_, chickBoss_;
+    SharedPtr<Material> combMat_, beakMat_, legMat_, eggMat_, featherMat_;
+    SharedPtr<Material> decalMat_;     // пулевые отверстия
+    SharedPtr<Material> shockMat_;     // ударная волна взрыва
+    SharedPtr<Material> shellMat_;     // латунные гильзы
+
+    struct ShockwaveData { SharedPtr<Node> node_; float ttl_ = 0.6f; float max_ = 0.6f; };
+    Vector<ShockwaveData> shockwaves_;
+    Vector<SharedPtr<Node>> decals_;   // пулевые отверстия (не копим больше 60)
     // (robotEyeMat_ убран: глаза роботов кэшируются в EnsureEyeMaterials)
     int currentWeapon_ = W_RIFLE;
     int currentSkin_ = 0;
     Vector<SharedPtr<Node>> decoNodes_;
+
+    // Анимированный декор: голограмма над ареной, вращающиеся кольца, качающиеся фонари
+    struct AnimatedDeco {
+        SharedPtr<Node> node_;
+        Vector3 pos_;
+        float spin_ = 0.0f;      // градусов в секунду вокруг Y
+        float bobAmp_ = 0.0f;    // амплитуда вертикального покачивания
+        float bobSpeed_ = 1.0f;
+        float phase_ = 0.0f;
+    };
+    Vector<AnimatedDeco> animatedDeco_;
+    Light* neonLightA_ = nullptr;   // пульсирующая подсветка арены
+    Light* neonLightB_ = nullptr;
     SharedPtr<Text> weaponNameText_;
     bool armoryOpen_ = false;
     SharedPtr<UIElement> armoryPanel_;
     Vector<SharedPtr<Text>> armoryWeaponRows_;
     Vector<SharedPtr<Text>> armorySkinRows_;
     SharedPtr<UIElement> hudPanelBg_;
+    SharedPtr<BorderImage> hudHpBarBg_, hudHpBarFill_, hudAmmoBarBg_, hudAmmoBarFill_;
+    static constexpr float HUD_BAR_W = 260.0f;
     SharedPtr<Text> helpText_;   // подсказка по управлению: прячется вместе с HUD
     
     // Ресурсы
     Model* boxModel_ = nullptr;
     Model* sphereModel_ = nullptr;
     Model* planeModel_ = nullptr;
+    Model* coneModel_ = nullptr;      // клювы, гребни, хвостовые перья
+    Model* cylModel_ = nullptr;       // шеи, лапы, трубы
     Material* stoneMaterial_ = nullptr;
     Material* metalMaterial_ = nullptr;
     Material* targetMaterial_ = nullptr;
@@ -973,6 +1006,8 @@ private:
         // Загружаем базовые модели
         boxModel_ = cache->GetResource<Model>("Models/Box.mdl");
         sphereModel_ = cache->GetResource<Model>("Models/Sphere.mdl");
+        coneModel_ = cache->GetResource<Model>("Models/Cone.mdl");
+        cylModel_ = cache->GetResource<Model>("Models/Cylinder.mdl");
         planeModel_ = cache->GetResource<Model>("Models/Plane.mdl");
         
         // Создаем материалы программно (на случай если файлы не найдены)
@@ -1133,6 +1168,17 @@ private:
          targetMaterial_ = MakeTinted(white, nullptr, Color(230, 60, 60));
          targetHitMaterial_ = MakeTinted(white, nullptr, Color(255, 220, 120));
      }
+     // --- Куриные материалы: плоские unlit-тинты, как у остальных процедурных объектов ---
+     chickWhite_ = MakeTinted(nullptr, nullptr, Color(250, 248, 240));   // клуша
+     chickBrown_ = MakeTinted(nullptr, nullptr, Color(205, 115, 45));    // петух-чарджер
+     chickBlack_ = MakeTinted(nullptr, nullptr, Color(58, 54, 70));      // чёрный стрелок
+     chickBoss_  = MakeTinted(nullptr, nullptr, Color(235, 240, 255));   // босс-индюк
+     combMat_    = MakeTinted(nullptr, nullptr, Color(225, 35, 45));     // гребень и бородка
+     beakMat_    = MakeTinted(nullptr, nullptr, Color(255, 185, 45));    // клюв
+     legMat_     = MakeTinted(nullptr, nullptr, Color(240, 175, 60));    // лапы
+     eggMat_     = MakeTinted(nullptr, nullptr, Color(255, 250, 232));   // снаряд-яйцо
+     featherMat_ = MakeTinted(nullptr, nullptr, Color(252, 250, 245));   // перья при смерти
+
      floorMaterialLight_ = hdFloor_ ? hdFloor_ : stoneMaterial_;
      // Анизотропная фильтрация: глобальная настройка движка (per-material MAT_ANISOTROPY в этой сборке недоступен)
      // Глобальная анизотропия недоступна в этой сборке — фильтрация по умолчанию
@@ -1241,6 +1287,7 @@ private:
         CreateWalls();
         // Потолок убран: арена открыта небу — прыжки и динамическая камера смотрят на skybox
         CreateObstacles();
+        CreateStructures();
         CreateTargets();
         
         // Небо и декорации новой арены
@@ -1260,10 +1307,11 @@ private:
         Zone* zone = zoneNode->CreateComponent<Zone>();
         zone->SetBoundingBox(BoundingBox(-700.0f, 700.0f));
         // Мягкий холодный ambient — нет чёрных провалов, но контраст теней сохраняется
-        zone->SetAmbientColor(Color(0.30f, 0.34f, 0.44f));
-        zone->SetFogColor(Color(0.60f, 0.70f, 0.84f));
-        zone->SetFogStart(80.0f);
-        zone->SetFogEnd(260.0f);
+        // Сумерки: тёплый горизонт + холодная тень — арена перестаёт быть «серой коробкой»
+        zone->SetAmbientColor(Color(0.26f, 0.30f, 0.40f));
+        zone->SetFogColor(Color(0.46f, 0.50f, 0.66f));
+        zone->SetFogStart(55.0f);
+        zone->SetFogEnd(230.0f);
         // SetFarDistance нет в этой сборке — дальность тумана уже задана SetFogEnd
     }
 
@@ -1327,7 +1375,7 @@ private:
         // Ящики-укрытия с деревянной HD текстурой
         const Vector3 cratePos[] = {
             Vector3(14, 1, 14), Vector3(-16, 1, 10), Vector3(12, 1, -18),
-            Vector3(-14, 1, -14), Vector3(22, 1, 4), Vector3(-24, 1, -2)
+            Vector3(-14, 1, -14), Vector3(22, 1, 4), Vector3(-30, 1, 7)
         };
         for (const auto& pos : cratePos) {
             Node* crate = scene_->CreateChild("Crate");
@@ -1416,12 +1464,9 @@ private:
             StaticModel* bm = beacon->CreateComponent<StaticModel>();
             bm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
             bm->SetMaterial(glowRed);
-            Node* ln = scene_->CreateChild("BeaconLight");
-            ln->SetPosition(tp + Vector3(0, 12.4f, 0));
-            Light* l = ln->CreateComponent<Light>();
-            l->SetLightType(LIGHT_POINT);
-            l->SetColor(Color(1.0f, 0.15f, 0.15f));
-            l->SetRange(8.0f);
+            // Маяки светятся материалом (unlit + bloom), а не отдельным Light:
+            // 4 лишних динамических источника в forward-рендере = лишние проходы на каждом объекте.
+            decoNodes_.Push(SharedPtr<Node>(mast)); decoNodes_.Push(SharedPtr<Node>(beacon));
         }
     }
     
@@ -1511,48 +1556,230 @@ private:
     }
     
     void CreateObstacles() {
-        // Создаем различные препятствия на арене
-        
-        // Колонны по углам
-        float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
-        float offset = arenaSize * 0.6f;
-        float columnHeight = 4.0f;
-        
-        Vector3 positions[] = {
-            Vector3(offset, columnHeight/2, offset),
-            Vector3(-offset, columnHeight/2, offset),
-            Vector3(offset, columnHeight/2, -offset),
-            Vector3(-offset, columnHeight/2, -offset)
+        // =====================================================================
+        // Карта арены: центральный подиум со ступенями, кольцо укрытий,
+        // бетонные блоки, бочки, ящики и угловые бункеры.
+        // Всё, во что можно упереться, получает Lite-коллайдер.
+        // =====================================================================
+        const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
+
+        SharedPtr<Material> neonCyan = MakeTinted(nullptr, nullptr, Color(40, 220, 255));
+        SharedPtr<Material> neonPink = MakeTinted(nullptr, nullptr, Color(255, 70, 140));
+
+        // Универсальный «блок»: визуал + коллайдер
+        auto block = [this](const Vector3& pos, const Vector3& size, Material* mat, bool collide = true) {
+            Node* n = scene_->CreateChild("Block");
+            n->SetPosition(pos);
+            n->SetScale(size);
+            StaticModel* sm = n->CreateComponent<StaticModel>();
+            sm->SetModel(boxModel_);
+            sm->SetMaterial(mat ? mat : fallbackMat_);
+            sm->SetCastShadows(true);
+            if (collide) AddBoxCollider(pos, size * 0.5f);
+            return n;
         };
-        
-        for (const auto& pos : positions) {
-            Node* columnNode = scene_->CreateChild("Column");
-            columnNode->SetPosition(pos);
-            columnNode->SetScale(Vector3(1.5f, columnHeight, 1.5f));
-            
-            StaticModel* model = columnNode->CreateComponent<StaticModel>();
-            model->SetModel(boxModel_);
-            model->SetMaterial(metalMaterial_);
-            
-            AddBoxCollider(pos, Vector3(0.75f, columnHeight/2, 0.75f)); // Lite
+
+        // ------------------------- центральная площадь -------------------------
+        // Намеренно БЕЗ высокой платформы: враги не умеют запрыгивать (у них фиксированная
+        // высота и выталкивание), поэтому подиум стал бы «безопасной точкой», откуда
+        // игрок безнаказанно расстреливает арену. Вместо него — открытая площадь
+        // с голограммой и четырьмя колоннами-укрытиями.
+        Node* plaza = scene_->CreateChild("Plaza");
+        for (int ring = 0; ring < 2; ++ring) {
+            Node* disc = plaza->CreateChild("Ring");
+            disc->SetPosition(Vector3(0, 0.03f + (float)ring * 0.002f, 0));
+            disc->SetScale(Vector3(9.0f - (float)ring * 3.0f, 0.03f, 9.0f - (float)ring * 3.0f));
+            StaticModel* dm = disc->CreateComponent<StaticModel>();
+            dm->SetModel(cylModel_ ? cylModel_ : boxModel_);
+            dm->SetMaterial(ring == 0 ? neonCyan.Get() : neonPink.Get());
+            dm->SetCastShadows(false);
         }
-        
-        // Центральная платформа
-        Node* platformNode = scene_->CreateChild("Platform");
-        platformNode->SetPosition(Vector3(0, 0.5f, 0));
-        platformNode->SetScale(Vector3(10.0f, 1.0f, 10.0f));
-        
-        StaticModel* platformModel = platformNode->CreateComponent<StaticModel>();
-        platformModel->SetModel(boxModel_);
-        platformModel->SetMaterial(stoneMaterial_);
-        
-        AddBoxCollider(Vector3(0, 0.5f, 0), Vector3(5.0f, 0.5f, 5.0f)); // Lite-платформа
-        
-        // Пандусы
-        CreateRamp(Vector3(8.0f, 0.5f, 0), Vector3(0, 0, 1));
-        CreateRamp(Vector3(-8.0f, 0.5f, 0), Vector3(0, 0, -1));
+        // Колонны-укрытия: 4 штуки по диагоналям, с неоновым поясом
+        for (int i = 0; i < 4; ++i) {
+            float ang = 45.0f + (float)i * 90.0f;
+            float rad = ang * 0.0174533f;
+            Vector3 cp(cosf(rad) * 11.0f, 3.5f, sinf(rad) * 11.0f);
+            block(cp, Vector3(1.6f, 7.0f, 1.6f), hdPanel_ ? hdPanel_ : metalMaterial_);
+            block(cp + Vector3(0, 2.4f, 0), Vector3(1.9f, 0.14f, 1.9f),
+                  (i % 2) ? neonPink.Get() : neonCyan.Get(), false);
+            block(cp + Vector3(0, -2.4f, 0), Vector3(1.9f, 0.14f, 1.9f), neonCyan.Get(), false);
+        }
+
+        // ------------------------- кольцо укрытий -----------------------------
+        // Четыре длинных бетонных блока в 24 м от центра (разрывают линии огня)
+        block(Vector3(0, 1.2f,  24.0f), Vector3(16.0f, 2.4f, 1.4f), metalMaterial_);
+        block(Vector3(0, 1.2f, -24.0f), Vector3(16.0f, 2.4f, 1.4f), metalMaterial_);
+        block(Vector3( 24.0f, 1.2f, 0), Vector3(1.4f, 2.4f, 16.0f), metalMaterial_);
+        block(Vector3(-24.0f, 1.2f, 0), Vector3(1.4f, 2.4f, 16.0f), metalMaterial_);
+
+        // Угловые бункеры (Г-образные стены) — «точки» для перестрелок
+        const Vector3 bunkers[] = { Vector3(46, 0, 46), Vector3(-46, 0, 46),
+                                    Vector3(46, 0, -46), Vector3(-46, 0, -46) };
+        for (const auto& bpos : bunkers) {
+            float sx = (bpos.x_ > 0) ? 1.0f : -1.0f;
+            float sz = (bpos.z_ > 0) ? 1.0f : -1.0f;
+            block(Vector3(bpos.x_, 1.4f, bpos.z_), Vector3(10.0f, 2.8f, 1.2f), stoneMaterial_);
+            block(Vector3(bpos.x_ + sx * 4.4f, 1.4f, bpos.z_ + sz * 4.4f), Vector3(1.2f, 2.8f, 10.0f), stoneMaterial_);
+        }
+
+        // Бочки по кольцу r=32 (между укрытиями) — металл + светящийся обод
+        for (int i = 0; i < 8; ++i) {
+            float ang = (float)i * 45.0f + 22.5f;
+            float rad = ang * 0.0174533f;
+            Vector3 bp(cosf(rad) * 32.0f, 0.8f, sinf(rad) * 32.0f);
+            Node* barrel = scene_->CreateChild("Barrel");
+            barrel->SetPosition(bp);
+            barrel->SetScale(Vector3(1.0f, 1.6f, 1.0f));
+            StaticModel* bm = barrel->CreateComponent<StaticModel>();
+            bm->SetModel(cylModel_ ? cylModel_ : boxModel_);
+            bm->SetMaterial(metalMaterial_);
+            bm->SetCastShadows(true);
+            block(bp + Vector3(0, 0.78f, 0), Vector3(0.86f, 0.10f, 0.86f),
+                  (i % 2) ? neonPink.Get() : neonCyan.Get(), false);
+            AddSphereCollider(bp, 0.55f);
+        }
+
+        // Ящики-штабеля между укрытиями
+        const Vector3 crates[] = {
+            Vector3(38, 0, 14), Vector3(38, 0, -14), Vector3(-38, 0, 14), Vector3(-38, 0, -14),
+            Vector3(14, 0, 38), Vector3(14, 0, -38), Vector3(-14, 0, 38), Vector3(-14, 0, -38)
+        };
+        int crateIdx = 0;
+        for (const auto& cpos : crates) {
+            block(cpos + Vector3(0, 0.8f, 0), Vector3(1.6f, 1.6f, 1.6f), hdCrate_ ? hdCrate_ : stoneMaterial_);
+            if (crateIdx % 2 == 0) // второй ящик сверху — «пирамидка»
+                block(cpos + Vector3(0.3f, 2.3f, 0.2f), Vector3(1.2f, 1.2f, 1.2f), hdCrate_ ? hdCrate_ : stoneMaterial_);
+            ++crateIdx;
+        }
+
+        (void)half;
     }
-    
+
+    // Структуры декора: технический балкон на стене, трубы, голограмма, площадки спавна
+    void CreateStructures() {
+        SharedPtr<Material> neonCyan = MakeTinted(nullptr, nullptr, Color(40, 220, 255));
+        SharedPtr<Material> neonPink = MakeTinted(nullptr, nullptr, Color(255, 70, 140));
+
+        auto box = [this](Node* parent, const Vector3& pos, const Vector3& size, Material* mat) {
+            Node* n = parent ? parent->CreateChild("Part") : scene_->CreateChild("Part");
+            n->SetPosition(pos);
+            n->SetScale(size);
+            StaticModel* sm = n->CreateComponent<StaticModel>();
+            sm->SetModel(boxModel_);
+            sm->SetMaterial(mat ? mat : fallbackMat_);
+            sm->SetCastShadows(false);
+            return n;
+        };
+
+        // --- Технический балкон вдоль северной стены (высота 4.5 м) ---
+        Node* catwalk = scene_->CreateChild("Catwalk");
+        catwalk->SetPosition(Vector3(0, 0, -90.0f));
+        for (int i = 0; i < 10; ++i) {
+            box(catwalk, Vector3(-81.0f + (float)i * 18.0f, 4.5f, 0), Vector3(17.0f, 0.3f, 6.0f), hdPanel_ ? hdPanel_ : metalMaterial_);
+            // перила
+            box(catwalk, Vector3(-81.0f + (float)i * 18.0f, 5.5f, 2.9f), Vector3(17.0f, 0.1f, 0.1f), metalMaterial_);
+            box(catwalk, Vector3(-81.0f + (float)i * 18.0f, 5.5f, -2.9f), Vector3(17.0f, 0.1f, 0.1f), metalMaterial_);
+            // стойки перил
+            for (int p = -1; p <= 1; ++p)
+                box(catwalk, Vector3(-81.0f + (float)i * 18.0f + (float)p * 8.0f, 5.0f, 2.9f), Vector3(0.1f, 1.0f, 0.1f), metalMaterial_);
+            // подсветка под балконом
+            box(catwalk, Vector3(-81.0f + (float)i * 18.0f, 4.3f, 2.9f), Vector3(14.0f, 0.05f, 0.12f),
+                (i % 2) ? neonCyan.Get() : neonPink.Get());
+        }
+
+        // --- Трубы по стенам: три уровня, два цвета ---
+        const float wallX[] = { -94.0f, 94.0f };
+        for (float wx : wallX) {
+            for (int lvl = 0; lvl < 3; ++lvl) {
+                Node* pipe = scene_->CreateChild("Pipe");
+                pipe->SetPosition(Vector3(wx, 2.0f + (float)lvl * 1.2f, 0));
+                pipe->SetScale(Vector3(0.35f, 180.0f, 0.35f));
+                // цилиндр по умолчанию вертикальный: кладём на бок
+                pipe->SetRotation(Quaternion(90.0f, Vector3(1, 0, 0)));
+                StaticModel* pm = pipe->CreateComponent<StaticModel>();
+                pm->SetModel(cylModel_ ? cylModel_ : boxModel_);
+                pm->SetMaterial((lvl % 2) ? metalMaterial_ : (hdPanel_ ? hdPanel_ : metalMaterial_));
+                pm->SetCastShadows(false);
+            }
+        }
+
+        // --- Голограмма над центром: ядро + 3 вращающихся кольца ---
+        Node* holo = scene_->CreateChild("Holo");
+        holo->SetPosition(Vector3(0, 7.5f, 0));
+        {
+            Node* core = holo->CreateChild("Core");
+            core->SetScale(Vector3::ONE * 1.6f);
+            StaticModel* cm = core->CreateComponent<StaticModel>();
+            cm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
+            cm->SetMaterial(neonCyan.Get());
+            cm->SetCastShadows(false);
+            AnimatedDeco d; d.node_ = SharedPtr<Node>(core); d.pos_ = Vector3(0, 7.5f, 0);
+            d.spin_ = 35.0f; d.bobAmp_ = 0.25f; d.bobSpeed_ = 1.2f; d.phase_ = 0.0f;
+            animatedDeco_.Push(d);
+        }
+        for (int ring = 0; ring < 3; ++ring) {
+            Node* rn = holo->CreateChild("Ring");
+            float radius = 2.6f + (float)ring * 1.1f;
+            rn->SetRotation(Quaternion((float)ring * 35.0f, Vector3(1, 0, 0)));
+            for (int seg = 0; seg < 8; ++seg) {
+                float ang = (float)seg * 45.0f;
+                float rad = ang * 0.0174533f;
+                box(rn, Vector3(cosf(rad) * radius, 0, sinf(rad) * radius), Vector3(0.8f, 0.10f, 0.10f),
+                    (ring % 2) ? neonPink.Get() : neonCyan.Get());
+            }
+            AnimatedDeco d; d.node_ = SharedPtr<Node>(rn); d.pos_ = Vector3(0, 7.5f, 0);
+            d.spin_ = (ring % 2) ? -22.0f : 28.0f; d.bobAmp_ = 0.0f; d.bobSpeed_ = 1.0f; d.phase_ = (float)ring;
+            animatedDeco_.Push(d);
+        }
+
+        // --- Опоры под мишени тира (иначе они висят в воздухе после сноса старых колонн) ---
+        const float tOff = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f * 0.6f;
+        const Vector3 towers[4] = { Vector3(tOff, 0, tOff), Vector3(-tOff, 0, tOff),
+                                    Vector3(tOff, 0, -tOff), Vector3(-tOff, 0, -tOff) };
+        for (int i = 0; i < 4; ++i) {
+            box(nullptr, towers[i] + Vector3(0, 1.5f, 0), Vector3(1.4f, 3.0f, 1.4f),
+                hdPanel_ ? hdPanel_ : metalMaterial_);
+            box(nullptr, towers[i] + Vector3(0, 3.05f, 0), Vector3(1.8f, 0.12f, 1.8f), metalMaterial_);
+            AddBoxCollider(towers[i] + Vector3(0, 1.5f, 0), Vector3(0.7f, 1.5f, 0.7f));
+        }
+        // Постамент под центральную мишень
+        box(nullptr, Vector3(0, 1.5f, -15.0f), Vector3(0.9f, 3.0f, 0.9f), metalMaterial_);
+        AddBoxCollider(Vector3(0, 1.5f, -15.0f), Vector3(0.45f, 1.5f, 0.45f));
+
+        // --- Площадки спавна: светящиеся диски по диагоналям ---
+        for (int i = 0; i < 4; ++i) {
+            float ang = 45.0f + (float)i * 90.0f;
+            float rad = ang * 0.0174533f;
+            Vector3 p(cosf(rad) * 62.0f, 0.06f, sinf(rad) * 62.0f);
+            Node* pad = scene_->CreateChild("SpawnPad");
+            pad->SetPosition(p);
+            pad->SetScale(Vector3(4.0f, 0.06f, 4.0f));
+            StaticModel* pm = pad->CreateComponent<StaticModel>();
+            pm->SetModel(cylModel_ ? cylModel_ : boxModel_);
+            pm->SetMaterial((i % 2) ? neonPink.Get() : neonCyan.Get());
+            pm->SetCastShadows(false);
+            AnimatedDeco d; d.node_ = SharedPtr<Node>(pad); d.pos_ = p;
+            d.spin_ = 12.0f; d.bobAmp_ = 0.0f; d.bobSpeed_ = 1.0f; d.phase_ = (float)i;
+            animatedDeco_.Push(d);
+        }
+    }
+
+    // Вращение/покачивание декора + пульсация неонового света
+    void UpdateAnimatedDecor(float dt) {
+        for (unsigned i = 0; i < animatedDeco_.Size(); ++i) {
+            AnimatedDeco& d = animatedDeco_[i];
+            Node* n = d.node_.Get();
+            if (!n) continue;
+            n->SetRotation(n->GetRotation() * Quaternion(d.spin_ * dt, Vector3(0, 1, 0)));
+            if (d.bobAmp_ > 0.0f)
+                n->SetPosition(Vector3(d.pos_.x_, d.pos_.y_ + sinf(timeAcc_ * d.bobSpeed_ + d.phase_) * d.bobAmp_, d.pos_.z_));
+        }
+        // Пульсация двух неоновых источников — арена «дышит»
+        float pulse = 0.55f + 0.45f * (0.5f + 0.5f * sinf(timeAcc_ * 1.6f));
+        if (neonLightA_) neonLightA_->SetBrightness(1.4f * pulse);
+        if (neonLightB_) neonLightB_->SetBrightness(1.4f * (1.0f - 0.6f * pulse));
+    }
+
     void CreateRamp(const Vector3& position, const Vector3& direction) {
         Node* rampNode = scene_->CreateChild("Ramp");
         rampNode->SetPosition(position);
@@ -1679,56 +1906,77 @@ private:
     }
     
     void CreateLighting() {
-        // Основной направленный свет (солнце)
+        const float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
+
+        // --- Ключевой свет: «золотой час», длинные тени по арене ---
         Node* sunNode = scene_->CreateChild("Sun");
-        sunNode->SetPosition(Vector3(0, 20, 10));
-        sunNode->SetDirection(Vector3(-0.55f, -0.62f, -0.56f).Normalized());
-        
+        sunNode->SetPosition(Vector3(0, 30, 20));
+        sunNode->SetDirection(Vector3(-0.58f, -0.50f, -0.52f).Normalized());
         Light* sunLight = sunNode->CreateComponent<Light>();
         sunLight->SetLightType(LIGHT_DIRECTIONAL);
-        sunLight->SetColor(Color(1.0f, 0.92f, 0.74f, 1.0f)); // «золотой час»: тёплый свет, длинные тени
-        sunLight->SetBrightness(0.9f);
+        sunLight->SetColor(Color(1.0f, 0.87f, 0.66f, 1.0f));
+        sunLight->SetBrightness(1.05f);
         sunLight->SetCastShadows(true);
-        sunLight->SetShadowDistance(140.0f);   // 4K-карта покрывает 140 м вокруг игрока — края арены в дымке
-        // SetNumCascadeShadows нет в этой сборке — тени одним каскадом, радиус задан выше через SetShadowDistance
-        // SetShadowFocus нет в этой сборке
-        // GetShadowBias() возвращает копию — правка не применяется, оставляем дефолтный bias
-        // Точечные источники света
-        float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
-        
-        // Свет над платформой
-        Node* pointLight1 = scene_->CreateChild("PointLight1");
-        pointLight1->SetPosition(Vector3(0, 8, 0));
-        
-        Light* pl1 = pointLight1->CreateComponent<Light>();
-        pl1->SetLightType(LIGHT_POINT);
-        pl1->SetColor(Color(0.8f, 0.85f, 1.0f, 1.0f));
-        pl1->SetBrightness(1.25f);
-        pl1->SetRange(30.0f);
-        pl1->SetCastShadows(true);
-        pl1->SetShadowDistance(35.0f);
-        
-        // Дополнительные точечные светильники по углам
-        Vector3 lightPositions[] = {
-            Vector3(arenaSize * 0.5f, 6, arenaSize * 0.5f),
-            Vector3(-arenaSize * 0.5f, 6, arenaSize * 0.5f),
-            Vector3(arenaSize * 0.5f, 6, -arenaSize * 0.5f),
-            Vector3(-arenaSize * 0.5f, 6, -arenaSize * 0.5f)
+        sunLight->SetShadowDistance(150.0f);
+        // SetNumCascadeShadows/SetShadowFocus/GetShadowBias в этой сборке отсутствуют
+
+        // --- Заполняющий «лунный» свет с противоположной стороны: убирает чёрные провалы ---
+        Node* moonNode = scene_->CreateChild("MoonFill");
+        moonNode->SetDirection(Vector3(0.6f, -0.35f, 0.55f).Normalized());
+        Light* moon = moonNode->CreateComponent<Light>();
+        moon->SetLightType(LIGHT_DIRECTIONAL);
+        moon->SetColor(Color(0.45f, 0.60f, 1.00f, 1.0f));
+        moon->SetBrightness(0.38f);
+        moon->SetCastShadows(false);
+
+        // --- Прожектор над центральным подиумом ---
+        Node* spotNode = scene_->CreateChild("PlatformSpot");
+        spotNode->SetPosition(Vector3(0, 22, 0));
+        spotNode->SetDirection(Vector3(0.0f, -1.0f, 0.0f));
+        Light* spot = spotNode->CreateComponent<Light>();
+        spot->SetLightType(LIGHT_SPOT);
+        spot->SetColor(Color(0.75f, 0.92f, 1.0f, 1.0f));
+        spot->SetBrightness(1.6f);
+        spot->SetRange(40.0f);
+        spot->SetFov(52.0f);
+        spot->SetCastShadows(false);
+
+        // --- Четыре заливающих источника по углам арены ---
+        const Vector3 floodPos[] = {
+            Vector3( arenaSize * 0.55f, 9.0f,  arenaSize * 0.55f),
+            Vector3(-arenaSize * 0.55f, 9.0f,  arenaSize * 0.55f),
+            Vector3( arenaSize * 0.55f, 9.0f, -arenaSize * 0.55f),
+            Vector3(-arenaSize * 0.55f, 9.0f, -arenaSize * 0.55f)
         };
-        
         for (int i = 0; i < 4; ++i) {
-            Node* lightNode = scene_->CreateChild("PointLight" + String(i + 2));
-            lightNode->SetPosition(lightPositions[i]);
-            
-            Light* pl = lightNode->CreateComponent<Light>();
-            pl->SetLightType(LIGHT_POINT);
-            pl->SetColor(Color(1.0f, 0.9f, 0.7f, 1.0f));
-            pl->SetBrightness(1.15f);
-            pl->SetRange(30.0f);
-            pl->SetCastShadows(false); // экономия: дорогие кубические тени только у солнца и центра
+            Node* ln = scene_->CreateChild("Flood");
+            ln->SetPosition(floodPos[i]);
+            Light* l = ln->CreateComponent<Light>();
+            l->SetLightType(LIGHT_POINT);
+            l->SetColor(Color(1.0f, 0.88f, 0.72f, 1.0f));
+            l->SetBrightness(1.0f);
+            l->SetRange(26.0f);
+            l->SetCastShadows(false);
         }
-        
-        // ambient light
+
+        // --- Пульсирующий неон: холодный и тёплый, по бокам от подиума ---
+        Node* neonA = scene_->CreateChild("NeonA");
+        neonA->SetPosition(Vector3(-12.0f, 3.0f, 0.0f));
+        neonLightA_ = neonA->CreateComponent<Light>();
+        neonLightA_->SetLightType(LIGHT_POINT);
+        neonLightA_->SetColor(Color(0.25f, 0.85f, 1.0f, 1.0f));
+        neonLightA_->SetRange(20.0f);
+        neonLightA_->SetBrightness(1.4f);
+        neonLightA_->SetCastShadows(false);
+
+        Node* neonB = scene_->CreateChild("NeonB");
+        neonB->SetPosition(Vector3(12.0f, 3.0f, 0.0f));
+        neonLightB_ = neonB->CreateComponent<Light>();
+        neonLightB_->SetLightType(LIGHT_POINT);
+        neonLightB_->SetColor(Color(1.0f, 0.35f, 0.65f, 1.0f));
+        neonLightB_->SetRange(20.0f);
+        neonLightB_->SetBrightness(1.0f);
+        neonLightB_->SetCastShadows(false);
     }
 
     // =========================================================================
@@ -1768,6 +2016,19 @@ private:
         // Модель оружия (используем коробку как временную модель)
         weaponModelNode_ = weaponNode_->CreateChild("WeaponModel");
         BuildWeaponModel(currentWeapon_);
+
+        // Куриные «руки»: оружие держат крылья (игра-то про кур)
+        if (!featherMat_) featherMat_ = MakeTinted(nullptr, nullptr, Color(252, 250, 245));
+        Material* wingMat = featherMat_ ? featherMat_.Get() : fallbackMat_;
+        Model* sph = sphereModel_ ? sphereModel_ : boxModel_;
+        wingHandL_ = AddPart(weaponNode_, Vector3(-0.10f, -0.13f, 0.02f), Vector3(0.16f, 0.34f, 0.42f), wingMat, sph);
+        wingHandR_ = AddPart(weaponNode_, Vector3( 0.10f, -0.13f, 0.02f), Vector3(0.16f, 0.34f, 0.42f), wingMat, sph);
+        // Перья на крыле: три «пальца», которыми курица обхватывает рукоять
+        for (int i = 0; i < 3; ++i) {
+            float z = 0.06f + (float)i * 0.09f;
+            AddPart(wingHandL_, Vector3(0.35f, 0.10f, z), Vector3(0.30f, 0.16f, 0.16f), wingMat, sph);
+            AddPart(wingHandR_, Vector3(-0.35f, 0.10f, z), Vector3(0.30f, 0.16f, 0.16f), wingMat, sph);
+        }
         
         // Дуло оружия (для визуализации выстрела)
         Node* muzzleNode = weaponNode_->CreateChild("Muzzle");
@@ -1791,15 +2052,128 @@ private:
     // Процедурные модели оружия и экипировка
     // =========================================================================
 
-    Node* AddPart(Node* parent, const Vector3& pos, const Vector3& scale, Material* mat, Model* model = nullptr) {
+    Node* AddPart(Node* parent, const Vector3& pos, const Vector3& scale, Material* mat,
+                  Model* model = nullptr, bool castShadows = false) {
         Node* n = parent->CreateChild("Part");
         n->SetPosition(pos);
         n->SetScale(scale);
         StaticModel* sm = n->CreateComponent<StaticModel>();
         sm->SetModel(model ? model : boxModel_);
         sm->SetMaterial(mat ? mat : fallbackMat_);
-        sm->SetCastShadows(false);
+        sm->SetCastShadows(castShadows);
         return n;
+    }
+
+    // =========================================================================
+    // Куры: единственный «персонаж» игры. Собирается из примитивов движка,
+    // поэтому не требует внешних ассетов. Возвращает узел головы (анимация).
+    // =========================================================================
+    static constexpr float CH_HEAD_Y = 1.62f;   // базовая высота головы (локально)
+    static constexpr float CH_HEAD_Z = 0.58f;
+
+    Node* BuildChicken(Node* root, EnemyType type) {
+        Model* sph = sphereModel_ ? sphereModel_ : boxModel_;
+        Model* cone = coneModel_ ? coneModel_ : boxModel_;
+        Model* cyl = cylModel_ ? cylModel_ : boxModel_;
+
+        Material* feathers = chickWhite_.Get();
+        Material* comb = combMat_.Get();
+        Material* beak = beakMat_.Get();
+        Material* leg = legMat_.Get();
+        float combScale = 1.0f;
+        switch (type) {
+            case E_CHARGER: feathers = chickBrown_.Get(); combScale = 1.45f; break;
+            case E_SHOOTER: feathers = chickBlack_.Get(); combScale = 0.8f; break;
+            case E_BOSS:    feathers = chickBoss_.Get();  combScale = 2.0f; break;
+            default: break;
+        }
+        if (!feathers) feathers = fallbackMat_;
+
+        // --- туловище: яйцевидное, чуть наклонено вперёд
+        Node* body = root->CreateChild("Body");
+        body->SetPosition(Vector3(0, 0.86f, 0.02f));
+        body->SetScale(Vector3(1.15f, 1.0f, 1.42f));
+        body->SetRotation(Quaternion(-8.0f, Vector3(1, 0, 0)));
+        StaticModel* bsm = body->CreateComponent<StaticModel>();
+        bsm->SetModel(sph); bsm->SetMaterial(feathers); bsm->SetCastShadows(true);
+
+        // --- ноги: голень + три пальца, анимируются в UpdateEnemies
+        for (int i = 0; i < 2; ++i) {
+            float sx = (i == 0) ? -0.24f : 0.24f;
+            Node* hip = root->CreateChild(i == 0 ? "HipL" : "HipR");
+            hip->SetPosition(Vector3(sx, 0.44f, 0.02f));
+            AddPart(hip, Vector3(0, -0.20f, 0), Vector3(0.11f, 0.42f, 0.11f), leg, cyl, true);
+            for (int t = 0; t < 3; ++t) {
+                float toeAng = (float)(t - 1) * 26.0f;
+                Node* toe = AddPart(hip, Vector3(0, -0.40f, 0.08f), Vector3(0.05f, 0.035f, 0.24f), leg);
+                toe->SetRotation(Quaternion(toeAng, Vector3(0, 1, 0)));
+            }
+        }
+
+        // --- крылья: сплюснутые сферы по бокам
+        for (int i = 0; i < 2; ++i) {
+            float sx = (i == 0) ? -0.60f : 0.60f;
+            Node* wing = AddPart(root, Vector3(sx, 0.92f, 0.02f), Vector3(0.30f, 0.78f, 1.05f), feathers, sph, true);
+            wing->SetName(i == 0 ? "WingL" : "WingR");
+            wing->SetRotation(Quaternion((i == 0 ? 18.0f : -18.0f), Vector3(0, 0, 1)));
+        }
+
+        // --- хвост: веер из трёх конусов
+        Node* tail = root->CreateChild("Tail");
+        tail->SetPosition(Vector3(0, 1.05f, -0.68f));
+        for (int t = 0; t < 3; ++t) {
+            Node* featherNode = AddPart(tail, Vector3((float)(t - 1) * 0.11f, 0, 0),
+                                        Vector3(0.13f, 0.5f, 0.13f), feathers, cone);
+            // конус «смотрит» вверх: поворачиваем назад и разводим веером
+            featherNode->SetRotation(Quaternion(-118.0f + (float)(t - 1) * 14.0f, Vector3(1, 0, 0)) *
+                                     Quaternion((float)(t - 1) * 16.0f, Vector3(0, 0, 1)));
+        }
+        if (type == E_BOSS) { // у индюка хвост пышнее
+            for (int t = 0; t < 4; ++t) {
+                Node* extra = AddPart(tail, Vector3((float)(t - 2) * 0.16f + 0.08f, 0.05f, 0.02f),
+                                      Vector3(0.14f, 0.62f, 0.14f), feathers, cone);
+                extra->SetRotation(Quaternion(-112.0f + (float)(t - 2) * 10.0f, Vector3(1, 0, 0)) *
+                                   Quaternion((float)(t - 2) * 20.0f, Vector3(0, 0, 1)));
+            }
+        }
+
+        // --- шея
+        Node* neck = AddPart(root, Vector3(0, 1.28f, 0.34f), Vector3(0.24f, 0.40f, 0.24f), feathers, cyl, true);
+        neck->SetRotation(Quaternion(-22.0f, Vector3(1, 0, 0)));
+
+        // --- голова + гребень + бородка + клюв
+        Node* head = root->CreateChild("Head");
+        head->SetPosition(Vector3(0, CH_HEAD_Y, CH_HEAD_Z));
+        Node* skull = AddPart(head, Vector3(0, 0, 0), Vector3(0.56f, 0.55f, 0.60f), feathers, sph, true);
+
+        for (int cIdx = 0; cIdx < 3; ++cIdx) {  // гребень «короной»
+            Node* crest = AddPart(head, Vector3(0, 0.28f * combScale - 0.03f, -0.10f + (float)cIdx * 0.13f),
+                                  Vector3(0.11f * combScale, 0.20f * combScale, 0.11f * combScale), comb, cone);
+            crest->SetRotation(Quaternion((float)(cIdx - 1) * 12.0f, Vector3(1, 0, 0)));
+        }
+        AddPart(head, Vector3(0, -0.16f, 0.22f), Vector3(0.13f, 0.17f, 0.11f), comb, sph); // бородка
+
+        Node* beakUpper = AddPart(head, Vector3(0, 0.02f, 0.34f), Vector3(0.17f, 0.26f, 0.17f), beak, cone);
+        beakUpper->SetRotation(Quaternion(90.0f, Vector3(1, 0, 0)));  // конус вперёд (+Z)
+
+        // --- глаза: те же glow-материалы, что были у роботов
+        Material* em = (type == E_CHARGER) ? eyeMatCharger_.Get()
+                      : (type == E_SHOOTER) ? eyeMatShooter_.Get()
+                      : (type == E_BOSS) ? eyeMatBoss_.Get() : eyeMatMelee_.Get();
+        if (!em) em = comb;
+        for (int i = 0; i < 2; ++i) {
+            float sx = (i == 0) ? -0.17f : 0.17f;
+            Node* eye = head->CreateChild(i == 0 ? "EyeL" : "EyeR");
+            eye->SetPosition(Vector3(sx, 0.08f, 0.24f));
+            eye->SetScale(Vector3(0.14f, 0.14f, 0.10f));
+            StaticModel* esm = eye->CreateComponent<StaticModel>();
+            esm->SetModel(sph); esm->SetMaterial(em); esm->SetCastShadows(false);
+            // зрачок: тёмная точка, из-за неё взгляд становится «злым»
+            AddPart(eye, Vector3(0, 0, 0.36f), Vector3(0.42f, 0.42f, 0.30f),
+                    weaponDarkMat_ ? weaponDarkMat_.Get() : comb, sph);
+        }
+        (void)skull;
+        return head;
     }
 
     void BuildWeaponModel(int type) {
@@ -2202,6 +2576,27 @@ private:
         weaponNameText_->SetColor(Color(1.0f, 0.85f, 0.3f, 1.0f));
         weaponNameText_->SetText(String(WEAPON_DEFS[currentWeapon_].name) + " | " + String(SKIN_DEFS[currentSkin_].name));
 
+        // --- Полоски HP и патронов: читаются быстрее, чем цифры ---
+        hudHpBarBg_ = root->CreateChild<BorderImage>("HpHpBarBg");
+        hudHpBarBg_->SetSize(HUD_BAR_W, 10);
+        hudHpBarBg_->SetPosition(20, screenHeight - 32);
+        hudHpBarBg_->SetColor(Color(0.05f, 0.07f, 0.1f, 0.65f));
+
+        hudHpBarFill_ = root->CreateChild<BorderImage>("HpBarFill");
+        hudHpBarFill_->SetSize(HUD_BAR_W, 10);
+        hudHpBarFill_->SetPosition(20, screenHeight - 32);
+        hudHpBarFill_->SetColor(Color(0.25f, 0.95f, 0.35f, 1.0f));
+
+        hudAmmoBarBg_ = root->CreateChild<BorderImage>("AmmoBarBg");
+        hudAmmoBarBg_->SetSize(HUD_BAR_W, 10);
+        hudAmmoBarBg_->SetPosition(screenWidth - 20 - HUD_BAR_W, screenHeight - 32);
+        hudAmmoBarBg_->SetColor(Color(0.05f, 0.07f, 0.1f, 0.65f));
+
+        hudAmmoBarFill_ = root->CreateChild<BorderImage>("AmmoBarFill");
+        hudAmmoBarFill_->SetSize(HUD_BAR_W, 10);
+        hudAmmoBarFill_->SetPosition(screenWidth - 20 - HUD_BAR_W, screenHeight - 32);
+        hudAmmoBarFill_->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
+
         // Подсказка управления (левый верх) — храним в helpText_, чтобы прятать вместе с HUD
         helpText_ = root->CreateChild<Text>();
         helpText_->SetFont(font_, 14);
@@ -2225,6 +2620,14 @@ private:
                 ammoText_->SetColor(Color(1.0f, 1.0f, 0.0f, 1.0f));
             }
         }
+        if (hudAmmoBarFill_) {
+            float ratio = WEAPON_DEFS[currentWeapon_].magSize > 0
+                        ? Clamp((float)weapon_.currentAmmo_ / (float)WEAPON_DEFS[currentWeapon_].magSize, 0.0f, 1.0f)
+                        : 0.0f;
+            hudAmmoBarFill_->SetSize(HUD_BAR_W * ratio, 10);
+            hudAmmoBarFill_->SetColor(ratio < 0.25f ? Color(1.0f, 0.25f, 0.2f, 1.0f)
+                                                    : Color(1.0f, 0.85f, 0.25f, 1.0f));
+        }
     }
     
     void UpdateHealthDisplay() {
@@ -2241,6 +2644,13 @@ private:
             } else {
                 healthText_->SetColor(Color(1.0f, 0.0f, 0.0f, 1.0f));
             }
+        }
+        if (hudHpBarFill_) {
+            float ratio = player_.maxHealth_ > 0.0f ? Clamp(player_.health_ / player_.maxHealth_, 0.0f, 1.0f) : 0.0f;
+            hudHpBarFill_->SetSize(HUD_BAR_W * ratio, 10);
+            hudHpBarFill_->SetColor(ratio > 0.6f ? Color(0.25f, 0.95f, 0.35f, 1.0f)
+                                   : ratio > 0.3f ? Color(1.0f, 0.85f, 0.2f, 1.0f)
+                                                  : Color(1.0f, 0.25f, 0.2f, 1.0f));
         }
     }
     
@@ -2388,6 +2798,7 @@ private:
         gameOverTitle_ = nullptr; gameOverHint_ = nullptr;
         goBasePosSet_ = false;
         hudPanelBg_ = nullptr; helpText_ = nullptr; weaponNameText_ = nullptr;
+        hudHpBarBg_ = nullptr; hudHpBarFill_ = nullptr; hudAmmoBarBg_ = nullptr; hudAmmoBarFill_ = nullptr;
         mainMenuPanel_ = nullptr; mainMenuItems_.Clear();
         menuTitle_ = nullptr; menuSub_ = nullptr; menuHint_ = nullptr;
         menuPlate_ = nullptr; menuAccentBar_ = nullptr;
@@ -2557,6 +2968,8 @@ private:
         UpdateEnemyProjectiles(dt);
         UpdateMovingTargetsLite(dt);
         UpdateDebrisLite(dt);
+        UpdateAnimatedDecor(dt);
+        UpdateShockwaves(dt);
         UpdatePickups(dt);
 
         // (Раньше здесь камера «крутилась» в меню — из-за этого игра стартовала
@@ -2989,6 +3402,14 @@ private:
             Vector3 currentPos = weaponNode_->GetPosition();
             weaponNode_->SetPosition(Lerp(currentPos, WeaponBasePose(), Min(1.0f, 10.0f * dt)));
         }
+
+        // Крылья: при перезарядке «подхватывают» магазин, иначе мелко подрагивают
+        if (wingHandL_ && wingHandR_) {
+            float breathe = 8.0f * sinf(timeAcc_ * 2.2f);
+            float reload = weapon_.isReloading_ ? 1.0f : 0.0f;
+            wingHandL_->SetRotation(Quaternion( breathe + 30.0f * reload, Vector3(0, 0, 1)));
+            wingHandR_->SetRotation(Quaternion(-breathe - 30.0f * reload, Vector3(0, 0, 1)));
+        }
     }
 
     Vector3 WeaponBasePose() {
@@ -3047,6 +3468,7 @@ private:
         // Визуальные эффекты выстрела
         PlayMuzzleFlash();
         PlayShootSound();
+        SpawnShellCasing();   // латунная гильза вылетает из оружия
         
         // Дробины дробовика — отдельными лучами
         const WeaponDef& wdef = WEAPON_DEFS[currentWeapon_];
@@ -3217,16 +3639,70 @@ private:
         }
     }
     
+    // Пулевое отверстие: тёмный плоский «пятак», развёрнутый по нормали поверхности.
+    // DecalSet в этой сборке нет, поэтому это тонкий бокс с TTL и лимитом количества.
+    void CreateBulletDecal(const Vector3& position, const Vector3& normal) {
+        if (!decalMat_) decalMat_ = MakeTinted(nullptr, nullptr, Color(22, 20, 18));
+        Node* d = scene_->CreateChild("BulletHole");
+        d->SetPosition(position + normal * 0.012f);
+        d->SetScale(Vector3(0.20f, 0.20f, 0.02f));
+        Vector3 n = normal.LengthSquared() > 0.001f ? normal.Normalized() : Vector3::UP;
+        d->LookAt(position + n * 2.0f);   // тот же приём, что у эффекта попадания
+        StaticModel* sm = d->CreateComponent<StaticModel>();
+        sm->SetModel(boxModel_);
+        sm->SetMaterial(decalMat_.Get());
+        sm->SetCastShadows(false);
+        decals_.Push(SharedPtr<Node>(d));
+        if (decals_.Size() > 60) {
+            Node* oldest = decals_[0];
+            if (oldest) oldest->Remove();
+            decals_.Erase(0);
+        }
+        PendingRemove pr; pr.node_ = d; pr.ttl_ = 12.0f; pendingRemoves_.Push(pr);
+    }
+
+    // Ударная волна: кольцо, которое расширяется и исчезает (см. UpdateShockwaves)
+    void CreateShockwave(const Vector3& position) {
+        if (!shockMat_) shockMat_ = MakeTinted(nullptr, nullptr, Color(255, 205, 130));
+        Node* root = scene_->CreateChild("Shockwave");
+        root->SetPosition(Vector3(position.x_, 0.15f, position.z_));
+        for (int i = 0; i < 16; ++i) {
+            float ang = (float)i * 22.5f;
+            float rad = ang * 0.0174533f;
+            Node* seg = AddPart(root, Vector3(cosf(rad), 0.0f, sinf(rad)), Vector3(0.42f, 0.05f, 0.16f),
+                                shockMat_.Get());
+            seg->SetRotation(Quaternion(90.0f - ang, Vector3(0, 1, 0)));
+        }
+        ShockwaveData sw; sw.node_ = SharedPtr<Node>(root); sw.ttl_ = 0.55f; sw.max_ = 0.55f;
+        shockwaves_.Push(sw);
+    }
+
+    void UpdateShockwaves(float dt) {
+        for (unsigned i = shockwaves_.Size(); i-- > 0; ) {
+            ShockwaveData& sw = shockwaves_[i];
+            Node* n = sw.node_.Get();
+            if (!n) { shockwaves_.Erase(i); continue; }
+            sw.ttl_ -= dt;
+            if (sw.ttl_ <= 0.0f) { n->Remove(); shockwaves_.Erase(i); continue; }
+            float t = 1.0f - sw.ttl_ / sw.max_;     // 0..1
+            float radius = 0.6f + t * 9.0f;          // волна разбегается до 9 м
+            n->SetScale(Vector3(radius, 1.0f, radius));
+        }
+    }
+
     void CreateImpactEffect(const Vector3& position, const Vector3& normal) {
         // Создаем узел для эффекта
         Node* effectNode = scene_->CreateChild("ImpactEffect");
         effectNode->SetPosition(position);
         effectNode->LookAt(position + normal);
-        
+
         // Эмиттер искр
         ParticleEmitter* emitter = effectNode->CreateComponent<ParticleEmitter>();
         if (sparkEffect_) emitter->SetEffect(sparkEffect_);
-        
+
+        // Отверстие от пули на поверхности (видно, куда именно попал)
+        CreateBulletDecal(position, normal);
+
         // Автоудаление через 1 секунду
         { PendingRemove pr; pr.node_ = effectNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr); }
     }
@@ -3246,9 +3722,9 @@ private:
         light->SetColor(Color(1.0f, 0.5f, 0.0f, 1.0f));
         light->SetRange(10.0f);
         
-        // Анимация затухания света
-        // (в реальной игре нужна бы анимация)
-        
+        // Ударная волна по полу (свет удаляется вместе с узлом эффекта)
+        CreateShockwave(position);
+
         { PendingRemove pr; pr.node_ = effectNode; pr.ttl_ = 2.0f; pendingRemoves_.Push(pr); }
     }
     
@@ -3302,6 +3778,28 @@ private:
     // =========================================================================
     
     float SfxGain(float base) const { return Clamp(base * sfxVolume_, 0.0f, 1.0f); }
+
+    // Гильза: летит вправо-вверх от оружия, живёт 1.6 с (физика — UpdateDebrisLite)
+    void SpawnShellCasing() {
+        if (!weaponNode_) return;
+        if (!shellMat_) shellMat_ = MakeTinted(nullptr, nullptr, Color(215, 175, 80));
+        Vector3 muzzle = weaponNode_->GetWorldPosition() + weaponNode_->GetWorldDirection() * 0.4f;
+        Node* c = scene_->CreateChild("Shell", LOCAL);
+        c->SetPosition(muzzle);
+        c->SetScale(Vector3(0.035f, 0.035f, 0.09f));
+        StaticModel* sm = c->CreateComponent<StaticModel>();
+        sm->SetModel(cylModel_ ? cylModel_ : boxModel_);
+        sm->SetMaterial(shellMat_.Get());
+        sm->SetCastShadows(false);
+        Vector3 right = weaponNode_->GetWorldRight();
+        DebrisData d;
+        d.node_ = c;
+        d.pos_ = muzzle;
+        d.vel_ = right * (2.0f + (float)(rand() % 20) / 10.0f) + Vector3(0, 2.6f, 0);
+        d.spin_ = Vector3(12.0f, 8.0f, 16.0f);
+        d.ttl_ = 1.6f;
+        debrisLite_.Push(d);
+    }
 
     void PlayShootSound() {
         if (!soundSource_) return;
@@ -4002,6 +4500,10 @@ private:
         if (weaponNameText_) weaponNameText_->SetVisible(vis);
         if (helpText_) helpText_->SetVisible(vis);
         if (hudPanelBg_) hudPanelBg_->SetVisible(vis);
+        if (hudHpBarBg_) hudHpBarBg_->SetVisible(vis);
+        if (hudHpBarFill_) hudHpBarFill_->SetVisible(vis);
+        if (hudAmmoBarBg_) hudAmmoBarBg_->SetVisible(vis);
+        if (hudAmmoBarFill_) hudAmmoBarFill_->SetVisible(vis);
         if (damageOverlay_) damageOverlay_->SetVisible(vis);
         if (reloadOverlay_) reloadOverlay_->SetVisible(vis);
         // SetOriginEnabled нет — видимость оружия управляется через SetVisible(node)
@@ -4216,61 +4718,23 @@ private:
     void SpawnEnemyRobot(const Vector3& pos, EnemyType type) {
         EnsureRobotMaterials();
         EnsureEyeMaterials();
-        const bool elite = (type == E_BOSS);
         Node* rob = scene_->CreateChild("Enemy", LOCAL);
         rob->SetPosition(pos);
         rob->SetVar("enemy", true); rob->AddTag("Enemy");
 
-        // Внешний вид по типу робота (материалы создаются один раз на тип)
-        Material* bodyMat = robotBodyMat_.Get();
-        if (type == E_CHARGER) {
-            static SharedPtr<Material> keepOrange;
-            if (!keepOrange) keepOrange = MakeTinted(nullptr, nullptr, Color(255, 130, 30));
-            bodyMat = keepOrange.Get();
-        } else if (type == E_SHOOTER) {
-            static SharedPtr<Material> keepViolet;
-            if (!keepViolet) keepViolet = MakeTinted(nullptr, nullptr, Color(160, 70, 220));
-            bodyMat = keepViolet.Get();
-        } else if (elite) {
-            static SharedPtr<Material> keepCyan;
-            if (!keepCyan) keepCyan = MakeTinted(nullptr, nullptr, Color(40, 220, 255));
-            bodyMat = keepCyan.Get();
-        }
+        // Курица вместо робота: тело/голова/крылья/хвост/лапы из примитивов.
+        // Материалы перьев выбираются по типу внутри BuildChicken.
+        BuildChicken(rob, type);
 
         // Масштаб модели: босс крупнее, стрелок чуть «суше»
-        float scale = (type == E_BOSS) ? 1.8f : (type == E_SHOOTER ? 0.9f : 1.0f);
+        float scale = (type == E_BOSS) ? 1.75f : (type == E_SHOOTER ? 0.92f : 1.0f);
         rob->SetScale(Vector3::ONE * scale);
 
-        StaticModel* torso = rob->CreateComponent<StaticModel>();
-        torso->SetModel(boxModel_);
-        torso->SetMaterial(bodyMat);
-        torso->SetCastShadows(true);
-
-        Node* head = rob->CreateChild("Head");
-        head->SetPosition(Vector3(0, 0.95f, 0));
-        head->SetScale(Vector3(0.5f, 0.45f, 0.5f));
-        StaticModel* hm = head->CreateComponent<StaticModel>();
-        hm->SetModel(boxModel_);
-        hm->SetMaterial(bodyMat);
-        hm->SetCastShadows(true);
-
-        // Материал глаз берётся из кэша по типу робота (см. EnsureEyeMaterials)
-        Material* em = (type == E_CHARGER) ? eyeMatCharger_.Get()
-                      : (type == E_SHOOTER) ? eyeMatShooter_.Get()
-                      : elite ? eyeMatBoss_.Get() : eyeMatMelee_.Get();
-        Node* eyeL = head->CreateChild("EyeL");
-        eyeL->SetPosition(Vector3(-0.12f, 0.05f, 0.26f));
-        eyeL->SetScale(Vector3(0.1f, 0.08f, 0.03f));
-        StaticModel* elm = eyeL->CreateComponent<StaticModel>();
-        elm->SetModel(boxModel_); elm->SetMaterial(em);
-        Node* eyeR = head->CreateChild("EyeR");
-        eyeR->SetPosition(Vector3(0.12f, 0.05f, 0.26f));
-        eyeR->SetScale(Vector3(0.1f, 0.08f, 0.03f));
-        StaticModel* erm = eyeR->CreateComponent<StaticModel>();
-        erm->SetModel(boxModel_); erm->SetMaterial(em);
-
         // Lite-коллайдер робота: tag 2, ptr = узел (рейкасты пуль и LOS проходят через него)
-        int colIdx = AddBoxCollider(pos + Vector3(0, 0.9f, 0), Vector3(0.4f, 0.9f, 0.3f), 2, rob);
+        // Коллайдер под габариты курицы (тело + хвост), а не «человеческого» бокса:
+        // раньше пули пролетали мимо видимого тела и не попадали по хвосту/крыльям.
+        int colIdx = AddBoxCollider(pos + Vector3(0, 0.85f, 0),
+                                    Vector3(0.58f, 0.85f, 0.62f) * scale, 2, rob);
 
         EnemyData e;
         e.node_ = rob;
@@ -4300,6 +4764,13 @@ private:
         e.burstShots_ = 0.0f;
         e.burstTimer_ = 0.0f;
         e.recoilKick_ = 0.0f;
+        e.headNode_ = rob->GetChild("Head", true);
+        e.wingLNode_ = rob->GetChild("WingL", true);
+        e.wingRNode_ = rob->GetChild("WingR", true);
+        e.legLNode_ = rob->GetChild("HipL", true);
+        e.legRNode_ = rob->GetChild("HipR", true);
+        e.tailNode_ = rob->GetChild("Tail", true);
+        e.animPhase_ = (float)(rand() % 628) / 100.0f;   // рассинхронизируем походку
         enemies_.Push(e);
     }
 
@@ -4341,7 +4812,7 @@ private:
             for (int attempt = 0; attempt < 24 && !ok; ++attempt) {
                 float ang = (float)(rand() % 360) * 0.0174533f;
                 float r = 10.0f + (float)(rand() % 30);
-                pos = Vector3(cosf(ang) * r, 1.0f, sinf(ang) * r);
+                pos = Vector3(cosf(ang) * r, 0.06f, sinf(ang) * r);
                 pos.x_ = Clamp(pos.x_, -half, half);
                 pos.z_ = Clamp(pos.z_, -half, half);
                 Vector3 flat = pos - playerPos; flat.y_ = 0.0f;
@@ -4352,7 +4823,7 @@ private:
             SpawnEnemyRobot(pos, t);
             ++spawned;
         }
-        String msg = "ВОЛНА " + String(waveNum_) + "! Роботов: " + String(spawned);
+        String msg = "ВОЛНА " + String(waveNum_) + "! Кур: " + String(spawned);
         if (bossWave) msg += "  [БОСС!]";
         ShowMessage(msg);
         UpdateScoreDisplay();
@@ -4387,7 +4858,9 @@ private:
         if (!enemyShotMat_) enemyShotMat_ = MakeTinted(nullptr, nullptr, Color(255, 80, 255));
         sm->SetMaterial(enemyShotMat_.Get());
         sm->SetCastShadows(false);
-        pr->SetScale(Vector3::ONE * 0.12f);
+        if (eggMat_) sm->SetMaterial(eggMat_.Get());          // стрелок плюётся яйцом
+        pr->SetScale(Vector3(0.16f, 0.21f, 0.16f));
+        pr->SetRotation(Quaternion((float)(rand() % 360), Vector3(1, 0, 0)));
 
         ProjectileData pd;
         pd.node_ = pr;
@@ -4453,19 +4926,37 @@ private:
 
         // Точки по арене: 4 у центра (по краям платформы), 4 в углах
         const Vector3 spots[] = {
-            Vector3( 9.0f, 1.0f,  0.0f), Vector3(-9.0f, 1.0f,  0.0f),
-            Vector3( 0.0f, 1.0f,  9.0f), Vector3( 0.0f, 1.0f, -9.0f),
+            Vector3(13.0f, 1.0f,  0.0f), Vector3(-13.0f, 1.0f,  0.0f),
+            Vector3( 0.0f, 1.0f, 13.0f), Vector3( 0.0f, 1.0f, -13.0f),
             Vector3( 34.0f, 1.0f,  34.0f), Vector3(-34.0f, 1.0f,  34.0f),
             Vector3( 34.0f, 1.0f, -34.0f), Vector3(-34.0f, 1.0f, -34.0f)
         };
+        SharedPtr<Material> crossMat = MakeTinted(nullptr, nullptr, Color(235, 45, 55));
+        SharedPtr<Material> caseMat = MakeTinted(nullptr, nullptr, Color(90, 70, 55));
+        Model* sph = sphereModel_ ? sphereModel_ : boxModel_;
+
         for (unsigned i = 0; i < sizeof(spots) / sizeof(spots[0]); ++i) {
             Node* n = scene_->CreateChild("Pickup", LOCAL);
             n->SetPosition(spots[i]);
             n->SetScale(Vector3::ONE * 0.4f);
-            StaticModel* sm = n->CreateComponent<StaticModel>();
-            sm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
-            sm->SetMaterial(i % 2 == 0 ? pickupHealMat_ : pickupAmmoMat_);
-            sm->SetCastShadows(false);
+
+            if (i % 2 == 0) {
+                // Аптечка-яйцо с красным крестом (курица же)
+                AddPart(n, Vector3(0, 0, 0), Vector3(0.88f, 1.05f, 0.88f), pickupHealMat_.Get(), sph);
+                AddPart(n, Vector3(0, 0.05f, 0.42f), Vector3(0.48f, 0.16f, 0.12f), crossMat.Get());
+                AddPart(n, Vector3(0, 0.05f, 0.43f), Vector3(0.16f, 0.48f, 0.12f), crossMat.Get());
+            } else {
+                // Ящик с патронами: дерево + жёлтая эмиссивная лента
+                AddPart(n, Vector3(0, 0, 0), Vector3(0.8f, 0.6f, 0.8f), caseMat.Get());
+                AddPart(n, Vector3(0, 0.05f, 0), Vector3(0.86f, 0.14f, 0.86f), pickupAmmoMat_.Get());
+                for (int b = 0; b < 3; ++b)
+                    AddPart(n, Vector3((float)(b - 1) * 0.2f, 0.36f, 0.0f), Vector3(0.14f, 0.30f, 0.14f),
+                            pickupAmmoMat_.Get(), cylModel_);
+            }
+            // Световой «постамент» под пикапом, чтобы его было видно издалека
+            Node* halo = AddPart(n, Vector3(0, -0.55f, 0), Vector3(1.6f, 0.06f, 1.6f),
+                                 (i % 2 == 0) ? pickupHealMat_.Get() : pickupAmmoMat_.Get(), cylModel_);
+            if (halo) halo->SetScale(Vector3(1.6f, 0.06f, 1.6f));
 
             PickupData p;
             p.node_ = n;
@@ -4685,17 +5176,36 @@ private:
             const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 2.0f;
             np.x_ = Clamp(np.x_, -half, half);
             np.z_ = Clamp(np.z_, -half, half);
-            float bob = 0.05f * sinf(timeAcc_ * 3.0f + e.phase_);
+            float bob = 0.04f * sinf(timeAcc_ * 3.0f + e.phase_);
             // Визуальный «откат» при выстреле/ударе: приседание модели
             if (e.recoilKick_ > 0.0f) e.recoilKick_ = Max(0.0f, e.recoilKick_ - dt);
             float kick = e.recoilKick_ * 0.6f;
-            Vector3 newPos(np.x_, 1.0f + bob - kick, np.z_);
+            Vector3 newPos(np.x_, 0.06f + bob - kick, np.z_);   // лапы курицы на полу
             n->SetPosition(newPos);
-            MoveColliderLite(e.colliderIdx_, newPos + Vector3(0, -0.1f, 0)); // рейкасты пуль идут за роботом
+            MoveColliderLite(e.colliderIdx_, newPos + Vector3(0, 0.85f, 0)); // центр тела курицы
 
             if (dist > 0.5f) {
                 float yawDeg = atan2f(toCam.x_, toCam.z_) * 57.29578f;
                 n->SetRotation(Quaternion(yawDeg, Vector3::UP));
+            }
+
+            // === Куриная анимация: походка, клевки головой, взмахи крыльями ===
+            {
+                float speedNow = Vector3(move.x_, 0.0f, move.z_).Length();
+                e.animPhase_ += dt * (3.2f + speedNow * 3.4f);
+                float walk = sinf(e.animPhase_);
+                if (Node* head = e.headNode_.Get()) {
+                    head->SetPosition(Vector3(0.0f, CH_HEAD_Y + 0.05f * walk, CH_HEAD_Z + 0.05f * fabsf(walk)));
+                    head->SetRotation(Quaternion(7.0f * walk, Vector3(1, 0, 0)));
+                }
+                if (Node* l = e.legLNode_.Get()) l->SetRotation(Quaternion( 30.0f * walk, Vector3(1, 0, 0)));
+                if (Node* r = e.legRNode_.Get()) r->SetRotation(Quaternion(-30.0f * walk, Vector3(1, 0, 0)));
+                // Крылья: мелкая дрожь на месте, широкий взмах на бегу/рывке
+                float flap = 6.0f + 30.0f * Max(0.0f, walk) * (speedNow > 0.8f ? 1.0f : 0.3f);
+                if (Node* wl = e.wingLNode_.Get()) wl->SetRotation(Quaternion( 18.0f + flap, Vector3(0, 0, 1)));
+                if (Node* wr = e.wingRNode_.Get()) wr->SetRotation(Quaternion(-18.0f - flap, Vector3(0, 0, 1)));
+                if (Node* tail = e.tailNode_.Get())
+                    tail->SetRotation(Quaternion(8.0f * sinf(e.animPhase_ * 0.45f), Vector3(0, 1, 0)));
             }
         }
     }
@@ -4706,6 +5216,26 @@ private:
         Node* n = e.node_.Get();
         if (n) {
             CreateHitSpark(n->GetPosition() + Vector3(0, 0.5f, 0));
+            // Пух: 2 пёрышка из точки попадания — сразу видно, что попал по курице
+            if (featherMat_) {
+                for (int k = 0; k < 2; ++k) {
+                    Node* f = scene_->CreateChild("HitFeather", LOCAL);
+                    f->SetPosition(n->GetPosition() + Vector3(0, 0.9f, 0));
+                    f->SetScale(Vector3(0.05f, 0.02f, 0.18f));
+                    StaticModel* fsm = f->CreateComponent<StaticModel>();
+                    fsm->SetModel(boxModel_);
+                    fsm->SetMaterial(featherMat_.Get());
+                    fsm->SetCastShadows(false);
+                    float a = (float)(rand() % 628) / 100.0f;
+                    DebrisData fd;
+                    fd.node_ = f;
+                    fd.pos_ = n->GetPosition() + Vector3(0, 0.9f, 0);
+                    fd.vel_ = Vector3(cosf(a) * 1.6f, 1.6f + (float)(rand() % 100) / 100.0f, sinf(a) * 1.6f);
+                    fd.spin_ = Vector3((float)(rand() % 400 - 200), (float)(rand() % 400 - 200), 0.0f) * 0.02f;
+                    fd.ttl_ = 1.8f;
+                    debrisLite_.Push(fd);
+                }
+            }
             PlayHitSound();
             // Визуальный «откид» без физики: короткий наклон модели робота
             e.recoilKick_ = 0.35f;
@@ -4714,6 +5244,7 @@ private:
             e.alive_ = false;
             if (n) {
                 CreateExplosionEffect(n->GetPosition());
+                CreateFeatherBurst(n->GetPosition(), e.type_);   // курица «взрывается» перьями
                 CreateDebrisBurst(n->GetPosition());
                 PlayExplosionAt(n->GetPosition());
                 n->Remove();
@@ -4721,14 +5252,44 @@ private:
             AddScoreWithCombo(e.scoreValue_);
             player_.kills_++;
             UpdateScoreDisplay();
-            ShowMessage("РОБОТ УНИЧТОЖЕН! +" + String(e.scoreValue_) +
+            ShowMessage((e.type_ == E_BOSS ? "БОСС-ИНДЮК ПАЛ! +" : "КУРИЦА ОЩИПАНА! +") +
+                        String(e.scoreValue_) +
                         (comboCount_ > 1 ? (" (COMBO x" + String(comboCount_) + ")") : ""));
         }
     }
 
     // =========================================================================
-    // ЧАСТИЦЫ: осколки и искры
+    // ЧАСТИЦЫ: перья, осколки и искры
     // =========================================================================
+
+    // Взрыв перьев: 12 плоских «пёрышек» на лёгкой физике осколков (UpdateDebrisLite).
+    void CreateFeatherBurst(const Vector3& pos, EnemyType type) {
+        Material* mat = featherMat_ ? featherMat_.Get() : fallbackMat_;
+        for (int i = 0; i < 12; ++i) {
+            Node* f = scene_->CreateChild("Feather", LOCAL);
+            f->SetPosition(pos + Vector3(0, 0.9f, 0));
+            f->SetScale(Vector3(0.05f, 0.02f, 0.20f));   // тонкое плоское пёрышко
+            StaticModel* sm = f->CreateComponent<StaticModel>();
+            sm->SetModel(boxModel_);
+            switch (type) { // перья в цвет породы
+                case E_CHARGER: sm->SetMaterial(chickBrown_ ? chickBrown_.Get() : mat); break;
+                case E_SHOOTER: sm->SetMaterial(chickBlack_ ? chickBlack_.Get() : mat); break;
+                case E_BOSS:    sm->SetMaterial(chickBoss_ ? chickBoss_.Get() : mat); break;
+                default:        sm->SetMaterial(mat); break;
+            }
+            sm->SetCastShadows(false);
+            float a = (float)(rand() % 628) / 100.0f;
+            float up = 2.0f + (float)(rand() % 35) / 10.0f;
+            DebrisData d;
+            d.node_ = f;
+            d.pos_ = pos + Vector3(0, 0.9f, 0);
+            d.vel_ = Vector3(cosf(a) * 2.6f, up, sinf(a) * 2.6f);
+            d.spin_ = Vector3((float)(rand() % 600 - 300), (float)(rand() % 600 - 300),
+                              (float)(rand() % 600 - 300)) * 0.03f;
+            d.ttl_ = 3.5f;
+            debrisLite_.Push(d);
+        }
+    }
 
     void CreateDebrisBurst(const Vector3& pos) {
         // Lite-осколки: интеграция положения/скорости в UpdateDebrisLite, без Bullet
