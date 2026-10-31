@@ -597,7 +597,7 @@ private:
     bool inMenu_ = true;            // игра стартует в главном меню
     int menuSel_ = 0;               // 0 тир, 1 арена, 2 настройки, 3 выход
     bool inSettings_ = false;
-    int settingsSel_ = 0;           // 0 тени, 1 bloom, 2 разрешение, 3 анизотропия, 4 SFX, 5 музыка, 6 назад
+    int settingsSel_ = 0;           // 0 тени, 1 bloom, 2 FPS, 3 фильтрация, 4 мышь, 5 SFX, 6 музыка, 7 назад
     int gfxShadowIdx_ = 2;          // 0=1K 1=2K 2=4K
     int gfxGlowIdx_ = 2;            // 0=выкл 1=слабый 2=полный
     int gfxFpsIdx_ = 1;             // 0=60 1=120 2=без лимита (раньше тут была мёртвая «разрешение»)
@@ -650,6 +650,7 @@ private:
         // === Куриная анимация (ходьба, клевки, взмахи) ===
         WeakPtr<Node> headNode_, wingLNode_, wingRNode_, legLNode_, legRNode_, tailNode_;
         float animPhase_ = 0.0f;
+        float cluckTimer_ = 5.0f;        // случайное кудахтанье в простое
     };
     Vector<EnemyData> enemies_;
     // enemyNodes_ убран: он держал SharedPtr на уже удалённых роботов (утечка узла на каждое убийство).
@@ -697,6 +698,7 @@ private:
     SharedPtr<Material> decalMat_;     // пулевые отверстия
     SharedPtr<Material> shockMat_;     // ударная волна взрыва
     SharedPtr<Material> shellMat_;     // латунные гильзы
+    SharedPtr<Material> spawnRingMat_;  // круг появления курицы
 
     struct ShockwaveData { SharedPtr<Node> node_; float ttl_ = 0.6f; float max_ = 0.6f; };
     Vector<ShockwaveData> shockwaves_;
@@ -726,7 +728,22 @@ private:
     SharedPtr<UIElement> hudPanelBg_;
     SharedPtr<BorderImage> hudHpBarBg_, hudHpBarFill_, hudAmmoBarBg_, hudAmmoBarFill_;
     static constexpr float HUD_BAR_W = 260.0f;
-    SharedPtr<Text> helpText_;   // подсказка по управлению: прячется вместе с HUD
+    SharedPtr<Text> helpText_;
+    // === Новые элементы HUD: баннер волны, полоса босса, лента событий ===
+    SharedPtr<Text> waveBanner_;
+    float waveBannerTimer_ = 0.0f;
+    SharedPtr<BorderImage> bossBarBg_, bossBarFill_;
+    SharedPtr<Text> bossBarText_;
+    SharedPtr<Text> killFeedText_;
+    struct FeedEntry { String text_; float ttl_ = 0.0f; };
+    Vector<FeedEntry> killFeed_;
+    float arenaTime_ = 0.0f;      // время, прожитое в арене (статистика)
+    int mouseSensIdx_ = 1;        // 0 — низкая, 1 — обычная, 2 — высокая
+
+    // Справка по управлению (F1). При первом старте показывается автоматически.
+    SharedPtr<UIElement> helpPanel_;
+    bool helpOpen_ = false;
+    bool helpShownOnce_ = false;   // подсказка по управлению: прячется вместе с HUD
     
     // Ресурсы
     Model* boxModel_ = nullptr;
@@ -766,6 +783,15 @@ private:
     SoundSource* soundSource_ = nullptr;   // 2D-микшер на камере
     SharedPtr<SoundSource> musicSource_;       // фоновая музыка
     SoundSource3D* explosionSource3D_ = nullptr; // взрывы в мировом пространстве
+
+    // === Куриные звуки (см. tools/gen_sounds.py — синтезируются без внешних ассетов) ===
+    Sound* cluckSounds_[2] = {};
+    Sound* squawkSound_ = nullptr;
+    Sound* eggSplatSound_ = nullptr;
+    Sound* bossRoarSound_ = nullptr;
+    Sound* waveStartSound_ = nullptr;
+    Vector<SharedPtr<SoundSource3D>> sfx3DPool_;   // пул позиционных источников
+    int sfx3DNext_ = 0;
 
     // Загрузочный экран
     bool loadingScreenActive_ = false;
@@ -1048,6 +1074,15 @@ private:
         landSound_       = cache->GetResource<Sound>("Sounds/Land.wav");
         uiSelectSound_   = cache->GetResource<Sound>("Sounds/UI_Select.wav");
 
+        // Куриные звуки: если файлов нет (старый Data) — просто останутся nullptr,
+        // все вызовы защищены проверками, игра работает без них.
+        cluckSounds_[0]  = cache->GetResource<Sound>("Sounds/Chicken_Cluck.wav");
+        cluckSounds_[1]  = cache->GetResource<Sound>("Sounds/Chicken_Cluck2.wav");
+        squawkSound_     = cache->GetResource<Sound>("Sounds/Chicken_Squawk.wav");
+        eggSplatSound_   = cache->GetResource<Sound>("Sounds/Chicken_Egg.wav");
+        bossRoarSound_   = cache->GetResource<Sound>("Sounds/Chicken_Boss.wav");
+        waveStartSound_  = cache->GetResource<Sound>("Sounds/Wave_Start.wav");
+
         // Фоновая музыка (синтезированный трансовый луп)
         Sound* music = cache->GetResource<Sound>("Music/Game_Theme_Loop.ogg");
         if (music) {
@@ -1300,6 +1335,9 @@ private:
 
         // Зона рендеринга: ambient + дымка по дальности (ощущение масштаба арены)
         CreateZone();
+
+        // Позиционные звуки: пул источников создаётся один раз на сцену
+        InitSfx3DPool();
     }
 
     void CreateZone() {
@@ -2576,6 +2614,42 @@ private:
         weaponNameText_->SetColor(Color(1.0f, 0.85f, 0.3f, 1.0f));
         weaponNameText_->SetText(String(WEAPON_DEFS[currentWeapon_].name) + " | " + String(SKIN_DEFS[currentSkin_].name));
 
+        // --- Баннер волны: крупный текст по центру, появляется с масштабом ---
+        waveBanner_ = root->CreateChild<Text>();
+        waveBanner_->SetFont(font_, 52);
+        waveBanner_->SetTextAlignment(HA_CENTER);
+        waveBanner_->SetPosition(screenWidth / 2 - 400, screenHeight * 0.22f);
+        waveBanner_->SetWidth(800);
+        waveBanner_->SetColor(Color(1.0f, 0.85f, 0.25f, 0.0f));
+        waveBanner_->SetEnabled(false);
+
+        // --- Полоса здоровья босса (появляется, когда на арене есть индюк) ---
+        bossBarBg_ = root->CreateChild<BorderImage>("BossBarBg");
+        bossBarBg_->SetSize(620, 20);
+        bossBarBg_->SetPosition(screenWidth / 2 - 310, 26);
+        bossBarBg_->SetColor(Color(0.05f, 0.03f, 0.03f, 0.75f));
+
+        bossBarFill_ = root->CreateChild<BorderImage>("BossBarFill");
+        bossBarFill_->SetSize(620, 20);
+        bossBarFill_->SetPosition(screenWidth / 2 - 310, 26);
+        bossBarFill_->SetColor(Color(0.95f, 0.25f, 0.25f, 1.0f));
+
+        bossBarText_ = root->CreateChild<Text>();
+        bossBarText_->SetFont(font_, 16);
+        bossBarText_->SetTextAlignment(HA_CENTER);
+        bossBarText_->SetPosition(screenWidth / 2 - 310, 6);
+        bossBarText_->SetWidth(620);
+        bossBarText_->SetText("ИНДЮК-БОСС");
+        bossBarText_->SetColor(Color(1.0f, 0.9f, 0.9f, 1.0f));
+
+        // --- Лента событий (кто кого): левый верх, 5 последних строк ---
+        killFeedText_ = root->CreateChild<Text>();
+        killFeedText_->SetFont(font_, 16);
+        killFeedText_->SetPosition(20, 120);
+        killFeedText_->SetWidth(520);
+        killFeedText_->SetWordwrap(false);
+        killFeedText_->SetColor(Color(0.95f, 0.95f, 0.8f, 0.85f));
+
         // --- Полоски HP и патронов: читаются быстрее, чем цифры ---
         hudHpBarBg_ = root->CreateChild<BorderImage>("HpHpBarBg");
         hudHpBarBg_->SetSize(HUD_BAR_W, 10);
@@ -2605,6 +2679,98 @@ private:
         helpText_->SetColor(Color(0.8f, 0.85f, 0.9f, 0.75f));
     }
     
+    // =========================================================================
+    // HUD-фичи: лента событий, баннер волны, полоса босса
+    // =========================================================================
+
+    // 95 -> "1:35"
+    String FormatTime(float seconds) {
+        int total = (int)Max(0.0f, seconds);
+        int m = total / 60;
+        int sec = total % 60;
+        return String(m) + ":" + (sec < 10 ? "0" : "") + String(sec);
+    }
+
+    void RefreshKillFeedText() {
+        if (!killFeedText_) return;
+        String txt;
+        for (unsigned i = 0; i < killFeed_.Size(); ++i)
+            txt += killFeed_[i].text_ + "\n";
+        killFeedText_->SetText(txt);
+    }
+
+    // Новые события идут сверху, список держим коротким (5 строк)
+    void PushKillFeed(const String& text) {
+        FeedEntry e; e.text_ = text; e.ttl_ = 4.5f;
+        killFeed_.Push(e);
+        for (unsigned i = killFeed_.Size() - 1; i > 0; --i)
+            killFeed_[i] = killFeed_[i - 1];
+        killFeed_[0] = e;
+        if (killFeed_.Size() > 5) killFeed_.Resize(5);
+        RefreshKillFeedText();
+    }
+
+    void UpdateKillFeed(float dt) {
+        if (killFeed_.Empty()) return;
+        bool changed = false;
+        for (unsigned i = 0; i < killFeed_.Size(); ++i) {
+            killFeed_[i].ttl_ -= dt;
+            if (killFeed_[i].ttl_ <= 0.0f) changed = true;
+        }
+        if (changed) {
+            Vector<FeedEntry> keep;
+            float minTtl = 99.0f;
+            for (unsigned i = 0; i < killFeed_.Size(); ++i) {
+                if (killFeed_[i].ttl_ > 0.0f) { keep.Push(killFeed_[i]); minTtl = Min(minTtl, killFeed_[i].ttl_); }
+            }
+            killFeed_ = keep;
+            RefreshKillFeedText();
+            if (killFeedText_) {
+                float a = Clamp(minTtl / 1.2f, 0.0f, 1.0f);
+                killFeedText_->SetColor(Color(0.95f, 0.95f, 0.8f, 0.85f * (killFeed_.Empty() ? 0.0f : a)));
+            }
+        }
+    }
+
+    void ShowWaveBanner(const String& text, const Color& color) {
+        waveBannerTimer_ = 2.4f;
+        if (!waveBanner_) return;
+        waveBanner_->SetText(text);
+        waveBanner_->SetColor(Color(color.r_, color.g_, color.b_, 1.0f));
+        waveBanner_->SetEnabled(true);
+    }
+
+    void UpdateWaveBanner(float dt) {
+        if (waveBannerTimer_ <= 0.0f) return;
+        waveBannerTimer_ -= dt;
+        if (!waveBanner_) return;
+        float t = Clamp(waveBannerTimer_ / 2.4f, 0.0f, 1.0f);       // 1 -> 0
+        float alpha = Min(1.0f, t * 2.5f) * Min(1.0f, (1.0f - t) * 6.0f + 0.15f);
+        Color c = waveBanner_->GetColor();
+        waveBanner_->SetColor(Color(c.r_, c.g_, c.b_, Clamp(alpha, 0.0f, 1.0f)));
+        if (waveBannerTimer_ <= 0.0f) waveBanner_->SetEnabled(false);
+    }
+
+    // Полоса здоровья босса: показывается, пока на арене жив хотя бы один индюк
+    void UpdateBossBar() {
+        if (!bossBarBg_ || !bossBarFill_) return;
+        EnemyData* boss = nullptr;
+        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+            if (enemies_[i].alive_ && enemies_[i].type_ == E_BOSS) { boss = &enemies_[i]; break; }
+        }
+        bool show = (boss != nullptr) && !inMenu_ && !gameOver_;
+        bossBarBg_->SetVisible(show);
+        bossBarFill_->SetVisible(show);
+        if (bossBarText_) bossBarText_->SetVisible(show);
+        if (!show) return;
+        float ratio = boss->maxHealth_ > 0.0f ? Clamp(boss->health_ / boss->maxHealth_, 0.0f, 1.0f) : 0.0f;
+        bossBarFill_->SetSize(620.0f * ratio, 20);
+        bossBarFill_->SetColor(ratio > 0.5f ? Color(0.95f, 0.30f, 0.25f, 1.0f)
+                              : ratio > 0.25f ? Color(1.0f, 0.60f, 0.15f, 1.0f)
+                                             : Color(1.0f, 0.20f, 0.20f, 1.0f));
+        if (bossBarText_) bossBarText_->SetText("ИНДЮК-БОСС   " + String((int)boss->health_) + " / " + String((int)boss->maxHealth_));
+    }
+
     void UpdateAmmoDisplay() {
         if (ammoText_) {
             String ammoStr = "PATRONS: " + String(weapon_.currentAmmo_) + " / " + String(weapon_.reserveAmmo_);
@@ -2708,6 +2874,76 @@ private:
     // ПАУЗА (Esc в игре)
     // =========================================================================
 
+    // Полноэкранная справка: F1 — открыть/закрыть, Esc — закрыть
+    void CreateHelpPanel() {
+        if (!helpPanel_) {
+            auto* ui = GetSubsystem<UI>();
+            auto* root = ui->GetRoot();
+            int sw = GetSubsystem<Graphics>()->GetWidth();
+            int sh = GetSubsystem<Graphics>()->GetHeight();
+
+            helpPanel_ = root->CreateChild<UIElement>("HelpPanel");
+            helpPanel_->SetSize(sw, sh);
+
+            BorderImage* bg = helpPanel_->CreateChild<BorderImage>();
+            bg->SetSize(sw, sh);
+            bg->SetColor(Color(0.01f, 0.02f, 0.04f, 0.86f));
+
+            Text* title = helpPanel_->CreateChild<Text>();
+            title->SetFont(font_, 40);
+            title->SetText("CHIKENGUN 2.1 — СПРАВКА");
+            title->SetTextAlignment(HA_CENTER);
+            title->SetPosition(sw / 2 - 500, sh / 2 - 250);
+            title->SetWidth(1000);
+            title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
+
+            Text* body = helpPanel_->CreateChild<Text>();
+            body->SetFont(font_, 20);
+            body->SetPosition(sw / 2 - 480, sh / 2 - 190);
+            body->SetWidth(960);
+            body->SetWordwrap(false);
+            body->SetColor(Color(0.9f, 0.93f, 0.97f, 1.0f));
+            body->SetText(
+                "УПРАВЛЕНИЕ\n"
+                "  WASD — движение      SHIFT — бег        SPACE — прыжок      CTRL / C — присед\n"
+                "  ЛКМ — огонь          ПКМ — прицел       R — перезарядка     1..7 — оружие\n"
+                "  Q / E — скин оружия  TAB — арсенал      F — тир / арена      ESC — пауза\n"
+                "  F1 — эта справка     M — меню (пауза)  Q — выход (пауза)\n"
+                "\n"
+                "АРЕНА\n"
+                "  Волны кур: белая клуша, рыжий петух (быстрый), чёрный стрелок (яйца),\n"
+                "  индюк-босс каждые 5 волн — полоса его здоровья сверху экрана.\n"
+                "  Яйцо с крестом — аптечка +25 HP.  Ящик с лентой — патроны +2 магазина.\n"
+                "  Убийства подряд без пауз дают комбо-множитель очков (до x5 и больше).\n"
+                "\n"
+                "ТИР\n"
+                "  Мишени на стенах, на опорах и движущиеся. Зачистил все — они вернутся\n"
+                "  через несколько секунд, счёт и точность продолжают копиться.\n"
+                "\n"
+                "СЕЙВ\n"
+                "  settings.ini рядом с бинарником: рекорд, громкость, графика, чувствительность.");
+
+            Text* hint = helpPanel_->CreateChild<Text>();
+            hint->SetFont(font_, 18);
+            hint->SetText("F1 или ESC — закрыть");
+            hint->SetTextAlignment(HA_CENTER);
+            hint->SetPosition(sw / 2 - 300, sh / 2 + 230);
+            hint->SetWidth(600);
+            hint->SetColor(Color(1.0f, 0.85f, 0.3f, 1.0f));
+        }
+        helpPanel_->SetVisible(true);
+        helpOpen_ = true;
+    }
+
+    void ToggleHelp() {
+        if (helpOpen_) {
+            if (helpPanel_) helpPanel_->SetVisible(false);
+            helpOpen_ = false;
+        } else {
+            CreateHelpPanel();
+        }
+    }
+
     void CreatePausePanel() {
         auto* ui = GetSubsystem<UI>();
         auto* root = ui->GetRoot();
@@ -2740,7 +2976,8 @@ private:
         stats->SetPosition(sw / 2 - 400, sh / 2 - 20);
         stats->SetWidth(800);
         stats->SetColor(Color(0.9f, 0.92f, 0.95f, 1.0f));
-        stats->SetText("СЧЁТ: " + String(player_.score_) + "   |   УБИЙСТВ: " + String(player_.kills_) +
+        stats->SetText("ВРЕМЯ: " + FormatTime(arenaTime_) + "\n" +
+                       "СЧЁТ: " + String(player_.score_) + "   |   УБИЙСТВ: " + String(player_.kills_) +
                        "   |   ТОЧНОСТЬ: " + String((int)player_.GetAccuracy()) + "%\n" +
                        "РЕЖИМ: " + String(gameMode_ == MODE_ARENA ? "АРЕНА" : "ТИР") +
                        (gameMode_ == MODE_ARENA ? ("   |   ВОЛНА: " + String(waveNum_)) : String()));
@@ -2799,6 +3036,9 @@ private:
         goBasePosSet_ = false;
         hudPanelBg_ = nullptr; helpText_ = nullptr; weaponNameText_ = nullptr;
         hudHpBarBg_ = nullptr; hudHpBarFill_ = nullptr; hudAmmoBarBg_ = nullptr; hudAmmoBarFill_ = nullptr;
+        waveBanner_ = nullptr; bossBarBg_ = nullptr; bossBarFill_ = nullptr; bossBarText_ = nullptr;
+        killFeedText_ = nullptr;
+        helpPanel_ = nullptr; helpOpen_ = false;
         mainMenuPanel_ = nullptr; mainMenuItems_.Clear();
         menuTitle_ = nullptr; menuSub_ = nullptr; menuHint_ = nullptr;
         menuPlate_ = nullptr; menuAccentBar_ = nullptr;
@@ -2876,7 +3116,7 @@ private:
         }
 
         // Пауза замораживает игровой мир (UI при этом остаётся живым)
-        if (paused_) return;
+        if (paused_ || helpOpen_) return;   // пауза и справка замораживают мир
 
         // Анимации интерфейса (главное меню, экран смерти)
         AnimateMainMenu(dt);
@@ -2931,7 +3171,7 @@ private:
         }
 
         // Автоогонь: удержание ЛКМ (не для дробовика/снайперки/гранатомёта)
-        if (!inMenu_ && !gameOver_ && !paused_ && !armoryOpen_ && !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
+        if (!inMenu_ && !gameOver_ && !paused_ && !helpOpen_ && !armoryOpen_ && !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
             int wt = currentWeapon_;
             if (wt != W_SHOTGUN && wt != W_SNIPER && wt != W_LAUNCHER) {
                 TryFire();
@@ -2970,6 +3210,10 @@ private:
         UpdateDebrisLite(dt);
         UpdateAnimatedDecor(dt);
         UpdateShockwaves(dt);
+        UpdateKillFeed(dt);
+        UpdateWaveBanner(dt);
+        UpdateBossBar();
+        if (!inMenu_ && !gameOver_ && gameMode_ == MODE_ARENA) arenaTime_ += dt;
         UpdatePickups(dt);
 
         // (Раньше здесь камера «крутилась» в меню — из-за этого игра стартовала
@@ -3031,7 +3275,7 @@ private:
         using namespace MouseMove;
         
         // Если мышь видима (меню) или игра на паузе, не обрабатываем вращение
-        if (isMouseVisible_ || paused_) {
+        if (isMouseVisible_ || paused_ || helpOpen_) {
             return;
         }
         
@@ -3041,7 +3285,9 @@ private:
         IntVector2 mouseMove = input->GetMouseMove();
         
         // Обновляем углы Эйлера
-        float sens = GameConstants::MOUSE_SENSITIVITY;
+        // Чувствительность из настроек (низкая/обычная/высокая)
+        static const float kSensMult[3] = { 0.55f, 1.0f, 1.65f };
+        float sens = GameConstants::MOUSE_SENSITIVITY * kSensMult[Clamp(mouseSensIdx_, 0, 2)];
         if (isAiming_) sens *= 0.45f; // точное прицеливание мышью (ПКМ)
         if (isCrouching_) sens *= 0.8f;
         yaw_ += (float)mouseMove.x_ * sens;
@@ -3068,11 +3314,11 @@ private:
         // ===== Главное меню перехватывает весь ввод =====
         if (inMenu_) {
             if (inSettings_) {
-                if (key == KEY_UP || key == KEY_W) { settingsSel_ = (settingsSel_ + 6) % 7; PlayUISound(); UpdateSettingsDisplay(); }
-                else if (key == KEY_DOWN || key == KEY_S) { settingsSel_ = (settingsSel_ + 1) % 7; PlayUISound(); UpdateSettingsDisplay(); }
+                if (key == KEY_UP || key == KEY_W) { settingsSel_ = (settingsSel_ + 7) % 8; PlayUISound(); UpdateSettingsDisplay(); }
+                else if (key == KEY_DOWN || key == KEY_S) { settingsSel_ = (settingsSel_ + 1) % 8; PlayUISound(); UpdateSettingsDisplay(); }
                 else if (key == KEY_LEFT || key == KEY_A) { ChangeSetting(-1); }
                 else if (key == KEY_RIGHT || key == KEY_D) { ChangeSetting(1); }
-                else if (key == KEY_RETURN) { if (settingsSel_ == 6) ShowSettings(false); else ChangeSetting(1); }
+                else if (key == KEY_RETURN) { if (settingsSel_ == 7) ShowSettings(false); else ChangeSetting(1); }
                 else if (key == KEY_ESCAPE) { ShowSettings(false); }
                 return;
             }
@@ -3090,11 +3336,15 @@ private:
 
         // ===== Пауза перехватывает ввод =====
         if (paused_) {
+            if (key == KEY_F1) { PlayUISound(); ToggleHelp(); return; }
             if (key == KEY_ESCAPE || key == KEY_RETURN) TogglePause();
             else if (key == KEY_M) { TogglePause(); ShowMainMenu(true); }
             else if (key == KEY_Q) engine_->Exit();
             return;
         }
+
+        // F1 — справка (работает и в игре, и в паузе)
+        if (key == KEY_F1) { PlayUISound(); ToggleHelp(); return; }
 
         // F — быстрая смена режима (тир <-> арена)
         if (key == KEY_F) {
@@ -3115,9 +3365,10 @@ private:
         // Скрыть/показать мышь (для отладки)
         if (key == KEY_TAB) { ToggleArmory(); return; }
 
-        // Esc: закрыть арсенал, иначе — пауза (раньше игра просто закрывалась без сохранения)
+        // Esc: закрыть справку -> арсенал -> пауза
         if (key == KEY_ESCAPE) {
-            if (armoryOpen_) { ToggleArmory(); }
+            if (helpOpen_) { ToggleHelp(); }
+            else if (armoryOpen_) { ToggleArmory(); }
             else { TogglePause(); }
             return;
         }
@@ -3157,7 +3408,7 @@ private:
 
         // Левая кнопка мыши — стрельба. Только в игре: раньше клик в главном меню
         // или на экране GAME OVER стрелял (звук, расход патронов, тряска).
-        if (button == MOUSEB_LEFT && !inMenu_ && !gameOver_ && !paused_ && !isMouseVisible_) {
+        if (button == MOUSEB_LEFT && !inMenu_ && !gameOver_ && !paused_ && !helpOpen_ && !isMouseVisible_) {
             TryFire();
         }
         
@@ -3662,18 +3913,18 @@ private:
     }
 
     // Ударная волна: кольцо, которое расширяется и исчезает (см. UpdateShockwaves)
-    void CreateShockwave(const Vector3& position) {
+    void CreateShockwave(const Vector3& position, Material* overrideMat = nullptr, float ttl = 0.55f) {
         if (!shockMat_) shockMat_ = MakeTinted(nullptr, nullptr, Color(255, 205, 130));
+        Material* mat = overrideMat ? overrideMat : shockMat_.Get();
         Node* root = scene_->CreateChild("Shockwave");
         root->SetPosition(Vector3(position.x_, 0.15f, position.z_));
         for (int i = 0; i < 16; ++i) {
             float ang = (float)i * 22.5f;
             float rad = ang * 0.0174533f;
-            Node* seg = AddPart(root, Vector3(cosf(rad), 0.0f, sinf(rad)), Vector3(0.42f, 0.05f, 0.16f),
-                                shockMat_.Get());
+            Node* seg = AddPart(root, Vector3(cosf(rad), 0.0f, sinf(rad)), Vector3(0.42f, 0.05f, 0.16f), mat);
             seg->SetRotation(Quaternion(90.0f - ang, Vector3(0, 1, 0)));
         }
-        ShockwaveData sw; sw.node_ = SharedPtr<Node>(root); sw.ttl_ = 0.55f; sw.max_ = 0.55f;
+        ShockwaveData sw; sw.node_ = SharedPtr<Node>(root); sw.ttl_ = ttl; sw.max_ = ttl;
         shockwaves_.Push(sw);
     }
 
@@ -3778,6 +4029,34 @@ private:
     // =========================================================================
     
     float SfxGain(float base) const { return Clamp(base * sfxVolume_, 0.0f, 1.0f); }
+
+    // Пул позиционных источников: 6 штук по кругу хватает, чтобы кудахтанье
+    // и шлепки яиц не обрывали друг друга.
+    void InitSfx3DPool() {
+        if (!sfx3DPool_.Empty()) return;
+        for (int i = 0; i < 6; ++i) {
+            Node* n = scene_->CreateChild("Sfx3D" + String(i));
+            SoundSource3D* src = n->CreateComponent<SoundSource3D>();
+            if (!src) continue;
+            src->SetGain(0.0f);
+            sfx3DPool_.Push(SharedPtr<SoundSource3D>(src));
+        }
+    }
+
+    void PlaySfx3D(const Vector3& pos, Sound* s, float gain) {
+        if (!s || sfx3DPool_.Empty()) return;
+        SoundSource3D* src = sfx3DPool_[(unsigned)sfx3DNext_ % sfx3DPool_.Size()];
+        ++sfx3DNext_;
+        if (!src) return;
+        src->GetNode()->SetWorldPosition(pos);
+        src->SetGain(SfxGain(gain));
+        src->Play(s);
+    }
+
+    void PlayCluck(const Vector3& pos, float gain = 0.45f) {
+        Sound* s = cluckSounds_[rand() % 2];
+        PlaySfx3D(pos, s, gain);
+    }
 
     // Гильза: летит вправо-вверх от оружия, живёт 1.6 с (физика — UpdateDebrisLite)
     void SpawnShellCasing() {
@@ -4019,7 +4298,9 @@ private:
             gameOverStatsText_->SetText(
                 String("СЧЁТ: ") + String(player_.score_) + "   |   ВОЛНА: " + String(waveNum_) + "\n" +
                 String("УБИЙСТВ: ") + String(player_.kills_) + "   |   ЛУЧШЕЕ КОМБО: x" + String(bestCombo_) + "\n" +
-                String("ТОЧНОСТЬ: ") + String((int)player_.GetAccuracy()) + "%   |   РЕКОРД: " + String(highScore_));
+                String("ТОЧНОСТЬ: ") + String((int)player_.GetAccuracy()) + "%   |   РЕКОРД: " + String(highScore_) + "\n" +
+                String("ВРЕМЯ: ") + FormatTime(arenaTime_) + "   |   УБИЙСТВ В МИНУТУ: " +
+                String(arenaTime_ > 5.0f ? (int)(player_.kills_ / (arenaTime_ / 60.0f)) : 0));
         }
         ShowGameOver(true);
     }
@@ -4214,6 +4495,7 @@ private:
             gfxGlowIdx_   = Clamp(XmlGetInt(gfx, "bloom", gfxGlowIdx_), 0, 2);
             gfxFpsIdx_    = Clamp(XmlGetInt(gfx, "fps", gfxFpsIdx_), 0, 2);
             gfxAnisoIdx_  = Clamp(XmlGetInt(gfx, "anisotropic", gfxAnisoIdx_), 0, 2);
+            mouseSensIdx_ = Clamp(XmlGetInt(gfx, "mouse", mouseSensIdx_), 0, 2);
         }
         XMLElement snd = rootEl.GetChild("sound");
         if (snd) {
@@ -4236,6 +4518,7 @@ private:
         XmlSetInt(gfx, "bloom", gfxGlowIdx_);
         XmlSetInt(gfx, "fps", gfxFpsIdx_);
         XmlSetInt(gfx, "anisotropic", gfxAnisoIdx_);
+        XmlSetInt(gfx, "mouse", mouseSensIdx_);
         XMLElement snd = rootEl.CreateChild("sound");
         snd.SetString("sfx", String(sfxVolume_));
         snd.SetString("music", String(musicVolume_));
@@ -4500,6 +4783,8 @@ private:
         if (weaponNameText_) weaponNameText_->SetVisible(vis);
         if (helpText_) helpText_->SetVisible(vis);
         if (hudPanelBg_) hudPanelBg_->SetVisible(vis);
+        if (killFeedText_) killFeedText_->SetVisible(vis);
+        if (waveBanner_) waveBanner_->SetVisible(vis);
         if (hudHpBarBg_) hudHpBarBg_->SetVisible(vis);
         if (hudHpBarFill_) hudHpBarFill_->SetVisible(vis);
         if (hudAmmoBarBg_) hudAmmoBarBg_->SetVisible(vis);
@@ -4557,7 +4842,7 @@ private:
         title->SetWidth(600);
         title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
 
-        for (int i = 0; i < 7; ++i) {
+        for (int i = 0; i < 8; ++i) {
             Text* row = settingsPanel_->CreateChild<Text>();
             row->SetFont(font_, 24);
             row->SetPosition(sw / 2 - 320, sh / 2 - 140 + i * 44);
@@ -4593,15 +4878,18 @@ private:
         static const char* bloomNames[3]  = { "выкл", "слабый", "полный" };
         static const char* fpsNames[3]    = { "60", "120", "без лимита" };
         static const char* filterNames[3] = { "билинейная", "трилинейная", "анизотропная" };
-        const char* names[7] = { "Тени", "HDR Bloom", "Лимит FPS", "Фильтрация текстур", "Громкость эффектов", "Громкость музыки", "Назад" };
-        String vals[7];
+        static const char* sensNames[3] = { "низкая", "обычная", "высокая" };
+        const char* names[8] = { "Тени", "HDR Bloom", "Лимит FPS", "Фильтрация текстур",
+                                 "Чувствительность мыши", "Громкость эффектов", "Громкость музыки", "Назад" };
+        String vals[8];
         vals[0] = shadowNames[Clamp(gfxShadowIdx_, 0, 2)];
         vals[1] = bloomNames[Clamp(gfxGlowIdx_, 0, 2)];
         vals[2] = fpsNames[Clamp(gfxFpsIdx_, 0, 2)];
         vals[3] = filterNames[Clamp(gfxAnisoIdx_, 0, 2)];
-        vals[4] = String((int)(sfxVolume_ * 100.0f)) + "%";
-        vals[5] = String((int)(musicVolume_ * 100.0f)) + "%";
-        vals[6] = "<- в меню";
+        vals[4] = sensNames[Clamp(mouseSensIdx_, 0, 2)];
+        vals[5] = String((int)(sfxVolume_ * 100.0f)) + "%";
+        vals[6] = String((int)(musicVolume_ * 100.0f)) + "%";
+        vals[7] = "<- в меню";
         for (unsigned i = 0; i < settingsItems_.Size(); ++i) {
             bool sel = ((int)i == settingsSel_);
             settingsItems_[i]->SetText((sel ? ">  " : "   ") + String(names[i]) + ":  " + vals[i]);
@@ -4615,8 +4903,9 @@ private:
         case 1: gfxGlowIdx_   = Clamp(gfxGlowIdx_ + delta, 0, 2); break;
         case 2: gfxFpsIdx_    = Clamp(gfxFpsIdx_ + delta, 0, 2); break;
         case 3: gfxAnisoIdx_  = Clamp(gfxAnisoIdx_ + delta, 0, 2); break;
-        case 4: sfxVolume_   = Clamp(sfxVolume_ + delta * 0.1f, 0.0f, 1.0f); break;
-        case 5: musicVolume_ = Clamp(musicVolume_ + delta * 0.1f, 0.0f, 1.0f); break;
+        case 4: mouseSensIdx_ = Clamp(mouseSensIdx_ + delta, 0, 2); break;
+        case 5: sfxVolume_   = Clamp(sfxVolume_ + delta * 0.1f, 0.0f, 1.0f); break;
+        case 6: musicVolume_ = Clamp(musicVolume_ + delta * 0.1f, 0.0f, 1.0f); break;
         default: return;
         }
         PlayUISound();
@@ -4656,6 +4945,11 @@ private:
         hitMarkerTimer_ = 0.0f;
         hitKillTimer_ = 0.0f;
         gameOver_ = false;
+        arenaTime_ = 0.0f;
+        killFeed_.Clear();
+        if (killFeedText_) killFeedText_->SetText("");
+        waveBannerTimer_ = 0.0f;
+        if (waveBanner_) waveBanner_->SetEnabled(false);
         ClearEnemies();
 
         // Полный боезапас на старте/рестарте режима (патроны теперь хранятся по оружиям)
@@ -4678,6 +4972,12 @@ private:
         }
         UpdateScoreDisplay();
         ShowMainMenu(false);
+
+        // Первый запуск: сразу показать справку, чтобы не гадать про управление
+        if (!helpShownOnce_) {
+            helpShownOnce_ = true;
+            CreateHelpPanel();
+        }
     }
 
     // Полная пересборка мишеней тира (без накопления узлов и коллайдеров)
@@ -4730,6 +5030,11 @@ private:
         float scale = (type == E_BOSS) ? 1.75f : (type == E_SHOOTER ? 0.92f : 1.0f);
         rob->SetScale(Vector3::ONE * scale);
 
+        // Появление: «плюх» портала + кудахтанье (раньше куры появлялись бесшумно из воздуха)
+        if (!spawnRingMat_) spawnRingMat_ = MakeTinted(nullptr, nullptr, Color(120, 235, 255));
+        CreateShockwave(pos, spawnRingMat_.Get(), 0.45f);
+        PlayCluck(pos, 0.5f);
+
         // Lite-коллайдер робота: tag 2, ptr = узел (рейкасты пуль и LOS проходят через него)
         // Коллайдер под габариты курицы (тело + хвост), а не «человеческого» бокса:
         // раньше пули пролетали мимо видимого тела и не попадали по хвосту/крыльям.
@@ -4771,6 +5076,7 @@ private:
         e.legRNode_ = rob->GetChild("HipR", true);
         e.tailNode_ = rob->GetChild("Tail", true);
         e.animPhase_ = (float)(rand() % 628) / 100.0f;   // рассинхронизируем походку
+        e.cluckTimer_ = 2.0f + (float)(rand() % 600) / 100.0f;
         enemies_.Push(e);
     }
 
@@ -4826,6 +5132,17 @@ private:
         String msg = "ВОЛНА " + String(waveNum_) + "! Кур: " + String(spawned);
         if (bossWave) msg += "  [БОСС!]";
         ShowMessage(msg);
+
+        // Баннер + звук старта волны (босс-волна — отдельный цвет и рёв)
+        if (waveStartSound_ && soundSource_) {
+            soundSource_->SetGain(SfxGain(bossWave ? 0.9f : 0.65f));
+            soundSource_->Play(waveStartSound_);
+        }
+        if (bossWave && bossRoarSound_) PlaySfx3D(Vector3(0, 2, 0), bossRoarSound_, 1.0f);
+        ShowWaveBanner(bossWave ? ("ВОЛНА " + String(waveNum_) + " — ИНДЮК!")
+                                : ("ВОЛНА " + String(waveNum_)),
+                       bossWave ? Color(1.0f, 0.35f, 0.25f) : Color(1.0f, 0.85f, 0.25f));
+        PushKillFeed("ВОЛНА " + String(waveNum_) + " — кур: " + String(spawned) + (bossWave ? " + БОСС" : ""));
         UpdateScoreDisplay();
     }
 
@@ -4910,7 +5227,10 @@ private:
                 }
             }
             if (dead) {
-                if (p.node_) p.node_->Remove();
+                if (p.node_) {
+                    PlaySfx3D(p.node_->GetPosition(), eggSplatSound_, 0.5f);   // «шлёп» разбитого яйца
+                    p.node_->Remove();
+                }
                 enemyProjectiles_.Erase(i);
             }
         }
@@ -5009,6 +5329,7 @@ private:
                 player_.health_ = Min(player_.maxHealth_, player_.health_ + GameConstants::PICKUP_HEAL);
                 UpdateHealthDisplay();
                 ShowMessage("АПТЕЧКА +" + String((int)GameConstants::PICKUP_HEAL) + " HP");
+                PushKillFeed("аптечка  +" + String((int)GameConstants::PICKUP_HEAL) + " HP");
             } else {
                 const WeaponDef& def = WEAPON_DEFS[currentWeapon_];
                 int cur = reserveAmmo_[currentWeapon_];
@@ -5018,6 +5339,7 @@ private:
                 weapon_.reserveAmmo_ = next;
                 UpdateAmmoDisplay();
                 ShowMessage("ПАТРОНЫ +" + String(next - cur));
+                PushKillFeed("патроны  +" + String(next - cur));
             }
             PlayUISound();
             p.respawn_ = GameConstants::PICKUP_RESPAWN;
@@ -5189,6 +5511,13 @@ private:
                 n->SetRotation(Quaternion(yawDeg, Vector3::UP));
             }
 
+            // Курицы кудахчут в простое — арена не «мёртвая»
+            e.cluckTimer_ -= dt;
+            if (e.cluckTimer_ <= 0.0f) {
+                e.cluckTimer_ = 6.0f + (float)(rand() % 600) / 100.0f;
+                PlayCluck(p, 0.30f);
+            }
+
             // === Куриная анимация: походка, клевки головой, взмахи крыльями ===
             {
                 float speedNow = Vector3(move.x_, 0.0f, move.z_).Length();
@@ -5245,6 +5574,8 @@ private:
             if (n) {
                 CreateExplosionEffect(n->GetPosition());
                 CreateFeatherBurst(n->GetPosition(), e.type_);   // курица «взрывается» перьями
+                // Куриный вопль (у индюка — низкое «гло-гло»)
+                PlaySfx3D(n->GetPosition(), e.type_ == E_BOSS ? bossRoarSound_ : squawkSound_, 0.85f);
                 CreateDebrisBurst(n->GetPosition());
                 PlayExplosionAt(n->GetPosition());
                 n->Remove();
@@ -5255,6 +5586,9 @@ private:
             ShowMessage((e.type_ == E_BOSS ? "БОСС-ИНДЮК ПАЛ! +" : "КУРИЦА ОЩИПАНА! +") +
                         String(e.scoreValue_) +
                         (comboCount_ > 1 ? (" (COMBO x" + String(comboCount_) + ")") : ""));
+            PushKillFeed((e.type_ == E_BOSS ? "ИНДЮК ПАЛ +" : "курица ощипана +") +
+                         String(e.scoreValue_) +
+                         (comboCount_ > 1 ? ("  x" + String(comboCount_)) : ""));
         }
     }
 
