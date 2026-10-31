@@ -40,6 +40,15 @@
 #include <Urho3D/Graphics/Light.h>
 #include <Urho3D/Graphics/Material.h>
 #include <Urho3D/Graphics/Technique.h> // класс Pass уже определён внутри Technique.h — отдельного Pass.h в этом Urho3D нет
+// Texture2D — реальный ресурсный тип (Texture — абстрактная база, в ResourceCache не регистрируется).
+// Путь зависит от версии: в 1.8 это Graphics/, в master/fork'ах — GraphicsAPI/.
+#if defined(__has_include)
+#  if __has_include(<Urho3D/Graphics/Texture2D.h>)
+#    include <Urho3D/Graphics/Texture2D.h>
+#  elif __has_include(<Urho3D/GraphicsAPI/Texture2D.h>)
+#    include <Urho3D/GraphicsAPI/Texture2D.h>
+#  endif
+#endif
 #include <Urho3D/Graphics/Model.h>
 #include <Urho3D/Graphics/StaticModel.h>
 #include <Urho3D/Graphics/ParticleEmitter.h>
@@ -732,6 +741,7 @@ private:
     // === Новые элементы HUD: баннер волны, полоса босса, лента событий ===
     SharedPtr<Text> waveBanner_;
     float waveBannerTimer_ = 0.0f;
+    Color waveBannerColor_ = Color(1.0f, 0.85f, 0.25f, 1.0f);  // UIElement::GetColor() в 1.8 требует Corner
     SharedPtr<BorderImage> bossBarBg_, bossBarFill_;
     SharedPtr<Text> bossBarText_;
     SharedPtr<Text> killFeedText_;
@@ -1153,7 +1163,10 @@ private:
      hdPanel_  = cache->GetResource<Material>("Materials/Game/MetalPanel.xml");
      hdMetal_  = cache->GetResource<Material>("Materials/Game/BrushedMetal.xml");
      hdCrate_  = cache->GetResource<Material>("Materials/Game/CrateWood.xml");
-     skyTexture_ = cache->GetResource<Texture>("Textures/SkyDay.png"); // базовый класс Texture — заголовки Technique/Texture2D недоступны в этой сборке
+     // ВАЖНО: Texture — абстрактная база и НЕ зарегистрирована в ResourceCache,
+     // поэтому GetResource<Texture>() давал «Could not load unknown resource type» на каждую
+     // текстуру (12 ошибок в логе) и HD-материалы молча оставались без своих текстур.
+     skyTexture_ = cache->GetResource<Texture2D>("Textures/SkyDay.png");
 
      // --- Качество текстур: mipmaps убирают «снег» на дальних плоскостях,
      // анизотропная фильтрация делает плитку пола чёткой под острым углом ---
@@ -1168,8 +1181,8 @@ private:
          };
          anisoTextures_.Clear();
          for (const char* tn : hdTexNames) {
-            // В этой сборке Urho3D GetResource возвращает голый указатель — не оборачиваем в SharedPtr
-            Texture* t = cache->GetResource<Texture>(String(tn));
+            // ResourceCache::GetResource<T>() возвращает голый T* (не SharedPtr)
+            Texture2D* t = cache->GetResource<Texture2D>(String(tn));
             if (t && !anisoTextures_.Contains(t)) anisoTextures_.Push(t);
         }
         // Фильтрация теперь реально зависит от настройки (было жёстко FILTER_ANISOTROPIC)
@@ -2736,7 +2749,8 @@ private:
         waveBannerTimer_ = 2.4f;
         if (!waveBanner_) return;
         waveBanner_->SetText(text);
-        waveBanner_->SetColor(Color(color.r_, color.g_, color.b_, 1.0f));
+        waveBannerColor_ = Color(color.r_, color.g_, color.b_, 1.0f);
+        waveBanner_->SetColor(waveBannerColor_);
         waveBanner_->SetEnabled(true);
     }
 
@@ -2746,8 +2760,8 @@ private:
         if (!waveBanner_) return;
         float t = Clamp(waveBannerTimer_ / 2.4f, 0.0f, 1.0f);       // 1 -> 0
         float alpha = Min(1.0f, t * 2.5f) * Min(1.0f, (1.0f - t) * 6.0f + 0.15f);
-        Color c = waveBanner_->GetColor();
-        waveBanner_->SetColor(Color(c.r_, c.g_, c.b_, Clamp(alpha, 0.0f, 1.0f)));
+        waveBanner_->SetColor(Color(waveBannerColor_.r_, waveBannerColor_.g_, waveBannerColor_.b_,
+                                    Clamp(alpha, 0.0f, 1.0f)));
         if (waveBannerTimer_ <= 0.0f) waveBanner_->SetEnabled(false);
     }
 
@@ -4534,7 +4548,7 @@ private:
 
     // Настройка «Фильтрация текстур»: реально меняет фильтр у HD-текстур.
     void ApplyTextureFiltering() {
-        FilterMode fm = FILTER_ANISOTROPIC;
+        TextureFilterMode fm = FILTER_ANISOTROPIC;
         if (gfxAnisoIdx_ == 0) fm = FILTER_BILINEAR;
         else if (gfxAnisoIdx_ == 1) fm = FILTER_TRILINEAR;
         for (unsigned i = 0; i < anisoTextures_.Size(); ++i)
