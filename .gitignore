@@ -1,3 +1,31 @@
+# --- сборка ---
 build/
+bin/MyShooter
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+
+# --- логи и артефакты запуска ---
+*.log
+Urho3D.log
+run_log.txt
+core
+core.*
+
+# --- бэкапы и «сломанные» копии исходников ---
+*.bak
+*.bak[0-9]*
+*.broken.*
+*.orig
+*.rej
+*~
+
+# --- патчи/бандлы: это артефакты переноса, а не исходники ---
 *.bundle
 *.patch
+
+# --- генерируемые текстуры (tools/gen_textures.py) ---
+bin/Data/TexturesHD/
+build/Data/TexturesHD/

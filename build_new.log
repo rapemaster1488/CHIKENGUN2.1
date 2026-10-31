@@ -1,5 +1,0 @@
-Urho3D includes: /home/larp/urho3d/build
-Подсказка: если компилятор упадёт на Bullet/*.h — пересобери Urho3D из исходников
-(его ThirdParty/Bullet подставит нужные заголовки автоматически).
-Готово: build/MyShooter
-HD-текстуры синхронизированы: bin/Data/TexturesHD -> build/Data/Textures/
