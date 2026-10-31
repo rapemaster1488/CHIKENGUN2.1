@@ -696,6 +696,7 @@ private:
     SharedPtr<Material> combMat_, beakMat_, legMat_, eggMat_, featherMat_;
     SharedPtr<Material> decalMat_;     // пулевые отверстия
     SharedPtr<Material> shockMat_;     // ударная волна взрыва
+    SharedPtr<Material> shellMat_;     // латунные гильзы
 
     struct ShockwaveData { SharedPtr<Node> node_; float ttl_ = 0.6f; float max_ = 0.6f; };
     Vector<ShockwaveData> shockwaves_;
@@ -3467,6 +3468,7 @@ private:
         // Визуальные эффекты выстрела
         PlayMuzzleFlash();
         PlayShootSound();
+        SpawnShellCasing();   // латунная гильза вылетает из оружия
         
         // Дробины дробовика — отдельными лучами
         const WeaponDef& wdef = WEAPON_DEFS[currentWeapon_];
@@ -3776,6 +3778,28 @@ private:
     // =========================================================================
     
     float SfxGain(float base) const { return Clamp(base * sfxVolume_, 0.0f, 1.0f); }
+
+    // Гильза: летит вправо-вверх от оружия, живёт 1.6 с (физика — UpdateDebrisLite)
+    void SpawnShellCasing() {
+        if (!weaponNode_) return;
+        if (!shellMat_) shellMat_ = MakeTinted(nullptr, nullptr, Color(215, 175, 80));
+        Vector3 muzzle = weaponNode_->GetWorldPosition() + weaponNode_->GetWorldDirection() * 0.4f;
+        Node* c = scene_->CreateChild("Shell", LOCAL);
+        c->SetPosition(muzzle);
+        c->SetScale(Vector3(0.035f, 0.035f, 0.09f));
+        StaticModel* sm = c->CreateComponent<StaticModel>();
+        sm->SetModel(cylModel_ ? cylModel_ : boxModel_);
+        sm->SetMaterial(shellMat_.Get());
+        sm->SetCastShadows(false);
+        Vector3 right = weaponNode_->GetWorldRight();
+        DebrisData d;
+        d.node_ = c;
+        d.pos_ = muzzle;
+        d.vel_ = right * (2.0f + (float)(rand() % 20) / 10.0f) + Vector3(0, 2.6f, 0);
+        d.spin_ = Vector3(12.0f, 8.0f, 16.0f);
+        d.ttl_ = 1.6f;
+        debrisLite_.Push(d);
+    }
 
     void PlayShootSound() {
         if (!soundSource_) return;
@@ -5192,6 +5216,26 @@ private:
         Node* n = e.node_.Get();
         if (n) {
             CreateHitSpark(n->GetPosition() + Vector3(0, 0.5f, 0));
+            // Пух: 2 пёрышка из точки попадания — сразу видно, что попал по курице
+            if (featherMat_) {
+                for (int k = 0; k < 2; ++k) {
+                    Node* f = scene_->CreateChild("HitFeather", LOCAL);
+                    f->SetPosition(n->GetPosition() + Vector3(0, 0.9f, 0));
+                    f->SetScale(Vector3(0.05f, 0.02f, 0.18f));
+                    StaticModel* fsm = f->CreateComponent<StaticModel>();
+                    fsm->SetModel(boxModel_);
+                    fsm->SetMaterial(featherMat_.Get());
+                    fsm->SetCastShadows(false);
+                    float a = (float)(rand() % 628) / 100.0f;
+                    DebrisData fd;
+                    fd.node_ = f;
+                    fd.pos_ = n->GetPosition() + Vector3(0, 0.9f, 0);
+                    fd.vel_ = Vector3(cosf(a) * 1.6f, 1.6f + (float)(rand() % 100) / 100.0f, sinf(a) * 1.6f);
+                    fd.spin_ = Vector3((float)(rand() % 400 - 200), (float)(rand() % 400 - 200), 0.0f) * 0.02f;
+                    fd.ttl_ = 1.8f;
+                    debrisLite_.Push(fd);
+                }
+            }
             PlayHitSound();
             // Визуальный «откид» без физики: короткий наклон модели робота
             e.recoilKick_ = 0.35f;
