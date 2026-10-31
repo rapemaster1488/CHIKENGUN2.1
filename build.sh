@@ -90,17 +90,28 @@ else
 fi
 
 CXX=${CXX:-g++}
+CXXFLAGS=${CXXFLAGS:-"-O2"}
+
+# Библиотеки Bullet подключаем только те, что реально есть в $URHO_LIBDIR.
+# Было: `[ -f libBullet3Collision.so ] || ls ... && echo "-l..."` — при наличии .so
+# короткое замыкание `||` не давало echo, и флаги не добавлялись вообще.
+BULLET_LIBS=()
+for lib in Bullet3Collision Bullet3Dynamics Bullet3Geometry BulletInverseDynamics; do
+    if ls "$URHO_LIBDIR/lib$lib".so* >/dev/null 2>&1; then
+        BULLET_LIBS+=("-l$lib")
+    fi
+done
 
 $CXX "$SRC" \
     -o "$OUT" \
-    -std=c++17 \
+    -std=c++17 $CXXFLAGS \
     -I"$URHO_INC" \
     -I"$URHO_INC/Urho3D/ThirdParty" \
     $SDL_CFLAGS \
     $BULLET_CFLAGS \
     -L"$URHO_LIBDIR" \
     -lUrho3D \
-    $( [ -f "$URHO_LIBDIR/libBullet3Collision.so" ] || ls "$URHO_LIBDIR"/libBullet3Collision.so* >/dev/null 2>&1 && echo "-lBullet3Collision -lBullet3Dynamics -lBullet3Geometry -lBulletInverseDynamics" ) \
+    "${BULLET_LIBS[@]}" \
     $SDL_LIBS \
     -lGL \
     -lX11 \
@@ -153,7 +164,7 @@ for hd in "bin/Data/TexturesHD" "Data/TexturesHD"; do
     fi
 done
 
-# Добиваем .pfx из CoreData движка (иначе спам "unknown resource type" при старте)
-for d in "$HOME/urho3d/bin/CoreData" "$HOME/urho3d/bin/Data" "$HOME/urho3d/build/CoreData"; do
-    [ -d "$d" ] && find "$d" -iname '*.pfx' -delete 2>/dev/null
-done
+# УДАЛЕНО: раньше здесь рекурсивно удалялись все *.pfx из установленного Urho3D
+# (~/urho3d/bin/Data, ~/urho3d/bin/CoreData). Это необратимо ломало чужую установку
+# движка ради подавления строчки «unknown resource type» в логе.
+# Игра и так игнорирует битые .pfx (см. CreateParticleEffects).
