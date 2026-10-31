@@ -52,6 +52,8 @@
 #include <Urho3D/Scene/Scene.h>
 #include <Urho3D/Graphics/Zone.h>
 #include <Urho3D/Math/BoundingBox.h>
+#include <Urho3D/Math/Vector2.h>
+#include <Urho3D/Math/Vector4.h>
 #include <Urho3D/Scene/SceneEvents.h>
 #include <Urho3D/Scene/Node.h>
 #include <Urho3D/Scene/Component.h>
@@ -202,6 +204,15 @@ namespace GameConstants {
     constexpr int ARENA_SIZE = 48;      // тайлов на сторону (было 50)
     constexpr float TILE_SIZE = 4.0f;   // крупнее тайл -> арена 192x192 м вместо 100x100
     constexpr float FLOOR_TILE_UV_SCALE = 6.0f; // сколько раз тайл-текстура ложится на плиту пола
+
+    // Пол арены — аналитическая плоскость в Lite-физике (см. RaycastLite).
+    constexpr float FLOOR_Y = 0.0f;
+    constexpr float FLOOR_UV_TILES = 48.0f; // 192 м / 4 м = 48 повторов текстуры на сторону
+
+    // Пикапы: время респавна после подбора (сек) и радиус подбора (м)
+    constexpr float PICKUP_RESPAWN = 18.0f;
+    constexpr float PICKUP_RADIUS = 1.4f;
+    constexpr float PICKUP_HEAL = 25.0f;
 }
 
 // ============================================================================
@@ -345,7 +356,6 @@ private:
     Node* weaponModelNode_ = nullptr;
     Light* muzzleLight_ = nullptr;
     Node* muzzleLightNode_ = nullptr;
-    float wallHeight_ = 5.0f;
     
     // Компоненты
     // === Лёгкая физика: реестр коллайдеров уровня (см. namespace Lite) ===
@@ -360,8 +370,37 @@ private:
         colliders_.Push(col);
         return (int)colliders_.Size() - 1;
     }
+    int colliderGarbage_ = 0;   // сколько «удалённых» записей ждёт компакции
+
     void RemoveColliderLite(int idx) {
-        if (idx >= 0 && idx < (int)colliders_.Size()) colliders_[(unsigned)idx].tag = 7;
+        if (idx >= 0 && idx < (int)colliders_.Size() && colliders_[(unsigned)idx].tag != 7) {
+            colliders_[(unsigned)idx].tag = 7;
+            ++colliderGarbage_;
+        }
+    }
+
+    // Реестр коллайдеров раньше только рос: удалённые записи (tag 7) оставались в массиве
+    // и перебирались в каждом рейкасте. Компакция пересобирает массив и чинит все индексы.
+    void CompactColliders() {
+        if (colliderGarbage_ <= 0) return;
+        Vector<Lite::Collider> compacted;
+        compacted.Reserve(colliders_.Size());
+        Vector<int> remap;
+        remap.Resize(colliders_.Size());
+        for (unsigned i = 0; i < colliders_.Size(); ++i) {
+            if (colliders_[i].tag == 7) { remap[i] = -1; continue; }
+            remap[i] = (int)compacted.Size();
+            compacted.Push(colliders_[i]);
+        }
+        auto fix = [&remap](int& idx) {
+            if (idx >= 0 && idx < (int)remap.Size()) idx = remap[(unsigned)idx];
+            else idx = -1;
+        };
+        for (unsigned i = 0; i < targets_.Size(); ++i) fix(targets_[i].colliderIdx_);
+        for (unsigned i = 0; i < enemies_.Size(); ++i) fix(enemies_[i].colliderIdx_);
+        for (unsigned i = 0; i < movingTargetsLite_.Size(); ++i) fix(movingTargetsLite_[i].colliderIdx_);
+        colliders_ = compacted;
+        colliderGarbage_ = 0;
     }
     void MoveColliderLite(int idx, const Vector3& center) {
         if (idx >= 0 && idx < (int)colliders_.Size()) colliders_[(unsigned)idx].center = center;
@@ -379,13 +418,25 @@ private:
                      Vector3* outNormal = nullptr) const {
         float best = maxDist; int bestTag = -1; void* bestPtr = nullptr; bool hit = false;
         Vector3 bestCenter = Vector3::ZERO, bestHalf = Vector3::ONE; bool bestSphere = false;
+        bool bestFloor = false;
+
+        // Пол: аналитическая плоскость y = FLOOR_Y, тег 0 (статика).
+        // Раньше пола не было в реестре вообще: пули уходили «сквозь» него, а ProbeGround
+        // возвращал мусор и HandleMovement подставлял высоту вручную.
+        if ((tagMask & 1) && dir.y_ < -1e-6f) {
+            float tFloor = (GameConstants::FLOOR_Y - origin.y_) / dir.y_;
+            if (tFloor >= 0.0f && tFloor < best) {
+                best = tFloor; bestTag = 0; bestPtr = nullptr; hit = true; bestFloor = true;
+            }
+        }
+
         for (unsigned i = 0; i < colliders_.Size(); ++i) {
             const Lite::Collider& c = colliders_[i];
             if (c.tag == 7 || !(tagMask & (1 << c.tag))) continue; // 7 = удалён
             float t = c.sphere ? Lite::RaySphere(origin, dir, c.center, c.half.x_)
                                : Lite::RayBox(origin, dir, c.center, c.half);
             if (t >= 0.0f && t < best) {
-                best = t; bestTag = c.tag; bestPtr = c.ptr; hit = true;
+                best = t; bestTag = c.tag; bestPtr = c.ptr; hit = true; bestFloor = false;
                 bestCenter = c.center; bestHalf = c.half; bestSphere = c.sphere;
             }
         }
@@ -394,12 +445,45 @@ private:
             if (outTag) *outTag = bestTag;
             if (outPtr) *outPtr = bestPtr;
             if (outNormal) {
-                if (bestSphere) *outNormal = (outPoint - bestCenter).Normalized();
+                if (bestFloor) *outNormal = Vector3::UP;
+                else if (bestSphere) *outNormal = (outPoint - bestCenter).Normalized();
                 else *outNormal = HitNormalLite(outPoint, bestCenter, bestHalf);
             }
         }
         return hit;
     }
+    // Свободна ли точка для спавна (пересечение с AABB/сферами статики)
+    bool IsPointFree(const Vector3& p, float radius) const {
+        for (unsigned i = 0; i < colliders_.Size(); ++i) {
+            const Lite::Collider& c = colliders_[i];
+            if (c.tag != 0) continue; // только статика: стены, колонны, ящики, бочки, платформы
+            float dx = p.x_ - c.center.x_, dy = p.y_ - c.center.y_, dz = p.z_ - c.center.z_;
+            if (c.sphere) {
+                float r = c.half.x_ + radius;
+                if (dx * dx + dy * dy + dz * dz < r * r) return false;
+            } else if (fabsf(dx) < c.half.x_ + radius &&
+                       fabsf(dy) < c.half.y_ + radius &&
+                       fabsf(dz) < c.half.z_ + radius) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    // Выталкивание из статики по горизонтали (4 коротких луча).
+    // Раньше роботы двигались «напрямую» и проходили сквозь стены, ящики и платформу.
+    Vector3 PushOutOfObstacles(const Vector3& pos, float radius, float probeHeight) {
+        Vector3 test(pos.x_, pos.y_ + probeHeight, pos.z_);
+        const Vector3 dirs[4] = { Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1) };
+        Vector3 push = Vector3::ZERO;
+        for (int i = 0; i < 4; ++i) {
+            float dist = 0.0f; Vector3 hitPoint;
+            if (RaycastLite(test, dirs[i], radius + 0.1f, 1, dist, hitPoint) && dist < radius + 0.1f)
+                push -= dirs[i] * ((radius + 0.1f) - dist);
+        }
+        return pos + push;
+    }
+
     SharedPtr<DebugRenderer> debugRenderer_;
     
     // UI элементы
@@ -420,6 +504,33 @@ private:
     Vector<TargetData> targets_;
     WeaponState weapon_;
     PlayerStats player_;
+
+    // Патроны по каждому оружию: переключение 1..7 больше не является бесконечным боезапасом.
+    // magAmmo_/reserveAmmo_ хранят остаток для слотов, ammoInit_ — инициализирован ли слот.
+    int magAmmo_[WEAPON_COUNT] = {};
+    int reserveAmmo_[WEAPON_COUNT] = {};
+    bool ammoInit_[WEAPON_COUNT] = {};
+
+    // Таймер вспышки дула (свет включается на 1-2 кадра, а не «включается и сразу гаснет»)
+    float muzzleFlashTimer_ = 0.0f;
+
+    // Пауза (Esc в игре) и отложенная пересборка UI при ресайзе окна
+    bool paused_ = false;
+    SharedPtr<UIElement> pausePanel_;
+    bool pendingUiRebuild_ = false;
+    bool rebuildingUI_ = false;
+    float lastCrosshairGap_ = -1.0f;
+    int uiWidth_ = 0;
+    int uiHeight_ = 0;
+
+    // Кэш материалов эффектов: раньше MakeTinted() вызывался на каждый выстрел/снаряд
+    // и навсегда оседал в tintedMatStore_ (утечка + churn ресурсов).
+    SharedPtr<Material> tracerMat_;
+    SharedPtr<Material> enemyShotMat_;
+    // Кэш материалов глаз роботов и «железа» оружия: раньше новые Material создавались
+    // на каждого заспавненного врага и на каждое переключение оружия.
+    SharedPtr<Material> eyeMatMelee_, eyeMatCharger_, eyeMatShooter_, eyeMatBoss_;
+    SharedPtr<Material> weaponDarkMat_, weaponAccentMat_;
     
     // Состояние ввода
     float yaw_ = 0.0f;
@@ -445,8 +556,6 @@ private:
     float landDuckOffset_ = 0.0f;             // просадка камеры при приземлении
     float camShakeAmount_ = 0.0f;             // тряска от взрывов/отдачи
     float currentFov_ = 75.0f;                // плавно интерполируемый FOV
-    Vector3 lastCamPos_ = Vector3(0, GameConstants::PLAYER_HEIGHT, 0);
-    Vector3 camVelocitySmoothed_ = Vector3::ZERO; // для velocity-based наклона
     
     // Временные переменные
     float messageTimer_ = 0.0f;
@@ -489,8 +598,10 @@ private:
     int settingsSel_ = 0;           // 0 тени, 1 bloom, 2 разрешение, 3 анизотропия, 4 SFX, 5 музыка, 6 назад
     int gfxShadowIdx_ = 2;          // 0=1K 1=2K 2=4K
     int gfxGlowIdx_ = 2;            // 0=выкл 1=слабый 2=полный
-    int gfxResIdx_ = 0;             // 0=натив 1=75% 2=50%
-    int gfxAnisoIdx_ = 2;           // 0=4x 1=8x 2=16x
+    int gfxFpsIdx_ = 1;             // 0=60 1=120 2=без лимита (раньше тут была мёртвая «разрешение»)
+    int gfxAnisoIdx_ = 2;           // 0=билинейная 1=трилинейная 2=анизотропная
+    // Текстуры, к которым применяется настройка фильтрации
+    Vector<Texture*> anisoTextures_;
     float sfxVolume_ = 0.8f;
     float musicVolume_ = 0.35f;
     SharedPtr<UIElement> mainMenuPanel_;
@@ -506,7 +617,6 @@ private:
     Vector<float> menuParticleX_;
     Vector<float> menuParticleSpeed_;
     SharedPtr<Text> gameOverTitle_;
-    SharedPtr<Text> gameOverStats_;
     SharedPtr<Text> gameOverHint_;
     float gameOverPulse_ = 0.0f;
     IntVector2 goBasePos_;   bool goBasePosSet_ = false;   // база для пульсации GAME OVER
@@ -537,7 +647,8 @@ private:
         float recoilKick_ = 0.0f;       // визуальный «откат» стрелка
     };
     Vector<EnemyData> enemies_;
-    Vector<SharedPtr<Node>> enemyNodes_;   // владение нодами до удаления
+    // enemyNodes_ убран: он держал SharedPtr на уже удалённых роботов (утечка узла на каждое убийство).
+    // Живыми нодами владеет сцена, EnemyData хранит WeakPtr.
     // === Lite-мишени и Lite-осколки (без Bullet) ===
     struct MovingTargetLite {
         SharedPtr<Node> node_;
@@ -553,6 +664,18 @@ private:
         float ttl_ = 4.0f;
     };
     Vector<DebrisData> debrisLite_;
+
+    // === Пикапы (аптечки и патроны): единственный источник лечения в игре ===
+    struct PickupData {
+        SharedPtr<Node> node_;
+        Vector3 home_ = Vector3::ZERO;
+        int type_ = 0;             // 0 = аптечка, 1 = патроны
+        float respawn_ = 0.0f;     // >0 — подобран, ждёт респавна
+    };
+    Vector<PickupData> pickups_;
+    SharedPtr<Material> pickupHealMat_;
+    SharedPtr<Material> pickupAmmoMat_;
+
     int waveNum_ = 0;
     float waveRespawnTimer_ = 0.0f;
     // Комбо и рекорды
@@ -562,21 +685,17 @@ private:
     int highScore_ = 0;
     float rangeRespawnTimer_ = 0.0f;
     SharedPtr<Material> robotBodyMat_;
-    SharedPtr<Material> robotEyeMat_;
+    // (robotEyeMat_ убран: глаза роботов кэшируются в EnsureEyeMaterials)
     int currentWeapon_ = W_RIFLE;
     int currentSkin_ = 0;
-    Vector<Node*> robotNodes_;
-    float waveSpawnTimer_ = 0.0f;
-    int waveNumber_ = 0;
     Vector<SharedPtr<Node>> decoNodes_;
     SharedPtr<Text> weaponNameText_;
     bool armoryOpen_ = false;
     SharedPtr<UIElement> armoryPanel_;
     Vector<SharedPtr<Text>> armoryWeaponRows_;
     Vector<SharedPtr<Text>> armorySkinRows_;
-    float autoFireTimer_ = 0.0f;
     SharedPtr<UIElement> hudPanelBg_;
-    SharedPtr<BorderImage> healthBarFill_;
+    SharedPtr<Text> helpText_;   // подсказка по управлению: прячется вместе с HUD
     
     // Ресурсы
     Model* boxModel_ = nullptr;
@@ -587,7 +706,6 @@ private:
     Material* targetMaterial_ = nullptr;
     Material* targetHitMaterial_ = nullptr;
     Material* floorMaterialLight_ = nullptr;
-    Material* floorMaterialDark_ = nullptr;
     Material* hdStone_ = nullptr;
     Material* hdFloor_ = nullptr;
     Material* hdPanel_ = nullptr;
@@ -673,37 +791,10 @@ public:
                 cache->AddResourceDir(goodData, 0);
                 URHO3D_LOGINFO("Папка ресурсов добавлена (priority 0): " + goodData);
 
-            // Полная очистка от .pfx (неизвестный тип 2B8AF19B): чистим все префиксы,
-            // включая внешний CoreData движка — частицы строятся в памяти, .pfx не нужны.
-            {
-                Vector<String> pfxRoots;
-                if (!exeDir.Empty()) {
-                    pfxRoots.Push(exeDir + "/Data");
-                    pfxRoots.Push(exeDir + "/CoreData");
-                    pfxRoots.Push(exeDir + "/../bin/Data");
-                    pfxRoots.Push(exeDir + "/../../bin/Data");
-                    pfxRoots.Push(exeDir + "/../../bin/CoreData");
-                }
-                if (!goodData.Empty()) {
-                    pfxRoots.Push(goodData);
-                    pfxRoots.Push(goodData + "/CoreData");
-                }
-                // GetResourceDir в этом билде Engine отсутствует — ищем CoreData рядом с самим движком:
-                String engRes;
-                if (engine_) {
-                    String exe = engine_->GetParameters().Get("executable");
-                    if (!exe.Empty()) engRes = exe.GetParent();          // папка бинарника движка (bin)
-                    if (engRes.Empty()) engRes = String(GetApplication()->GetExecutablePath()).GetParent();
-                }
-                if (!engRes.Empty()) {
-                    pfxRoots.Push(engRes);
-                    pfxRoots.Push(engRes + "/CoreData");
-                }
-                for (unsigned i = 0; i < pfxRoots.Size(); ++i) {
-                    String cmd = "find '" + pfxRoots[i] + "' -iname '*.pfx' -delete 2>/dev/null";
-                    int rc = system(cmd.CString()); (void)rc;
-                }
-            }
+            // УДАЛЕНО: на старте игра рекурсивно удаляла через system("find ... -delete")
+            // все .pfx не только у себя, но и в установленном Urho3D (включая bin/Data движка).
+            // Это необратимо ломало чужую установку движка ради подавления строчки в логе;
+            // пустые/битые .pfx теперь просто игнорируются (см. CreateParticleEffects).
             } else {
                 URHO3D_LOGWARNING("Папка Data/ не найдена ни рядом с бинарником, ни в cwd! Скопируй: cp -r ~/urho3d/bin/Data ./Data");
             }
@@ -845,7 +936,7 @@ public:
         EquipWeapon(currentWeapon_, true);
 
         // Показ сообщения о начале игры
-        ShowMessage("CHIKENGUN 2.1 | WASD - движение, SHIFT - бег, SPACE - прыжок, CTRL - присед\nЛКМ - огонь, ПКМ - прицел, 1-7 оружие, TAB - арсенал, F - режим, Esc - выход");
+        ShowMessage("CHIKENGUN 2.1 | WASD - движение, SHIFT - бег, SPACE - прыжок, CTRL - присед\nЛКМ - огонь, ПКМ - прицел, 1-7 оружие, TAB - арсенал, F - режим, Esc - пауза\nЗелёные сферы - аптечки, жёлтые - патроны");
     }
 
 private:
@@ -864,8 +955,10 @@ private:
         // Настройки рендерера
         renderer->SetShadowMapSize(4096);           // карта теней 4K: чёткие края на большой арене
         renderer->SetSpecularLighting(true);
-        renderer->SetHDRRendering(gfxGlowIdx_ > 0);   // HDR+bloom: по настройке, не всегда
-        ConfigureGlow(renderer, gfxGlowIdx_ > 0);     // bloom через XML-параметры
+        // Единое условие с ApplyGraphicsSettings: HDR только на «полном» bloom (>=2),
+        // иначе «слабый» вёл себя как «выкл», а на старте HDR был включён.
+        renderer->SetHDRRendering(gfxGlowIdx_ >= 2);
+        ConfigureGlow(renderer, gfxGlowIdx_ >= 2);
         
         // Настройка окна
     }
@@ -1003,13 +1096,14 @@ private:
              "Textures/CrateWoodDiffuse.png", "Textures/CrateWoodNormal.png",
              "Textures/SkyDay.png"
          };
+         anisoTextures_.Clear();
          for (const char* tn : hdTexNames) {
             // В этой сборке Urho3D GetResource возвращает голый указатель — не оборачиваем в SharedPtr
             Texture* t = cache->GetResource<Texture>(String(tn));
-            if (t) {
-                t->SetFilterMode(FILTER_ANISOTROPIC); // анизотропная фильтрация для пола под углом
-            }
+            if (t && !anisoTextures_.Contains(t)) anisoTextures_.Push(t);
         }
+        // Фильтрация теперь реально зависит от настройки (было жёстко FILTER_ANISOTROPIC)
+        ApplyTextureFiltering();
      }
 
      stoneMaterial_ = hdStone_ ? hdStone_ : cache->GetResource<Material>("Materials/Stone.xml");
@@ -1040,7 +1134,6 @@ private:
          targetHitMaterial_ = MakeTinted(white, nullptr, Color(255, 220, 120));
      }
      floorMaterialLight_ = hdFloor_ ? hdFloor_ : stoneMaterial_;
-     floorMaterialDark_  = hdPanel_ ? hdPanel_ : stoneMaterial_;
      // Анизотропная фильтрация: глобальная настройка движка (per-material MAT_ANISOTROPY в этой сборке недоступен)
      // Глобальная анизотропия недоступна в этой сборке — фильтрация по умолчанию
      // Материалы оружия под текущий скин
@@ -1050,6 +1143,7 @@ private:
 
     void RefreshWeaponMaterials() {
         weaponTintMats_.Clear();
+        weaponAccentMat_ = nullptr;   // акцент оружия зависит от скина — пересоздадим
         const SkinDef& skin = SKIN_DEFS[currentSkin_];
         for (int w = 0; w < WEAPON_COUNT; ++w) {
             Color base = WEAPON_DEFS[w].tint;
@@ -1152,6 +1246,7 @@ private:
         // Небо и декорации новой арены
         CreateSky();
         CreateArenaDecor();
+        CreatePickups();
 
         // Создаем освещение
         CreateLighting();
@@ -1331,28 +1426,36 @@ private:
     }
     
     void CreateFloor() {
-        const int gridSize = GameConstants::ARENA_SIZE / 2;
-        const float tileSize = GameConstants::TILE_SIZE;
-        
-        for (int x = -gridSize; x < gridSize; ++x) {
-            for (int z = -gridSize; z < gridSize; ++z) {
-                Node* tileNode = scene_->CreateChild("FloorTile");
-                
-                float posX = (x + 0.5f) * tileSize;
-                float posZ = (z + 0.5f) * tileSize;
-                tileNode->SetPosition(Vector3(posX, -0.1f, posZ));
-                tileNode->SetScale(Vector3(tileSize * 0.98f, 1.0f, tileSize * 0.98f));
-                
-                StaticModel* model = tileNode->CreateComponent<StaticModel>();
-                model->SetModel(planeModel_ ? planeModel_ : boxModel_);
-                
-                // Шахматный узор
-                bool isLight = ((x + z) % 2) == 0;
-                model->SetMaterial(isLight ? floorMaterialLight_ : floorMaterialDark_);
-                
-                // Пол в Lite-физике — плоскость y=-0.1 (см. RaycastLite), коллайдер на тайл не нужен
-            }
-        }
+        // БЫЛО: 48x48 = 2304 отдельные ноды с StaticModel (2304 draw call'а и 2304 обхода
+        // октодерева на каждый кадр). СТАЛО: один меш на всю арену с UV-тайлингом 48x48.
+        const float size = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE; // 192 м
+        const float uv = GameConstants::FLOOR_UV_TILES;
+
+        Node* floorNode = scene_->CreateChild("Floor");
+        floorNode->SetPosition(Vector3(0.0f, GameConstants::FLOOR_Y, 0.0f));
+
+        CustomGeometry* floorGeom = floorNode->CreateComponent<CustomGeometry>();
+        floorGeom->BeginGeometry(0, TRIANGLE_LIST);
+        auto addVertex = [floorGeom](const Vector3& pos, float u, float v) {
+            floorGeom->DefineVertex(pos);
+            floorGeom->DefineNormal(Vector3::UP);
+            floorGeom->DefineTexCoord(Vector2(u, v));
+            floorGeom->DefineTangent(Vector4(1.0f, 0.0f, 0.0f, 1.0f)); // для normal-map техник
+            floorGeom->DefineColor(Color::WHITE);
+        };
+        const float h = size * 0.5f;
+        // Обход против часовой стрелки (вид сверху) — нормаль смотрит вверх
+        addVertex(Vector3(-h, 0.0f, -h), 0.0f, 0.0f);
+        addVertex(Vector3(-h, 0.0f,  h), 0.0f, uv);
+        addVertex(Vector3( h, 0.0f,  h), uv,   uv);
+        addVertex(Vector3(-h, 0.0f, -h), 0.0f, 0.0f);
+        addVertex(Vector3( h, 0.0f,  h), uv,   uv);
+        addVertex(Vector3( h, 0.0f, -h), uv,   0.0f);
+        floorGeom->Commit();
+        if (floorMaterialLight_) floorGeom->SetMaterial(floorMaterialLight_);
+        floorGeom->SetCastShadows(false);
+
+        // Коллайдер полу не нужен: пол — аналитическая плоскость y = FLOOR_Y внутри RaycastLite.
     }
     
     void CreateWalls() {
@@ -1360,14 +1463,17 @@ private:
         const float wallThickness = 2.0f;
         const float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
         
+        // ВАЖНО: куб 1x1 растягивается на ВСЮ длину стороны (2 * arenaSize),
+        // иначе каждая стена закрывала только половину периметра и в углах были дыры.
+        const float wallLength = arenaSize * 2.0f;
         // Северная стена
-        CreateWall(Vector3(0, wallHeight/2, -arenaSize), Vector3(arenaSize, wallHeight, wallThickness));
+        CreateWall(Vector3(0, wallHeight/2, -arenaSize), Vector3(wallLength, wallHeight, wallThickness));
         // Южная стена
-        CreateWall(Vector3(0, wallHeight/2, arenaSize), Vector3(arenaSize, wallHeight, wallThickness));
+        CreateWall(Vector3(0, wallHeight/2, arenaSize), Vector3(wallLength, wallHeight, wallThickness));
         // Западная стена
-        CreateWall(Vector3(-arenaSize, wallHeight/2, 0), Vector3(wallThickness, wallHeight, arenaSize));
+        CreateWall(Vector3(-arenaSize, wallHeight/2, 0), Vector3(wallThickness, wallHeight, wallLength));
         // Восточная стена
-        CreateWall(Vector3(arenaSize, wallHeight/2, 0), Vector3(wallThickness, wallHeight, arenaSize));
+        CreateWall(Vector3(arenaSize, wallHeight/2, 0), Vector3(wallThickness, wallHeight, wallLength));
 
         // Верхний светящийся пояс по периметру (без физики — только красота в тумане)
         SharedPtr<Material> neonStrip = MakeTinted(nullptr, nullptr, Color(60, 220, 255));
@@ -1704,10 +1810,14 @@ private:
         weaponModelNode_->SetScale(Vector3::ONE);
 
         Material* gunMat = weaponTintMats_.Size() ? weaponTintMats_[type] : metalMaterial_;
-        SharedPtr<Material> dark = MakeTinted(nullptr, nullptr, Color(35, 35, 40));
-        SharedPtr<Material> accent = SKIN_DEFS[currentSkin_].emissive
+        // Тёмный/акцентный материал кэшируются: раньше на КАЖДОЕ переключение оружия
+        // создавалось два новых Material, и они навсегда оставались в tintedMatStore_.
+        if (!weaponDarkMat_) weaponDarkMat_ = MakeTinted(nullptr, nullptr, Color(35, 35, 40));
+        if (!weaponAccentMat_) weaponAccentMat_ = SKIN_DEFS[currentSkin_].emissive
             ? MakeTinted(nullptr, nullptr, Color(60, 255, 170))
             : MakeTinted(nullptr, nullptr, Color(25, 25, 28));
+        Material* dark = weaponDarkMat_;
+        Material* accent = weaponAccentMat_;
         Model* cyl = GetSubsystem<ResourceCache>()->GetResource<Model>("Models/Cylinder.mdl");
         if (!cyl) cyl = boxModel_;
 
@@ -1782,14 +1892,30 @@ private:
 
     void EquipWeapon(int type, bool full) {
         if (type < 0 || type >= WEAPON_COUNT) return;
+
+        // Сохраняем остаток патронов текущего оружия. Без этого каждое переключение
+        // 1..7 выдавало полный магазин — бесконечный боезапас.
+        if (weapon_.weaponType_ >= 0 && weapon_.weaponType_ < WEAPON_COUNT && ammoInit_[weapon_.weaponType_]) {
+            magAmmo_[weapon_.weaponType_] = weapon_.currentAmmo_;
+            reserveAmmo_[weapon_.weaponType_] = weapon_.reserveAmmo_;
+        }
+
         currentWeapon_ = type;
         const WeaponDef& def = WEAPON_DEFS[type];
         weapon_.weaponType_ = type;
         weapon_.isReloading_ = false;
         weapon_.reloadTimer_ = 0;
         weapon_.fireTimer_ = 0;
-        weapon_.currentAmmo_ = def.magSize;
-        if (full) weapon_.reserveAmmo_ = def.reserveMax;
+
+        // Первый доступ к слоту (или принудительный рефилл, full=true) — полный боезапас,
+        // иначе восстанавливаем сохранённый остаток.
+        if (!ammoInit_[type] || full) {
+            magAmmo_[type] = def.magSize;
+            reserveAmmo_[type] = def.reserveMax;
+            ammoInit_[type] = true;
+        }
+        weapon_.currentAmmo_ = magAmmo_[type];
+        weapon_.reserveAmmo_ = reserveAmmo_[type];
         BuildWeaponModel(type);
         UpdateAmmoDisplay();
         if (weaponNameText_) weaponNameText_->SetText(String(def.name) + " | " + String(SKIN_DEFS[currentSkin_].name));
@@ -1846,6 +1972,11 @@ private:
 
         // === Экран GAME OVER ===
         CreateGameOverPanel();
+
+        // Запоминаем размер, под который свёрстан UI: по нему ловим ресайз окна
+        auto* gfx = GetSubsystem<Graphics>();
+        if (gfx) { uiWidth_ = gfx->GetWidth(); uiHeight_ = gfx->GetHeight(); }
+        lastCrosshairGap_ = -1.0f;
     }
 
     void CreateHitMarker() {
@@ -2049,7 +2180,11 @@ private:
         messageText_ = root->CreateChild<Text>();
         messageText_->SetFont(font_, 20);
         messageText_->SetTextAlignment(HA_CENTER);
-        messageText_->SetPosition(screenWidth / 2, screenHeight / 2);
+        // Без ширины/переносов текст с HA_CENTER всё равно рисовался от центра вправо
+        // (и многострочные сообщения уезжали за экран).
+        messageText_->SetPosition(screenWidth / 2 - 460, screenHeight / 2);
+        messageText_->SetWidth(920);
+        messageText_->SetWordwrap(true);
         messageText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
         messageText_->SetEnabled(false);
 
@@ -2067,12 +2202,12 @@ private:
         weaponNameText_->SetColor(Color(1.0f, 0.85f, 0.3f, 1.0f));
         weaponNameText_->SetText(String(WEAPON_DEFS[currentWeapon_].name) + " | " + String(SKIN_DEFS[currentSkin_].name));
 
-        // Подсказка управления (левый верх)
-        Text* help = root->CreateChild<Text>();
-        help->SetFont(font_, 14);
-        help->SetText("WASD — движение | SHIFT — бег | SPACE — прыжок | CTRL/C — присед | ПКМ — прицел | R — перезарядка | 1-7 — оружие | Q/E — скин | TAB — арсенал");
-        help->SetPosition(20, 90);
-        help->SetColor(Color(0.8f, 0.85f, 0.9f, 0.75f));
+        // Подсказка управления (левый верх) — храним в helpText_, чтобы прятать вместе с HUD
+        helpText_ = root->CreateChild<Text>();
+        helpText_->SetFont(font_, 14);
+        helpText_->SetText("WASD — движение | SHIFT — бег | SPACE — прыжок | CTRL/C — присед | ЛКМ — огонь | ПКМ — прицел | R — перезарядка | 1-7 — оружие | Q/E — скин | TAB — арсенал | ESC — пауза");
+        helpText_->SetPosition(20, 90);
+        helpText_->SetColor(Color(0.8f, 0.85f, 0.9f, 0.75f));
     }
     
     void UpdateAmmoDisplay() {
@@ -2135,6 +2270,147 @@ private:
         }
     }
 
+    // Прицел «дышит» вместе с реальным разбросом оружия (раньше был статичный крестик)
+    void UpdateCrosshairSpread() {
+        if (!crosshairCenter_ || !crosshairTop_ || !crosshairBottom_ || !crosshairLeft_ || !crosshairRight_) return;
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!gfx) return;
+        const int cx = gfx->GetWidth() / 2;
+        const int cy = gfx->GetHeight() / 2;
+
+        float spread = WEAPON_DEFS[currentWeapon_].spread;
+        spread *= (1.0f - player_.GetAccuracy() / 200.0f);
+        if (isAiming_) spread *= 0.35f;
+        if (isCrouching_) spread *= 0.7f;
+        if (!onGround_) spread *= 1.6f;
+
+        float gap = 10.0f + spread * 780.0f;   // ~12..46 px
+        if (fabsf(gap - lastCrosshairGap_) < 0.5f) return;
+        lastCrosshairGap_ = gap;
+        int g = (int)gap;
+        crosshairTop_->SetPosition(cx - 1, cy - g - 10);
+        crosshairBottom_->SetPosition(cx - 1, cy + g);
+        crosshairLeft_->SetPosition(cx - g - 10, cy - 1);
+        crosshairRight_->SetPosition(cx + g, cy - 1);
+    }
+
+    // =========================================================================
+    // ПАУЗА (Esc в игре)
+    // =========================================================================
+
+    void CreatePausePanel() {
+        auto* ui = GetSubsystem<UI>();
+        auto* root = ui->GetRoot();
+        int sw = GetSubsystem<Graphics>()->GetWidth();
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+
+        pausePanel_ = root->CreateChild<UIElement>("PausePanel");
+        pausePanel_->SetSize(sw, sh);
+
+        BorderImage* bg = pausePanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.01f, 0.02f, 0.035f, 0.72f));
+
+        Text* title = pausePanel_->CreateChild<Text>();
+        title->SetFont(font_, 64);
+        title->SetText("ПАУЗА");
+        title->SetTextAlignment(HA_CENTER);
+        title->SetPosition(sw / 2 - 400, sh / 2 - 150);
+        title->SetWidth(800);
+        title->SetColor(Color(0.55f, 0.95f, 1.0f, 1.0f));
+
+        BorderImage* bar = pausePanel_->CreateChild<BorderImage>();
+        bar->SetPosition(sw / 2 - 180, sh / 2 - 60);
+        bar->SetSize(360, 2);
+        bar->SetColor(Color(0.3f, 0.85f, 1.0f, 0.8f));
+
+        Text* stats = pausePanel_->CreateChild<Text>();
+        stats->SetFont(font_, 22);
+        stats->SetTextAlignment(HA_CENTER);
+        stats->SetPosition(sw / 2 - 400, sh / 2 - 20);
+        stats->SetWidth(800);
+        stats->SetColor(Color(0.9f, 0.92f, 0.95f, 1.0f));
+        stats->SetText("СЧЁТ: " + String(player_.score_) + "   |   УБИЙСТВ: " + String(player_.kills_) +
+                       "   |   ТОЧНОСТЬ: " + String((int)player_.GetAccuracy()) + "%\n" +
+                       "РЕЖИМ: " + String(gameMode_ == MODE_ARENA ? "АРЕНА" : "ТИР") +
+                       (gameMode_ == MODE_ARENA ? ("   |   ВОЛНА: " + String(waveNum_)) : String()));
+
+        Text* hint = pausePanel_->CreateChild<Text>();
+        hint->SetFont(font_, 20);
+        hint->SetText("ESC / ENTER — продолжить   |   M — в главное меню   |   Q — выход");
+        hint->SetTextAlignment(HA_CENTER);
+        hint->SetPosition(sw / 2 - 460, sh / 2 + 90);
+        hint->SetWidth(920);
+        hint->SetColor(Color(1.0f, 0.85f, 0.3f, 1.0f));
+
+        pausePanel_->SetVisible(false);
+    }
+
+    void TogglePause() {
+        if (gameOver_ || inMenu_) return;
+        paused_ = !paused_;
+        auto* input = GetSubsystem<Input>();
+        if (paused_) {
+            // Строим панель заново: в ней отображаются актуальные очки/волна/точность
+            if (pausePanel_) { pausePanel_->Remove(); pausePanel_ = nullptr; }
+            CreatePausePanel();
+            if (pausePanel_) pausePanel_->SetVisible(true);
+            SetGameHudVisible(false);
+            if (input) input->SetMouseVisible(false);
+        } else {
+            if (pausePanel_) pausePanel_->SetVisible(false);
+            SetGameHudVisible(true);
+        }
+    }
+
+    // =========================================================================
+    // ПЕРЕСБОРКА UI ПРИ РЕСАЙЗЕ ОКНА
+    // =========================================================================
+
+    void RebuildUI() {
+        if (rebuildingUI_) return;
+        rebuildingUI_ = true;
+
+        auto* ui = GetSubsystem<UI>();
+        if (!ui) { rebuildingUI_ = false; return; }
+        UIElement* root = ui->GetRoot();
+        if (root) root->RemoveAllChildren();
+
+        // Сбрасываем все ссылки на удалённые элементы, иначе create-функции ничего не создадут
+        crosshairCenter_ = nullptr; crosshairTop_ = nullptr; crosshairBottom_ = nullptr;
+        crosshairLeft_ = nullptr; crosshairRight_ = nullptr;
+        ammoText_ = nullptr; healthText_ = nullptr; scoreText_ = nullptr;
+        accuracyText_ = nullptr; messageText_ = nullptr;
+        damageOverlay_ = nullptr; reloadOverlay_ = nullptr;
+        hitMarkerBars_.Clear();
+        vignetteEdges_.Clear(); lowHealthVignette_ = nullptr;
+        gameOverPanel_ = nullptr; gameOverStatsText_ = nullptr;
+        gameOverTitle_ = nullptr; gameOverHint_ = nullptr;
+        goBasePosSet_ = false;
+        hudPanelBg_ = nullptr; helpText_ = nullptr; weaponNameText_ = nullptr;
+        mainMenuPanel_ = nullptr; mainMenuItems_.Clear();
+        menuTitle_ = nullptr; menuSub_ = nullptr; menuHint_ = nullptr;
+        menuPlate_ = nullptr; menuAccentBar_ = nullptr;
+        menuParticles_.Clear(); menuParticlePhase_.Clear(); menuParticleX_.Clear(); menuParticleSpeed_.Clear();
+        menuRows_.Clear(); menuBasesSet_ = false;
+        settingsPanel_ = nullptr; settingsItems_.Clear();
+        armoryPanel_ = nullptr; armoryWeaponRows_.Clear(); armorySkinRows_.Clear();
+        pausePanel_ = nullptr;
+
+        CreateUI();
+        CreateMainMenu();
+
+        SetGameHudVisible(!inMenu_ && !gameOver_ && !paused_);
+        if (mainMenuPanel_) mainMenuPanel_->SetVisible(inMenu_);
+        if (inSettings_) { CreateSettingsPanel(); if (settingsPanel_) settingsPanel_->SetVisible(true); }
+        if (armoryOpen_) { CreateArmoryMenu(); if (armoryPanel_) armoryPanel_->SetVisible(true); }
+        if (gameOverPanel_) gameOverPanel_->SetVisible(gameOver_);
+        if (paused_) { CreatePausePanel(); if (pausePanel_) pausePanel_->SetVisible(true); }
+        UpdateMainMenuSelection();
+
+        rebuildingUI_ = false;
+    }
+
     // =========================================================================
     // Настройка ввода
     // =========================================================================
@@ -2173,6 +2449,24 @@ private:
         if (dt > 0.1f) dt = 0.1f;
         timeAcc_ += dt;
 
+        // Ресайз окна: раньше UI строился один раз под стартовое разрешение и «уезжал».
+        // Событие не нужно — сравниваем текущий размер с тем, под который свёрстан UI.
+        {
+            auto* gfx = GetSubsystem<Graphics>();
+            if (gfx && (gfx->GetWidth() != uiWidth_ || gfx->GetHeight() != uiHeight_)) {
+                uiWidth_ = gfx->GetWidth();
+                uiHeight_ = gfx->GetHeight();
+                pendingUiRebuild_ = true;
+            }
+        }
+        if (pendingUiRebuild_) {
+            pendingUiRebuild_ = false;
+            RebuildUI();
+        }
+
+        // Пауза замораживает игровой мир (UI при этом остаётся живым)
+        if (paused_) return;
+
         // Анимации интерфейса (главное меню, экран смерти)
         AnimateMainMenu(dt);
         AnimateGameOver(dt);
@@ -2184,6 +2478,10 @@ private:
             else alive.Push(pr);
         }
         pendingRemoves_ = alive;
+
+        // Уплотняем реестр коллайдеров, когда накопилось достаточно «могил»
+        if (colliderGarbage_ > 64) CompactColliders();
+
         auto* input = GetSubsystem<Input>();
         
         // Обновляем таймеры
@@ -2222,7 +2520,7 @@ private:
         }
 
         // Автоогонь: удержание ЛКМ (не для дробовика/снайперки/гранатомёта)
-        if (!inMenu_ && !gameOver_ && !armoryOpen_ && !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
+        if (!inMenu_ && !gameOver_ && !paused_ && !armoryOpen_ && !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
             int wt = currentWeapon_;
             if (wt != W_SHOTGUN && wt != W_SNIPER && wt != W_LAUNCHER) {
                 TryFire();
@@ -2236,27 +2534,33 @@ private:
         weapon_.recoilX_ = Lerp(weapon_.recoilX_, 0.0f, GameConstants::RECOIL_RECOVERY * dt);
         weapon_.recoilY_ = Lerp(weapon_.recoilY_, 0.0f, GameConstants::RECOIL_RECOVERY * dt);
         
-        // Применяем отдачу к оружию
-        ApplyRecoilToWeapon();
-        
         // === ОБРАБОТКА ВВОДА ДЛЯ ДВИЖЕНИЯ ===
-        if (!gameOver_) HandleMovement(dt);
+        // В меню/GAME OVER игрок не должен ходить: раньше WASD двигал камеру за панелью меню
+        if (!gameOver_ && !inMenu_) HandleMovement(dt);
 
-        // Обновляем анимацию покачивания оружия
+        // Сначала покачивание, ПОТОМ отдача: ApplyRecoilToWeapon() перезаписывает позицию
+        // weaponNode_, поэтому при обратном порядке отдача визуально съедалась бобом.
         UpdateWeaponBob(dt);
+        ApplyRecoilToWeapon();
 
-        // === Game feel: хитмаркер и виньетка низкого HP ===
+        // Гасим вспышку дула, когда её таймер истёк
+        if (muzzleFlashTimer_ > 0.0f) {
+            muzzleFlashTimer_ -= dt;
+            if (muzzleFlashTimer_ <= 0.0f && muzzleLightNode_) muzzleLightNode_->SetEnabled(false);
+        }
+
+        // === Game feel: хитмаркер, виньетка низкого HP, динамический прицел ===
+        UpdateCrosshairSpread();
         UpdateHitMarker(dt);
         UpdateLowHealthVignette(dt);
         UpdateTracers(dt);
         UpdateEnemyProjectiles(dt);
         UpdateMovingTargetsLite(dt);
         UpdateDebrisLite(dt);
+        UpdatePickups(dt);
 
-        // Камера медленно крутится вокруг арены, пока игрок в меню
-        if (inMenu_) {
-            yaw_ += dt * 6.0f;
-        }
+        // (Раньше здесь камера «крутилась» в меню — из-за этого игра стартовала
+        //  со случайно повёрнутым на пару градусов взглядом.)
 
         // Комбо-таймер: серия убийств живёт 4 секунды
         if (comboTimer_ > 0.0f) {
@@ -2277,6 +2581,14 @@ private:
                     if (waveRespawnTimer_ > 3.0f) { waveRespawnTimer_ = 0.0f; SpawnWave(); }
                 }
             } else if (gameMode_ == MODE_RANGE) {
+                // Чистим уничтоженные мишени: иначе targets_ и реестр коллайдеров
+                // растут без предела (каждая новая мишень — ещё один BoxCollider в рейкастах).
+                for (unsigned i = targets_.Size(); i-- > 0; ) {
+                    if (!targets_[i].isActive_) {
+                        RemoveColliderLite(targets_[i].colliderIdx_);
+                        targets_.Erase(i);
+                    }
+                }
                 int activeCount = 0;
                 for (unsigned i = 0; i < targets_.Size(); ++i) if (targets_[i].isActive_) activeCount++;
                 if (activeCount < 3) {
@@ -2305,8 +2617,8 @@ private:
     void HandleMouseMove(StringHash eventType, VariantMap& eventData) {
         using namespace MouseMove;
         
-        // Если мышь видима (меню), не обрабатываем вращение
-        if (isMouseVisible_) {
+        // Если мышь видима (меню) или игра на паузе, не обрабатываем вращение
+        if (isMouseVisible_ || paused_) {
             return;
         }
         
@@ -2363,6 +2675,14 @@ private:
             return;
         }
 
+        // ===== Пауза перехватывает ввод =====
+        if (paused_) {
+            if (key == KEY_ESCAPE || key == KEY_RETURN) TogglePause();
+            else if (key == KEY_M) { TogglePause(); ShowMainMenu(true); }
+            else if (key == KEY_Q) engine_->Exit();
+            return;
+        }
+
         // F — быстрая смена режима (тир <-> арена)
         if (key == KEY_F) {
             StartGameMode(gameMode_ == MODE_RANGE ? MODE_ARENA : MODE_RANGE);
@@ -2382,17 +2702,17 @@ private:
         // Скрыть/показать мышь (для отладки)
         if (key == KEY_TAB) { ToggleArmory(); return; }
 
-        // Esc: сначала закрыть меню, потом выйти
+        // Esc: закрыть арсенал, иначе — пауза (раньше игра просто закрывалась без сохранения)
         if (key == KEY_ESCAPE) {
             if (armoryOpen_) { ToggleArmory(); }
-            else { engine_->Exit(); }
+            else { TogglePause(); }
             return;
         }
 
         // 1..7 — быстрое переключение оружия
         if (key >= KEY_1 && key <= KEY_7) {
             int idx = key - KEY_1;
-            if (idx < WEAPON_COUNT) { EquipWeapon(idx, true); ShowMessage(String("Оружие: ") + WEAPON_DEFS[idx].name); }
+            if (idx < WEAPON_COUNT) { EquipWeapon(idx, false); ShowMessage(String("Оружие: ") + WEAPON_DEFS[idx].name); }
             return;
         }
 
@@ -2422,8 +2742,9 @@ private:
             return;
         }
 
-        // Левая кнопка мыши - стрельба
-        if (button == MOUSEB_LEFT) {
+        // Левая кнопка мыши — стрельба. Только в игре: раньше клик в главном меню
+        // или на экране GAME OVER стрелял (звук, расход патронов, тряска).
+        if (button == MOUSEB_LEFT && !inMenu_ && !gameOver_ && !paused_ && !isMouseVisible_) {
             TryFire();
         }
         
@@ -2729,18 +3050,23 @@ private:
         
         // Дробины дробовика — отдельными лучами
         const WeaponDef& wdef = WEAPON_DEFS[currentWeapon_];
+        bool anyPelletHit = false;
         for (int p = 0; p < wdef.pellets; ++p) {
-            PerformRaycast(wdef.damage, wdef.spread);
+            if (PerformRaycast(wdef.damage, wdef.spread)) anyPelletHit = true;
         }
-        
+        // Точность считаем по ВЫСТРЕЛАМ, а не по дробинам: 8 дробин одного выстрела != 8 выстрелов
+        // (раньше точность дробовика могла показывать >100%).
+        if (anyPelletHit) player_.shotsHit_++;
+
         // Обновляем UI
         UpdateAmmoDisplay();
+        UpdateAccuracyDisplay();
     }
     
-    void PerformRaycast(float damage, float spread) {
+    bool PerformRaycast(float damage, float spread) {
         // Получаем направление из центра экрана
         auto* camera = cameraNode_->GetComponent<Camera>();
-        if (!camera) return;
+        if (!camera) return false;
         
         // Добавляем разброс
         float spreadAngle = spread * (1.0f - player_.GetAccuracy() / 200.0f);
@@ -2765,8 +3091,6 @@ private:
         bool anyHit = RaycastLite(startPos, shootDirection, GameConstants::BULLET_RANGE,
                                   1 | 2 | 4 | 8 | 16, hitDist, hitPosition, &hitTag, &hitPtr, &hitNormal);
         if (anyHit) {
-            player_.shotsHit_++;
-
             // === ТРЕЙСЕР: светящаяся трасса пули от дула до точки попадания ===
             SpawnTracer(startPos + shootDirection * 0.6f, hitPosition);
 
@@ -2796,6 +3120,7 @@ private:
             // Пуля ушла в никуда - создаем эффект на максимальной дистанции
             CreateImpactEffect(endPos, Vector3(0, 1, 0));
         }
+        return anyHit;
     }
 
     // === Трассеры пуль: тонкий светящийся «бола» от дула до цели, живёт ~70 мс ===
@@ -2807,8 +3132,8 @@ private:
         tr->LookAt(to);
         StaticModel* sm = tr->CreateComponent<StaticModel>();
         sm->SetModel(boxModel_);
-        SharedPtr<Material> mat = MakeTinted(nullptr, nullptr, Color(255, 230, 150));
-        sm->SetMaterial(mat.Get());
+        if (!tracerMat_) tracerMat_ = MakeTinted(nullptr, nullptr, Color(255, 230, 150));
+        sm->SetMaterial(tracerMat_.Get());
         sm->SetCastShadows(false);
         tr->SetScale(Vector3(0.02f, 0.02f, len));
         tracers_.Push(TracerData{ SharedPtr<Node>(tr), 0.07f });
@@ -2928,16 +3253,18 @@ private:
     }
     
     void PlayMuzzleFlash() {
-        if (muzzleLight_) {
+        // Раньше свет включался и в ТОМ ЖЕ кадре выключался — вспышки не было видно вообще.
+        if (muzzleLight_ && muzzleLightNode_) {
             muzzleLightNode_->SetEnabled(true);
-            
-            // Гасим свет через короткое время
-            muzzleLightNode_->SetEnabled(false);
+            muzzleFlashTimer_ = 0.05f;
         }
     }
     
     void StartReload() {
-        if (weapon_.currentAmmo_ >= GameConstants::MAX_AMMO) {
+        // Размер магазина и время перезарядки берём из оружия, а не из глобальных MAX_AMMO/RELOAD_TIME
+        // (иначе пистолет с магазином 12 «перезаряжался» до 30 и все стволы перезаряжались за 2 с).
+        const WeaponDef& def = WEAPON_DEFS[currentWeapon_];
+        if (weapon_.currentAmmo_ >= def.magSize) {
             ShowMessage("Магазин полон!");
             return;
         }
@@ -2948,14 +3275,14 @@ private:
         }
         
         weapon_.isReloading_ = true;
-        weapon_.reloadTimer_ = GameConstants::RELOAD_TIME;
+        weapon_.reloadTimer_ = def.reloadTime;
         
         PlayReloadSound();
         ShowMessage("Перезарядка...");
     }
     
     void CompleteReload() {
-        int needed = GameConstants::MAX_AMMO - weapon_.currentAmmo_;
+        int needed = WEAPON_DEFS[currentWeapon_].magSize - weapon_.currentAmmo_;
         int available = weapon_.reserveAmmo_;
         int toReload = Min(needed, available);
         
@@ -3151,7 +3478,8 @@ private:
         if (cameraNode_) {
             Vector3 camPos = cameraNode_->GetPosition();
             float pdist = (camPos - center).Length();
-            if (pdist < radius && gameMode_ == MODE_ARENA && !gameOver_) {
+            // Самоподрыв работает в обоих режимах (раньше в тире граната в упор была бесплатной)
+            if (pdist < radius && !gameOver_) {
                 float falloff = 1.0f - pdist / radius;
                 // Игрок получает только 40% урона — наказывает «самоубийственные» кампы в упор
                 DamagePlayer(damage * falloff * 0.4f);
@@ -3335,7 +3663,7 @@ private:
         for (unsigned i = 0; i < armoryWeaponRows_.Size(); ++i) {
             UIElement* row = armoryWeaponRows_[i];
             IntVector2 rp = screenPos(row);
-            if (rp.x_ <= mp.x_ && mp.x_ < rp.x_ + (int)row->GetWidth() && rp.y_ <= mp.y_ && mp.y_ < rp.y_ + (int)row->GetHeight()) { EquipWeapon((int)i, true); UpdateArmoryHighlight(); return; }
+            if (rp.x_ <= mp.x_ && mp.x_ < rp.x_ + (int)row->GetWidth() && rp.y_ <= mp.y_ && mp.y_ < rp.y_ + (int)row->GetHeight()) { EquipWeapon((int)i, false); UpdateArmoryHighlight(); return; }
         }
         for (unsigned i = 0; i < armorySkinRows_.Size(); ++i) {
             UIElement* row = armorySkinRows_[i];
@@ -3386,15 +3714,17 @@ private:
         if (gfx) {
             gfxShadowIdx_ = Clamp(XmlGetInt(gfx, "shadows", gfxShadowIdx_), 0, 2);
             gfxGlowIdx_   = Clamp(XmlGetInt(gfx, "bloom", gfxGlowIdx_), 0, 2);
-            gfxResIdx_    = Clamp(XmlGetInt(gfx, "resolution", gfxResIdx_), 0, 2);
+            gfxFpsIdx_    = Clamp(XmlGetInt(gfx, "fps", gfxFpsIdx_), 0, 2);
             gfxAnisoIdx_  = Clamp(XmlGetInt(gfx, "anisotropic", gfxAnisoIdx_), 0, 2);
         }
         XMLElement snd = rootEl.GetChild("sound");
         if (snd) {
-            //sfxVolume_   = Clamp(String(snd.GetAttribute("sfx")).ToFloat(), 0.0f, 1.0f);
-            //musicVolume_ = Clamp(String(snd.GetAttribute("music")).ToFloat(), 0.0f, 1.0f);
-            sfxVolume_   = Clamp((float)atof(snd.GetAttribute("sfx").CString()), 0.0f, 1.0f);
-            musicVolume_ = Clamp((float)atof(snd.GetAttribute("music").CString()), 0.0f, 1.0f);
+            // atof("") == 0, т.е. отсутствующий/битый атрибут раньше ГЛУШИЛ звук.
+            // Читаем только реально существующие атрибуты, остальные оставляем как есть.
+            if (snd.HasAttribute("sfx"))
+                sfxVolume_ = Clamp((float)atof(snd.GetAttribute("sfx").CString()), 0.0f, 1.0f);
+            if (snd.HasAttribute("music"))
+                musicVolume_ = Clamp((float)atof(snd.GetAttribute("music").CString()), 0.0f, 1.0f);
         }
         XMLElement prog = rootEl.GetChild("progress");
         if (prog) highScore_ = Max(0, XmlGetInt(prog, "highscore", highScore_));
@@ -3406,7 +3736,7 @@ private:
         XMLElement gfx = rootEl.CreateChild("graphics");
         XmlSetInt(gfx, "shadows", gfxShadowIdx_);
         XmlSetInt(gfx, "bloom", gfxGlowIdx_);
-        XmlSetInt(gfx, "resolution", gfxResIdx_);
+        XmlSetInt(gfx, "fps", gfxFpsIdx_);
         XmlSetInt(gfx, "anisotropic", gfxAnisoIdx_);
         XMLElement snd = rootEl.CreateChild("sound");
         snd.SetString("sfx", String(sfxVolume_));
@@ -3421,6 +3751,15 @@ private:
         if (renderer) renderer->SetHDRRendering(strong);
     }
 
+    // Настройка «Фильтрация текстур»: реально меняет фильтр у HD-текстур.
+    void ApplyTextureFiltering() {
+        FilterMode fm = FILTER_ANISOTROPIC;
+        if (gfxAnisoIdx_ == 0) fm = FILTER_BILINEAR;
+        else if (gfxAnisoIdx_ == 1) fm = FILTER_TRILINEAR;
+        for (unsigned i = 0; i < anisoTextures_.Size(); ++i)
+            if (anisoTextures_[i]) anisoTextures_[i]->SetFilterMode(fm);
+    }
+
     void ApplyGraphicsSettings() {
         auto* renderer = GetSubsystem<Renderer>();
         if (!renderer) return;
@@ -3432,8 +3771,12 @@ private:
         // на этой сборке HDR часто даёт пересвет/белый кадр.
         renderer->SetHDRRendering(gfxGlowIdx_ >= 2);
 
-        // Разрешение/анизотропия применяются при старте (engine-параметры window width/height,
-        // пересоздание окна на лету в этой сборке небезопасно) — здесь остаётся только звук.
+        // Лимит FPS (раньше в этом слоте была настройка «Разрешение», которая нигде не применялась)
+        static const int fpsValues[3] = { 60, 120, 0 };
+        if (engine_) engine_->SetMaxFps(fpsValues[Clamp(gfxFpsIdx_, 0, 2)]);
+
+        // Фильтрация текстур и звук
+        ApplyTextureFiltering();
         if (soundSource_) soundSource_->SetGain(sfxVolume_);
         if (musicSource_) musicSource_->SetGain(musicVolume_);
     }
@@ -3657,6 +4000,7 @@ private:
         if (accuracyText_) accuracyText_->SetVisible(vis);
         if (messageText_) messageText_->SetVisible(vis);
         if (weaponNameText_) weaponNameText_->SetVisible(vis);
+        if (helpText_) helpText_->SetVisible(vis);
         if (hudPanelBg_) hudPanelBg_->SetVisible(vis);
         if (damageOverlay_) damageOverlay_->SetVisible(vis);
         if (reloadOverlay_) reloadOverlay_->SetVisible(vis);
@@ -3745,14 +4089,14 @@ private:
     void UpdateSettingsDisplay() {
         static const char* shadowNames[3] = { "1K", "2K", "4K" };
         static const char* bloomNames[3]  = { "выкл", "слабый", "полный" };
-        static const char* resNames[3]    = { "нативное", "75%", "50%" };
-        static const char* anisoNames[3]  = { "4x", "8x", "16x" };
-        const char* names[7] = { "Тени", "HDR Bloom", "Разрешение", "Анизотропная фильтрация", "Громкость эффектов", "Громкость музыки", "Назад" };
+        static const char* fpsNames[3]    = { "60", "120", "без лимита" };
+        static const char* filterNames[3] = { "билинейная", "трилинейная", "анизотропная" };
+        const char* names[7] = { "Тени", "HDR Bloom", "Лимит FPS", "Фильтрация текстур", "Громкость эффектов", "Громкость музыки", "Назад" };
         String vals[7];
         vals[0] = shadowNames[Clamp(gfxShadowIdx_, 0, 2)];
         vals[1] = bloomNames[Clamp(gfxGlowIdx_, 0, 2)];
-        vals[2] = resNames[Clamp(gfxResIdx_, 0, 2)];
-        vals[3] = anisoNames[Clamp(gfxAnisoIdx_, 0, 2)];
+        vals[2] = fpsNames[Clamp(gfxFpsIdx_, 0, 2)];
+        vals[3] = filterNames[Clamp(gfxAnisoIdx_, 0, 2)];
         vals[4] = String((int)(sfxVolume_ * 100.0f)) + "%";
         vals[5] = String((int)(musicVolume_ * 100.0f)) + "%";
         vals[6] = "<- в меню";
@@ -3767,7 +4111,7 @@ private:
         switch (settingsSel_) {
         case 0: gfxShadowIdx_ = Clamp(gfxShadowIdx_ + delta, 0, 2); break;
         case 1: gfxGlowIdx_   = Clamp(gfxGlowIdx_ + delta, 0, 2); break;
-        case 2: gfxResIdx_    = Clamp(gfxResIdx_ + delta, 0, 2); break;
+        case 2: gfxFpsIdx_    = Clamp(gfxFpsIdx_ + delta, 0, 2); break;
         case 3: gfxAnisoIdx_  = Clamp(gfxAnisoIdx_ + delta, 0, 2); break;
         case 4: sfxVolume_   = Clamp(sfxVolume_ + delta * 0.1f, 0.0f, 1.0f); break;
         case 5: musicVolume_ = Clamp(musicVolume_ + delta * 0.1f, 0.0f, 1.0f); break;
@@ -3783,11 +4127,10 @@ private:
     // =========================================================================
 
     void ClearEnemies() {
-        for (unsigned i = 0; i < enemies_.Size(); ++i)
+        for (unsigned i = 0; i < enemies_.Size(); ++i) {
             RemoveColliderLite(enemies_[i].colliderIdx_); // чистим Lite-реестр роботов
-        for (unsigned i = 0; i < enemyNodes_.Size(); ++i)
-            if (enemyNodes_[i]) enemyNodes_[i]->Remove();
-        enemyNodes_.Clear();
+            if (enemies_[i].node_) enemies_[i].node_->Remove();
+        }
         enemies_.Clear();
         // Снаряды роботов тоже чистим — иначе они «доживают» до новой волны
         for (unsigned i = 0; i < enemyProjectiles_.Size(); ++i)
@@ -3812,6 +4155,12 @@ private:
         hitKillTimer_ = 0.0f;
         gameOver_ = false;
         ClearEnemies();
+
+        // Полный боезапас на старте/рестарте режима (патроны теперь хранятся по оружиям)
+        for (int i = 0; i < WEAPON_COUNT; ++i) ammoInit_[i] = false;
+        EquipWeapon(currentWeapon_, true);
+        ResetPickups();
+
         UpdateHealthDisplay();
 
         if (mode == MODE_ARENA) {
@@ -3820,10 +4169,24 @@ private:
             ShowMessage("РЕЖИМ: АРЕНА - отбивай волны роботов! F - сменить режим");
         } else {
             waveNum_ = 0;
+            // Тир перезапускается с целыми мишенями: раньше после зачистки они не появлялись
+            // (кроме «доапсывания» по одной раз в 8 секунд).
+            ResetRangeTargets();
             ShowMessage("РЕЖИМ: ТИР - уничтожь все мишени! F - арена");
         }
         UpdateScoreDisplay();
         ShowMainMenu(false);
+    }
+
+    // Полная пересборка мишеней тира (без накопления узлов и коллайдеров)
+    void ResetRangeTargets() {
+        for (unsigned i = 0; i < targets_.Size(); ++i) {
+            RemoveColliderLite(targets_[i].colliderIdx_);
+            if (targets_[i].node_) targets_[i].node_->Remove();
+        }
+        targets_.Clear();
+        movingTargetsLite_.Clear();
+        CreateTargets();
     }
 
     // =========================================================================
@@ -3833,36 +4196,45 @@ private:
     void EnsureRobotMaterials() {
         if (robotBodyMat_) return;
         robotBodyMat_ = MakeTinted(nullptr, nullptr, Color(150, 155, 165));
-        // Глаза роботов: светящиеся — glow-проход + bloom = «злые» глаза в темноте.
-        // Цвет глаз задаётся при спавне через SetGlowColor конкретного материала.
-        robotEyeMat_  = MakeTinted(nullptr, nullptr, Color(255, 40, 40));
+        // Глаза роботов кэшируются отдельно по типу (см. EnsureEyeMaterials ниже)
+    }
+
+    // Материалы глаз кэшируются по типу робота (4 штуки на всю сессию)
+    void EnsureEyeMaterials() {
+        if (eyeMatMelee_) return;
+        auto make = [this](const Color& glow) -> SharedPtr<Material> {
+            SharedPtr<Material> m = MakeTinted(nullptr, nullptr, Color(255, 255, 255));
+            if (m) m->SetShaderParameter("MatDiffColor", Variant(glow));
+            return m;
+        };
+        eyeMatMelee_   = make(Color(1.0f, 0.25f, 0.15f));
+        eyeMatCharger_ = make(Color(1.0f, 0.55f, 0.05f));
+        eyeMatShooter_ = make(Color(0.85f, 0.3f, 1.0f));
+        eyeMatBoss_    = make(Color(1.0f, 0.8f, 0.15f));
     }
 
     void SpawnEnemyRobot(const Vector3& pos, EnemyType type) {
         EnsureRobotMaterials();
+        EnsureEyeMaterials();
         const bool elite = (type == E_BOSS);
         Node* rob = scene_->CreateChild("Enemy", LOCAL);
         rob->SetPosition(pos);
         rob->SetVar("enemy", true); rob->AddTag("Enemy");
 
-        // Внешний вид и цвет глаз по типу робота
+        // Внешний вид по типу робота (материалы создаются один раз на тип)
         Material* bodyMat = robotBodyMat_.Get();
-        Color eyeColor(255, 40, 40);
         if (type == E_CHARGER) {
             static SharedPtr<Material> keepOrange;
             if (!keepOrange) keepOrange = MakeTinted(nullptr, nullptr, Color(255, 130, 30));
             bodyMat = keepOrange.Get();
-            eyeColor = Color(255, 90, 20);
         } else if (type == E_SHOOTER) {
             static SharedPtr<Material> keepViolet;
             if (!keepViolet) keepViolet = MakeTinted(nullptr, nullptr, Color(160, 70, 220));
             bodyMat = keepViolet.Get();
-            eyeColor = Color(220, 120, 255);
         } else if (elite) {
             static SharedPtr<Material> keepCyan;
             if (!keepCyan) keepCyan = MakeTinted(nullptr, nullptr, Color(40, 220, 255));
             bodyMat = keepCyan.Get();
-            eyeColor = Color(255, 200, 40);
         }
 
         // Масштаб модели: босс крупнее, стрелок чуть «суше»
@@ -3882,18 +4254,10 @@ private:
         hm->SetMaterial(bodyMat);
         hm->SetCastShadows(true);
 
-        static Vector<SharedPtr<Material>> eyeMats;
-        SharedPtr<Material> eyeMat = MakeTinted(nullptr, nullptr, eyeColor);
-        // Свечение глаз по типу: яркие ядовитые цвета читаются в темноте даже без bloom-пасса
-        if (eyeMat) {
-            Color glow(1.0f, 0.25f, 0.15f);
-            if (type == E_CHARGER)      glow = Color(1.0f, 0.55f, 0.05f);
-            else if (type == E_SHOOTER) glow = Color(0.85f, 0.3f, 1.0f);
-            else if (elite)             glow = Color(1.0f, 0.8f, 0.15f);
-            eyeMat->SetShaderParameter("MatDiffColor", Variant(glow));
-        }
-        eyeMats.Push(eyeMat);
-        Material* em = eyeMats.Back().Get();
+        // Материал глаз берётся из кэша по типу робота (см. EnsureEyeMaterials)
+        Material* em = (type == E_CHARGER) ? eyeMatCharger_.Get()
+                      : (type == E_SHOOTER) ? eyeMatShooter_.Get()
+                      : elite ? eyeMatBoss_.Get() : eyeMatMelee_.Get();
         Node* eyeL = head->CreateChild("EyeL");
         eyeL->SetPosition(Vector3(-0.12f, 0.05f, 0.26f));
         eyeL->SetScale(Vector3(0.1f, 0.08f, 0.03f));
@@ -3937,37 +4301,58 @@ private:
         e.burstTimer_ = 0.0f;
         e.recoilKick_ = 0.0f;
         enemies_.Push(e);
-        enemyNodes_.Push(SharedPtr<Node>(rob));
     }
 
     // Выбор типа робота для спавна с учётом номера волны
     EnemyType PickEnemyType(int slot, int total) {
         if (waveNum_ >= 5 && slot == 0 && (waveNum_ % 5 == 0)) return E_BOSS;      // босс каждые 5 волн
-        if (waveNum_ >= 2) {                                                        // стрелки со 2-й волны
+        // Ветка "charagers с 3-й волны" была недостижима: её перекрывал waveNum_ >= 2 выше.
+        if (waveNum_ >= 2) {                                                        // стрелки/чанжеры со 2-й волны
             int roll = rand() % 100;
             if (roll < 25) return E_SHOOTER;
             if (roll < 50) return E_CHARGER;
-        } else if (waveNum_ >= 3 && (rand() % 100) < 20) {
-            return E_CHARGER;                                                       // чарджеры с 3-й волны в тире-миксе
         }
         return E_MELEE;
     }
 
     void SpawnWave() {
         ++waveNum_;
+
+        // Новая волна = снабжение: без этого, как только кончаются патроны,
+        // арена становится непроходимой (переключение оружия больше не читерит).
+        for (int w = 0; w < WEAPON_COUNT; ++w) {
+            if (!ammoInit_[w]) continue;
+            reserveAmmo_[w] = WEAPON_DEFS[w].reserveMax;
+        }
+        reserveAmmo_[currentWeapon_] = WEAPON_DEFS[currentWeapon_].reserveMax;
+        weapon_.reserveAmmo_ = reserveAmmo_[currentWeapon_];
+        UpdateAmmoDisplay();
+
         const bool bossWave = (waveNum_ % 5 == 0) && waveNum_ >= 5;
         int count = Min(3 + waveNum_, 10);
         const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 6.0f;
+        Vector3 playerPos = cameraNode_ ? cameraNode_->GetPosition() : Vector3::ZERO;
+        int spawned = 0;
         for (int i = 0; i < count; ++i) {
-            float ang = (float)(rand() % 360) * 0.0174533f;
-            float r = 10.0f + (float)(rand() % 30);
-            Vector3 pos(cosf(ang) * r, 1.0f, sinf(ang) * r);
-            pos.x_ = Clamp(pos.x_, -half, half);
-            pos.z_ = Clamp(pos.z_, -half, half);
+            // Ищем свободную точку: раньше робот мог появиться внутри колонны или ящика
+            // и застрять там навсегда (волна не могла закончиться).
+            Vector3 pos;
+            bool ok = false;
+            for (int attempt = 0; attempt < 24 && !ok; ++attempt) {
+                float ang = (float)(rand() % 360) * 0.0174533f;
+                float r = 10.0f + (float)(rand() % 30);
+                pos = Vector3(cosf(ang) * r, 1.0f, sinf(ang) * r);
+                pos.x_ = Clamp(pos.x_, -half, half);
+                pos.z_ = Clamp(pos.z_, -half, half);
+                Vector3 flat = pos - playerPos; flat.y_ = 0.0f;
+                ok = flat.Length() > 7.0f && IsPointFree(pos, 0.8f);
+            }
+            if (!ok) continue;
             EnemyType t = PickEnemyType(i, count);
             SpawnEnemyRobot(pos, t);
+            ++spawned;
         }
-        String msg = "ВОЛНА " + String(waveNum_) + "! Роботов: " + String(count);
+        String msg = "ВОЛНА " + String(waveNum_) + "! Роботов: " + String(spawned);
         if (bossWave) msg += "  [БОСС!]";
         ShowMessage(msg);
         UpdateScoreDisplay();
@@ -3999,8 +4384,8 @@ private:
         pr->SetPosition(origin);
         StaticModel* sm = pr->CreateComponent<StaticModel>();
         sm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
-        SharedPtr<Material> mat = MakeTinted(nullptr, nullptr, Color(255, 80, 255));
-        sm->SetMaterial(mat.Get());
+        if (!enemyShotMat_) enemyShotMat_ = MakeTinted(nullptr, nullptr, Color(255, 80, 255));
+        sm->SetMaterial(enemyShotMat_.Get());
         sm->SetCastShadows(false);
         pr->SetScale(Vector3::ONE * 0.12f);
 
@@ -4011,8 +4396,13 @@ private:
         pd.damage_ = damage;
         enemyProjectiles_.Push(pd);
 
-        // Короткий «звук» выстрела робота — тот же UI-клик на его источнике
-        PlayHitSound();
+        // Звук выстрела робота: играем 3D-источником. Раньше здесь вызывался PlayHitSound(),
+        // т.е. игрок слышал «попадание», хотя в него только что выстрелили.
+        if (explosionSource3D_ && shootSounds_[W_PISTOL]) {
+            explosionSource3D_->GetNode()->SetWorldPosition(origin);
+            explosionSource3D_->SetGain(SfxGain(0.55f));
+            explosionSource3D_->Play(shootSounds_[W_PISTOL]);
+        }
     }
 
     // Полёт снарядов роботов: движение, попадание по игроку (дистанционная проверка), пролёты мимо
@@ -4053,12 +4443,105 @@ private:
         }
     }
 
+    // =========================================================================
+    // ПИКАПЫ: аптечки (+25 HP) и патроны (+2 магазина в резерв), респавн 18 с
+    // =========================================================================
+
+    void CreatePickups() {
+        if (!pickupHealMat_) pickupHealMat_ = MakeTinted(nullptr, nullptr, Color(80, 255, 120));
+        if (!pickupAmmoMat_) pickupAmmoMat_ = MakeTinted(nullptr, nullptr, Color(255, 210, 90));
+
+        // Точки по арене: 4 у центра (по краям платформы), 4 в углах
+        const Vector3 spots[] = {
+            Vector3( 9.0f, 1.0f,  0.0f), Vector3(-9.0f, 1.0f,  0.0f),
+            Vector3( 0.0f, 1.0f,  9.0f), Vector3( 0.0f, 1.0f, -9.0f),
+            Vector3( 34.0f, 1.0f,  34.0f), Vector3(-34.0f, 1.0f,  34.0f),
+            Vector3( 34.0f, 1.0f, -34.0f), Vector3(-34.0f, 1.0f, -34.0f)
+        };
+        for (unsigned i = 0; i < sizeof(spots) / sizeof(spots[0]); ++i) {
+            Node* n = scene_->CreateChild("Pickup", LOCAL);
+            n->SetPosition(spots[i]);
+            n->SetScale(Vector3::ONE * 0.4f);
+            StaticModel* sm = n->CreateComponent<StaticModel>();
+            sm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
+            sm->SetMaterial(i % 2 == 0 ? pickupHealMat_ : pickupAmmoMat_);
+            sm->SetCastShadows(false);
+
+            PickupData p;
+            p.node_ = n;
+            p.home_ = spots[i];
+            p.type_ = (int)(i % 2);
+            p.respawn_ = 0.0f;
+            pickups_.Push(p);
+        }
+    }
+
+    void ResetPickups() {
+        for (unsigned i = 0; i < pickups_.Size(); ++i) {
+            PickupData& p = pickups_[i];
+            p.respawn_ = 0.0f;
+            if (p.node_) {
+                p.node_->SetEnabled(true);
+                p.node_->SetPosition(p.home_);
+                p.node_->SetScale(Vector3::ONE * 0.4f);
+            }
+        }
+    }
+
+    void UpdatePickups(float dt) {
+        if (!cameraNode_) return;
+        Vector3 camPos = cameraNode_->GetPosition();
+        const float r2 = GameConstants::PICKUP_RADIUS * GameConstants::PICKUP_RADIUS;
+
+        for (unsigned i = 0; i < pickups_.Size(); ++i) {
+            PickupData& p = pickups_[i];
+            Node* n = p.node_.Get();
+            if (!n) continue;
+
+            if (p.respawn_ > 0.0f) {
+                p.respawn_ -= dt;
+                if (p.respawn_ <= 0.0f) {
+                    n->SetEnabled(true);
+                    n->SetScale(Vector3::ONE * 0.4f);
+                }
+                continue;
+            }
+
+            // Медленное вращение + парение, чтобы пикап читался на фоне арены
+            n->SetRotation(Quaternion(timeAcc_ * 70.0f + (float)i * 37.0f, Vector3::UP));
+            n->SetPosition(p.home_ + Vector3(0.0f, sinf(timeAcc_ * 2.0f + (float)i) * 0.15f, 0.0f));
+
+            if ((camPos - n->GetPosition()).LengthSquared() > r2) continue;
+
+            if (p.type_ == 0) {
+                if (player_.health_ >= player_.maxHealth_) continue;  // полному HP аптечка не нужна
+                player_.health_ = Min(player_.maxHealth_, player_.health_ + GameConstants::PICKUP_HEAL);
+                UpdateHealthDisplay();
+                ShowMessage("АПТЕЧКА +" + String((int)GameConstants::PICKUP_HEAL) + " HP");
+            } else {
+                const WeaponDef& def = WEAPON_DEFS[currentWeapon_];
+                int cur = reserveAmmo_[currentWeapon_];
+                if (cur >= def.reserveMax) continue;                  // резерв и так полный
+                int next = Min(def.reserveMax, cur + def.magSize * 2);
+                reserveAmmo_[currentWeapon_] = next;
+                weapon_.reserveAmmo_ = next;
+                UpdateAmmoDisplay();
+                ShowMessage("ПАТРОНЫ +" + String(next - cur));
+            }
+            PlayUISound();
+            p.respawn_ = GameConstants::PICKUP_RESPAWN;
+            n->SetEnabled(false);
+        }
+    }
+
     // Движение «летучих» мишеней тира без Bullet: простая интеграция + отскок от границ
     void UpdateMovingTargetsLite(float dt) {
         const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 3.0f;
         for (unsigned i = 0; i < movingTargetsLite_.Size(); ++i) {
             MovingTargetLite& mt = movingTargetsLite_[i];
-            if (!mt.node_) continue;
+            // Уничтоженная мишень остаётся жить как отсоединённый узел (SharedPtr держит её),
+            // поэтому проверяем ещё и сцену — иначе запись висит вечно.
+            if (!mt.node_ || !mt.node_->GetScene()) continue;
             Vector3 p = mt.node_->GetPosition();
             p += mt.vel_ * dt;
             if (fabsf(p.x_) > half) { mt.vel_.x_ = -mt.vel_.x_; p.x_ = Clamp(p.x_, -half, half); }
@@ -4185,8 +4668,20 @@ private:
             }
             }
 
-            // Интеграция движения с ограничением по арене
-            Vector3 np = p + move * dt;
+            // Расталкивание роботов, чтобы они не слипались в одну точку
+            for (unsigned j = 0; j < enemies_.Size(); ++j) {
+                if (j == i || !enemies_[j].alive_) continue;
+                Node* other = enemies_[j].node_.Get();
+                if (!other) continue;
+                Vector3 d = p - other->GetPosition();
+                d.y_ = 0.0f;
+                float dd = d.Length();
+                if (dd > 0.01f && dd < 1.5f) move += d / dd * (1.5f - dd) * 2.5f;
+            }
+
+            // Интеграция движения с ограничением по арене.
+            // PushOutOfObstacles не даёт роботам проходить сквозь стены/ящики/платформу.
+            Vector3 np = PushOutOfObstacles(p + move * dt, 0.55f, 0.55f);
             const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 2.0f;
             np.x_ = Clamp(np.x_, -half, half);
             np.z_ = Clamp(np.z_, -half, half);
@@ -4288,10 +4783,9 @@ private:
         bestCombo_ = Max(bestCombo_, comboCount_);
         int gained = (int)(base * (1.0f + 0.5f * (float)(comboCount_ - 1)));
         player_.score_ += gained;
-        if (player_.score_ > highScore_) {
-            highScore_ = player_.score_;
-            SaveSettingsFile();
-        }
+        // Рекорд обновляем в памяти; на диск пишем только в GAME OVER/настройках.
+        // Раньше settings.ini перезаписывался на КАЖДОМ убийстве (I/O в игровом цикле).
+        if (player_.score_ > highScore_) highScore_ = player_.score_;
     }
 };
 
