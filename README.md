@@ -108,12 +108,27 @@ ChickenGun — игра, после которой лоботомия кажет
 Made with caffeine, brain damage and absolutely no medical supervision.
 
 ## Сборка
+
+Что нужно:
+
+- **Urho3D** (заголовки + `libUrho3D.so`). `build.sh` ищет их в `$HOME/urho3d/build/include`,
+  `/usr/local/include/Urho3D`, `/usr/include/Urho3D`; свой путь можно задать вручную:
+  `URHO_INC=/путь/к/include ./build.sh`
+- SDL2 (`libsdl2-dev`), OpenGL/X11, g++ с C++17.
+
 ```bash
-./build.sh
+./build.sh                 # соберёт build/MyShooter и синхронизирует ресурсы в build/Data
 ```
-Требуется установленный Urho3D (путь задаётся в `build.sh`).
 
 ## Запуск
+
+Бинарник кладётся в `build/`, ресурсы — в `build/Data` (туда их копирует `build.sh`):
+
 ```bash
-cd bin && ./MyShooter
+./build/MyShooter
 ```
+
+## Состояние проекта
+
+Аудит кода, список найденных багов (исправленных и оставшихся), план работ и заметки
+по чистоте репозитория: [`docs/AUDIT.md`](docs/AUDIT.md).
