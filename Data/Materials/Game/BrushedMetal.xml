@@ -1,7 +1,11 @@
 <material>
-    <technique name="Techniques/DiffNormal.xml" quality="1" />
+    <technique name="Techniques/PBR/PBRMetallicRoughDiffNormalSpec.xml" quality="2" />
+    <technique name="Techniques/DiffNormalSpec.xml" quality="1" />
     <technique name="Techniques/Diff.xml" quality="0" />
-    <texture unit="diffuse" name="Textures/BrushedMetalDiffuse.png" tiled="true" />
-    <texture unit="normal" name="Textures/BrushedMetalNormal.png" tiled="true" />
-    <parameter name="MatSpecColor" value="0.7 0.7 0.75 128" />
+    <texture unit="diffuse" name="Textures/BrushedMetalDiffuse.png" />
+    <texture unit="normal" name="Textures/BrushedMetalNormal.png" />
+    <texture unit="specular" name="Textures/BrushedMetalRoughMetal.png" />
+    <parameter name="Roughness" value="0" />
+    <parameter name="Metallic" value="0" />
+    <parameter name="MatSpecColor" value="0.85 0.87 0.92 128" />
 </material>

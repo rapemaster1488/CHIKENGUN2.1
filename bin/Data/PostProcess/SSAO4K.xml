@@ -1,0 +1,13 @@
+<renderpath>
+    <rendertarget name="SSAOBuf" tag="SSAO4K" sizedivisor="2 2" format="rgba" filter="true" />
+    <command type="quad" tag="SSAO4K" vs="SSAO4K" ps="SSAO4K" psdefines="AOCALC" output="SSAOBuf">
+        <parameter name="SSAORadius" value="0.85" />
+        <texture unit="depth" name="depth" />
+    </command>
+    <command type="quad" tag="SSAO4K" vs="SSAO4K" ps="SSAO4K" psdefines="AOAPPLY" output="viewport">
+        <parameter name="SSAOStrength" value="0.72" />
+        <texture unit="diffuse" name="viewport" />
+        <texture unit="normal" name="SSAOBuf" />
+        <texture unit="depth" name="depth" />
+    </command>
+</renderpath>

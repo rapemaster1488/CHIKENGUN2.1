@@ -1,7 +1,11 @@
 <material>
-    <technique name="Techniques/DiffNormal.xml" quality="1" />
+    <technique name="Techniques/PBR/PBRMetallicRoughDiffNormalSpec.xml" quality="2" />
+    <technique name="Techniques/DiffNormalSpec.xml" quality="1" />
     <technique name="Techniques/Diff.xml" quality="0" />
-    <texture unit="diffuse" name="Textures/CrateWoodDiffuse.png" tiled="true" />
-    <texture unit="normal" name="Textures/CrateWoodNormal.png" tiled="true" />
-    <parameter name="MatSpecColor" value="0.1 0.1 0.1 8" />
+    <texture unit="diffuse" name="Textures/CrateWoodDiffuse.png" />
+    <texture unit="normal" name="Textures/CrateWoodNormal.png" />
+    <texture unit="specular" name="Textures/CrateWoodRoughMetal.png" />
+    <parameter name="Roughness" value="0" />
+    <parameter name="Metallic" value="0" />
+    <parameter name="MatSpecColor" value="0.35 0.32 0.28 24" />
 </material>
