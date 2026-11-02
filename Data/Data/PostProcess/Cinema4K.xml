@@ -1,0 +1,14 @@
+<renderpath>
+    <rendertarget name="LDR4K" tag="Cinema4K" sizedivisor="1 1" format="rgb" filter="true" />
+    <command type="quad" tag="Cinema4K" vs="Cinema4K" ps="Cinema4K" psdefines="TONEMAP" output="LDR4K">
+        <parameter name="CinemaExposure" value="1.05" />
+        <parameter name="CinemaSaturation" value="1.10" />
+        <parameter name="ChromaStrength" value="0.0012" />
+        <texture unit="diffuse" name="viewport" />
+    </command>
+    <command type="quad" tag="Cinema4K" vs="Cinema4K" ps="Cinema4K" psdefines="CAS4K" output="viewport">
+        <parameter name="SharpenStrength" value="0.45" />
+        <parameter name="VignetteStrength" value="0.22" />
+        <texture unit="diffuse" name="LDR4K" />
+    </command>
+</renderpath>

@@ -1,108 +1,170 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# ============================================================================
+# Сборка CHIKENGUN 2.2 — 4K ULTRA & CYBER OVERLOAD EDITION (Urho3D C++17)
+# Автоматически находит Urho3D / SDL2 / Bullet3, синхронизирует шейдеры,
+# PBR-материалы и звуки, генерирует 4K PBR текстуры (4096x4096) + 360° Skybox4K
+# + 4K Loading Art и компилирует build/MyShooter.
+# Переменная TEX_SIZE (по умолчанию 4096) управляет разрешением генератора.
+# ============================================================================
 set -e
 
-SRC="src/MyApp.cpp"
-OUT="build/MyShooter"
-mkdir -p build
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+CXX="${CXX:-g++}"
+CXXFLAGS="${CXXFLAGS:--O2 -DNDEBUG}"
+TEX_SIZE="${TEX_SIZE:-4096}"
+OUT="$ROOT/build/MyShooter"
 
-# ---- 1. Ищем заголовки Urho3D (несколько типовых мест) ----
-CANDIDATES=(
+mkdir -p "$ROOT/build"
+
+# ---- 1. Автопоиск заголовков Urho3D ----
+CANDIDATES=()
+[ -n "${URHO_INC:-}" ]    && CANDIDATES+=("$URHO_INC")
+[ -n "${URHO3D_HOME:-}" ] && CANDIDATES+=("$URHO3D_HOME/include" "$URHO3D_HOME/build/include")
+CANDIDATES+=(
     "$HOME/urho3d/build/include"
+    "$HOME/urho3d_build/include"
+    "$HOME/urho3d-local/include"
     "/usr/local/include/Urho3D"
     "/usr/include/Urho3D"
 )
-URHO_INC=""
+
+FOUND_INC=""
 for c in "${CANDIDATES[@]}"; do
-    if [ -f "$c/Core/UrhoVersion.h" ]; then URHO_INC="$c"; break; fi
-    # вариант: сама директория уже содержит папку Urho3D/...
-    if [ -f "$c/Urho3D.h" ] || [ -d "$c/Urho3D" ]; then
-        # /usr/local/include/Urho3D содержит подпапки напрямую -> родитель = /usr/local/include
-        URHO_INC="$(dirname "$c")"
+    [ -z "$c" ] && continue
+    if [ -f "$c/Urho3D/Urho3D.h" ] || [ -f "$c/Urho3D/Engine/Application.h" ]; then
+        FOUND_INC="$c"
+        break
+    fi
+    if [ -f "$c/Core/UrhoVersion.h" ] || [ -f "$c/Urho3D.h" ] || [ -f "$c/Engine/Application.h" ]; then
+        FOUND_INC="$(dirname "$c")"
         break
     fi
 done
-if [ -z "$URHO_INC" ]; then
-    echo "Не найдены заголовки Urho3D. Укажи путь вручную: URHO_INC=/путь/к/include ./build.sh"
+
+if [ -z "$FOUND_INC" ]; then
+    echo "ОШИБКА: Не найдены заголовки Urho3D."
+    echo "Укажите путь вручную: URHO3D_HOME=/путь/к/urho3d ./build.sh  или  URHO_INC=/путь/к/include ./build.sh"
     exit 1
 fi
-echo "Urho3D includes: $URHO_INC"
+URHO_INC="$FOUND_INC"
+echo "[Urho3D] Заголовки: $URHO_INC"
 
-# ---- 2. SDL2 (чинит fatal error: SDL/SDL_joystick.h) ----
-# Urho3D делает #include <SDL/SDL_joystick.h>, а distro кладут заголовки в /usr/include/SDL2.
-# Варианты: pkg-config дал путь .../include/SDL2, либо симлинк SDL -> SDL2, либо fallback.
+# ---- 2. SDL2 (без sudo: локальный shim build/sdl_shim/SDL -> .../SDL2 при необходимости) ----
 SDL_INC=""
+SDL_INC2=""
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists sdl2; then
-    SDL_LIBS=$(pkg-config --libs sdl2)
+    SDL_LIBS="$(pkg-config --libs sdl2)"
     for f in $(pkg-config --cflags-only-I sdl2 | tr ' ' '\n' | sed 's/^-I//'); do
         if [ -f "$f/SDL/SDL_joystick.h" ]; then SDL_INC="$f"; break; fi
-        if [ -f "$f/SDL2/SDL_joystick.h" ]; then SDL_INC2="$f"; fi
+        if [ -f "$f/SDL2/SDL_joystick.h" ]; then SDL_INC2="$f/SDL2"; fi
+        if [ -f "$f/SDL_joystick.h" ] && [ "$(basename "$f")" = "SDL2" ]; then SDL_INC2="$f"; fi
     done
 else
     SDL_LIBS="-lSDL2"
-    if [ -f /usr/include/SDL/SDL_joystick.h ]; then SDL_INC="/usr/include"; fi
-    if [ -f /usr/include/SDL2/SDL_joystick.h ]; then SDL_INC2="/usr/include"; fi
+fi
+
+if [ -z "$SDL_INC" ]; then
+    for d in "$URHO_INC/Urho3D/ThirdParty" "/usr/include" "/usr/local/include"; do
+        if [ -f "$d/SDL/SDL_joystick.h" ]; then SDL_INC="$d"; break; fi
+        if [ -z "$SDL_INC2" ] && [ -f "$d/SDL2/SDL_joystick.h" ]; then SDL_INC2="$d/SDL2"; fi
+    done
 fi
 
 if [ -z "$SDL_INC" ] && [ -n "$SDL_INC2" ]; then
-    # нет пути SDL/... — пробуем создать симлинк SDL2 -> SDL (нужен root или права на include)
-    if [ ! -e "$SDL_INC2/SDL" ] && ln -s "$SDL_INC2/SDL2" "$SDL_INC2/SDL" 2>/dev/null; then
-        echo "Создан симлинк: $SDL_INC2/SDL -> $SDL_INC2/SDL2"
-    fi
-    if [ -f "$SDL_INC2/SDL/SDL_joystick.h" ]; then
-        SDL_INC="$SDL_INC2"
-    else
-        echo "!! Не найден заголовок SDL/SDL_joystick.h."
-        echo "   Выполни одну команду и повтори сборку:"
-        echo "   sudo apt install -y libsdl2-dev && sudo ln -sfn /usr/include/SDL2 /usr/include/SDL"
-        exit 1
-    fi
+    mkdir -p "$ROOT/build/sdl_shim"
+    ln -sfn "$SDL_INC2" "$ROOT/build/sdl_shim/SDL"
+    SDL_INC="$ROOT/build/sdl_shim"
 fi
 
 SDL_CFLAGS="-D_REENTRANT"
 [ -n "$SDL_INC" ] && SDL_CFLAGS="-I$SDL_INC $SDL_CFLAGS"
 
-# ---- 2.5 Bullet Physics (чинит fatal error: Bullet/LinearMath/btIDebugDraw.h) ----
-# ВАЖНО: distro-пакет libbullet-dev (Bullet 2.x) НЕ СОВМЕСТИМ с заголовками Urho3D —
-# Urho собран против Bullet 3 (libBullet3Collision), и компиляция падает с ошибкой
-# "isVisible ... marked override, but does not override". Поэтому заголовки ищем
-# ТОЛЬКО внутри самого Urho3D (ThirdParty/Bullet/src). Если не найдём — просто
-# ругаемся подсказкой, но НЕ добавляем несовместимый include (ошибка всё равно не лечится).
+# ---- 3. Bullet3 из дерева Urho3D (если доступен) ----
 BULLET_CFLAGS=""
-for d in "$URHO_INC/Urho3D/ThirdParty/Bullet/src" "$HOME/urho3d/src/ThirdParty/Bullet/src" "$HOME/urho3d/ThirdParty/Bullet/src"; do
+for d in \
+    "$URHO_INC/Urho3D/ThirdParty/Bullet" \
+    "$URHO_INC/Urho3D/ThirdParty/Bullet/src" \
+    "${URHO3D_HOME:-}/include/Urho3D/ThirdParty/Bullet" \
+    "$HOME/urho3d/src/ThirdParty/Bullet/src" \
+    "$HOME/urho3d/ThirdParty/Bullet/src"
+do
+    [ -z "$d" ] && continue
     if [ -f "$d/Bullet/LinearMath/btIDebugDraw.h" ] || [ -f "$d/LinearMath/btIDebugDraw.h" ]; then
         BULLET_CFLAGS="-I$d"
-        echo "Bullet includes (из Urho3D): $d"
         break
     fi
 done
-if [ -z "$BULLET_CFLAGS" ]; then
-    echo "Подсказка: если компилятор упадёт на Bullet/*.h — пересобери Urho3D из исходников"
-    echo "(его ThirdParty/Bullet подставит нужные заголовки автоматически)."
+
+# ---- 4. Автопоиск libUrho3D ----
+URHO_LIBDIR=""
+for ld in \
+    "${URHO3D_HOME:-}/lib" \
+    "${URHO3D_HOME:-}/build/lib" \
+    "$(dirname "$URHO_INC")/lib" \
+    "$HOME/urho3d/build/lib" \
+    "$HOME/urho3d_build/lib" \
+    "/usr/local/lib" \
+    "/usr/lib/x86_64-linux-gnu" \
+    "/usr/lib"
+do
+    [ -z "$ld" ] && continue
+    if [ -f "$ld/libUrho3D.so" ] || [ -f "$ld/libUrho3D.a" ]; then
+        URHO_LIBDIR="$ld"
+        break
+    fi
+done
+
+if [ -z "$URHO_LIBDIR" ]; then
+    echo "ОШИБКА: Не найдена библиотека libUrho3D (.so/.a)."
+    echo "Укажите путь: URHO3D_HOME=/путь/к/urho3d ./build.sh"
+    exit 1
 fi
+echo "[Urho3D] Библиотеки: $URHO_LIBDIR"
 
-# ---- 3. Путь к libUrho3D ----
-if [ -d "$HOME/urho3d/build/lib" ]; then
-    URHO_LIBDIR="$HOME/urho3d/build/lib"
-elif [ -d "/usr/local/lib" ]; then
-    URHO_LIBDIR="/usr/local/lib"
-else
-    URHO_LIBDIR="/usr/lib"
-fi
-
-CXX=${CXX:-g++}
-CXXFLAGS=${CXXFLAGS:-"-O2"}
-
-# Библиотеки Bullet подключаем только те, что реально есть в $URHO_LIBDIR.
-# Было: `[ -f libBullet3Collision.so ] || ls ... && echo "-l..."` — при наличии .so
-# короткое замыкание `||` не давало echo, и флаги не добавлялись вообще.
 BULLET_LIBS=()
 for lib in Bullet3Collision Bullet3Dynamics Bullet3Geometry BulletInverseDynamics; do
-    if ls "$URHO_LIBDIR/lib$lib".so* >/dev/null 2>&1; then
+    if ls "$URHO_LIBDIR/lib$lib".so* "$URHO_LIBDIR/lib$lib".a >/dev/null 2>&1; then
         BULLET_LIBS+=("-l$lib")
     fi
 done
 
-$CXX "$SRC" \
+# ---- 5. Синхронизация ресурсов (CoreData + Data + settings.ini) ----
+echo "[1/3] Синхронизация GLSL шейдеров, 4K постпроцессов, PBR материалов и звуков..."
+mkdir -p "$ROOT/build/CoreData" "$ROOT/build/Data"
+for csrc in "$ROOT/CoreData" "$ROOT/bin/CoreData" "$HOME/urho3d/bin/CoreData" "/usr/local/share/Urho3D/CoreData"; do
+    [ -d "$csrc" ] && cp -ru "$csrc"/. "$ROOT/build/CoreData"/ 2>/dev/null || true
+done
+for dsrc in "$ROOT/Data" "$ROOT/bin/Data" "$HOME/urho3d/bin/Data" "/usr/local/share/Urho3D/Data"; do
+    [ -d "$dsrc" ] && cp -ru "$dsrc"/. "$ROOT/build/Data"/ 2>/dev/null || true
+done
+# Поверх гарантируем свежие файлы из репозитория
+[ -d "$ROOT/CoreData" ] && cp -rf "$ROOT/CoreData"/. "$ROOT/build/CoreData"/ 2>/dev/null || true
+[ -d "$ROOT/Data/Materials/Game" ] && mkdir -p "$ROOT/build/Data/Materials/Game" && cp -rf "$ROOT/Data/Materials/Game"/. "$ROOT/build/Data/Materials/Game"/ 2>/dev/null || true
+[ -d "$ROOT/Data/PostProcess" ]    && mkdir -p "$ROOT/build/Data/PostProcess"    && cp -rf "$ROOT/Data/PostProcess"/.    "$ROOT/build/Data/PostProcess"/    2>/dev/null || true
+[ -d "$ROOT/Data/Sounds" ]         && mkdir -p "$ROOT/build/Data/Sounds"         && cp -rf "$ROOT/Data/Sounds"/.         "$ROOT/build/Data/Sounds"/         2>/dev/null || true
+
+# Удаляем случайные вложенные дубли и пустые файлы (но НЕ трогаем внешнюю установку Urho3D!)
+rm -rf "$ROOT/build/Data/Data" 2>/dev/null || true
+find "$ROOT/build/Data" -name "*.mat" ! -path "*Materials*" -delete 2>/dev/null || true
+find "$ROOT/build/Data" "$ROOT/build/CoreData" -type f -size 0 -delete 2>/dev/null || true
+[ -f "$ROOT/bin/settings.ini" ] && [ ! -f "$ROOT/build/settings.ini" ] && cp "$ROOT/bin/settings.ini" "$ROOT/build/settings.ini" || true
+
+# ---- 6. Генерация полного пакета 4K PBR текстур (4096x4096) ----
+STAMP_FILE="$ROOT/build/Data/Textures/.4k_pbr_stamp"
+CUR_STAMP=""
+[ -f "$STAMP_FILE" ] && CUR_STAMP="$(cat "$STAMP_FILE" 2>/dev/null || true)"
+
+if [ "$CUR_STAMP" != "$TEX_SIZE" ] || [ ! -f "$ROOT/build/Data/Textures/FloorTileRoughMetal.png" ] || [ ! -f "$ROOT/build/Data/Textures/Skybox4K.xml" ]; then
+    echo "[2/3] Генерация 4K PBR текстур (${TEX_SIZE}x${TEX_SIZE}), IBL Skybox4K и 4K Loading Art..."
+    "$CXX" -O3 -std=c++17 -pthread "$ROOT/tools/gen_textures_4k.cpp" -o "$ROOT/build/gen_textures_4k"
+    "$ROOT/build/gen_textures_4k" "$ROOT/build/Data/Textures" "$TEX_SIZE"
+else
+    echo "[2/3] 4K PBR текстуры (${TEX_SIZE}x${TEX_SIZE}) уже актуальны."
+fi
+
+# ---- 7. Компиляция игры ----
+echo "[3/3] Компиляция src/MyApp.cpp -> build/MyShooter..."
+"$CXX" "$ROOT/src/MyApp.cpp" \
     -o "$OUT" \
     -std=c++17 $CXXFLAGS \
     -I"$URHO_INC" \
@@ -110,61 +172,13 @@ $CXX "$SRC" \
     $SDL_CFLAGS \
     $BULLET_CFLAGS \
     -L"$URHO_LIBDIR" \
+    -Wl,-rpath,"$URHO_LIBDIR" \
     -lUrho3D \
     "${BULLET_LIBS[@]}" \
     $SDL_LIBS \
-    -lGL \
-    -lX11 \
-    -lpthread \
-    -lrt \
-    -ldl \
-    -lm
+    -lGL -lX11 -lpthread -lrt -ldl -lm
 
-echo "Готово: $OUT"
-
-# ---- 4.5 Автосинхронизация ресурсов в build/Data (чинит 'Could not find resource' и segfault) ----
-# Игра запускается из build/ и грузит ONLY build/Data/. Если там неполная копия — докатываем
-# недостающие файлы из ./Data и из ~/urho3d/bin/{Data,CoreData}, не перезаписывая имеющиеся.
-sync_dir() {
-    local src="$1" dst="build/Data"
-    [ -d "$src" ] || return 0
-    mkdir -p "$dst"
-    cp -rn "$src"/. "$dst"/ 2>/dev/null || true
-}
-for base in "Data" "bin/Data" "$HOME/urho3d/bin/Data" "/usr/local/share/Urho3D/Data"; do
-    sync_dir "$base"
-done
-
-# ---- 4.55 Чистим build/Data от мусора, который вызывает 'unknown resource type' ----
-# bin/Data содержит вложенный bin/Data/Data (двойная копия) и бинарные .mat-остатки —
-# движок пытается грузить их как неизвестные типы (2B8AF19B) и спамит ошибками.
-rm -rf build/Data/Data 2>/dev/null || true
-find build/Data -name "*.mat" ! -path "*Materials*" -delete 2>/dev/null || true
-# Пустые/битые файлы ресурсов (0 байт) тоже дают ошибки загрузки — удаляем,
-# синхронизация ниже докатит валидные копии.
-find build/Data build/CoreData -type f -size 0 -delete 2>/dev/null || true
-
-
-# ---- 4.6 HD-текстуры: генерируем/синхронизируем TexturesHD -> build/Data/Textures ----
-# Материалы Materials/Game/*.xml ссылаются на Textures/StoneHDDiffuse.png и т.д.
-# Если PNG нет — генерируем процедурно (stdlib python3), потом копим в build/Data/Textures.
-if [ ! -f "bin/Data/TexturesHD/StoneHDDiffuse.png" ] && [ ! -f "Data/TexturesHD/StoneHDDiffuse.png" ]; then
-    if command -v python3 >/dev/null 2>&1 && [ -f tools/gen_textures.py ]; then
-        echo "Генерирую HD-текстуры (tools/gen_textures.py -> bin/Data/TexturesHD)..."
-        mkdir -p bin/Data/TexturesHD
-        python3 tools/gen_textures.py bin/Data/TexturesHD || echo "!! Генерация текстур упала — сцена будет без HD-текстур"
-    fi
-fi
-for hd in "bin/Data/TexturesHD" "Data/TexturesHD"; do
-    if [ -d "$hd" ]; then
-        mkdir -p build/Data/Textures
-        cp -n "$hd"/*.png "$hd"/*.bmp build/Data/Textures/ 2>/dev/null || true
-        echo "HD-текстуры синхронизированы: $hd -> build/Data/Textures/"
-        break
-    fi
-done
-
-# УДАЛЕНО: раньше здесь рекурсивно удалялись все *.pfx из установленного Urho3D
-# (~/urho3d/bin/Data, ~/urho3d/bin/CoreData). Это необратимо ломало чужую установку
-# движка ради подавления строчки «unknown resource type» в логе.
-# Игра и так игнорирует битые .pfx (см. CreateParticleEffects).
+echo "================================================================"
+echo "Готово! Запускайте CHIKENGUN 2.2 [4K ULTRA EDITION]:"
+echo "  ./run.sh   или   ./build/MyShooter"
+echo "================================================================"

@@ -1,0 +1,46 @@
+name: CI — Syntax, Core Tests & 4K Asset Pipeline
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Fetch Urho3D headers for static type check
+        run: |
+          mkdir -p /tmp/urho_ci
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/urho3d/Urho3D.git /tmp/urho_ci/master
+          cd /tmp/urho_ci/master
+          git sparse-checkout set Source/Urho3D Source/ThirdParty/SDL/include Source/ThirdParty/Bullet/src
+          mkdir -p include Source/Urho3D/ThirdParty
+          ln -sfn ../Source/Urho3D include/Urho3D
+          ln -sfn ../../ThirdParty/SDL/include Source/Urho3D/ThirdParty/SDL
+          ln -sfn ../../ThirdParty/Bullet/src Source/Urho3D/ThirdParty/Bullet
+          printf '#ifndef SDL_config_h_\n#define SDL_config_h_\n#include "SDL_platform.h"\n#include <stdint.h>\n#include <stddef.h>\n#include <stdarg.h>\n#endif\n' > Source/ThirdParty/SDL/include/SDL_config.h
+          printf '#pragma once\n#define URHO3D_API\n' > Source/Urho3D/Urho3D.h
+
+      - name: Run C++17 & Urho3D type check (src/MyApp.cpp + tools + tests)
+        run: |
+          URHO3D_HOME=/tmp/urho_ci/master ./tools/syntax_check.sh
+
+      - name: Build & run CMake unit tests + 4K generator test
+        run: |
+          cmake -B build_ci -DBUILD_GAME=OFF
+          cmake --build build_ci -j
+          ctest --test-dir build_ci --output-on-failure
+
+      - name: Validate XML materials, postprocess & procedural WAV generator
+        run: |
+          python3 tools/gen_sounds.py
+          python3 -c '
+          import glob, xml.etree.ElementTree as ET
+          files = set(glob.glob("Data/**/*.xml", recursive=True) + glob.glob("CoreData/**/*.xml", recursive=True) + ["bin/settings.ini"])
+          for f in sorted(files):
+              ET.parse(f)
+          print(f"Validated {len(files)} XML files")
+          '
