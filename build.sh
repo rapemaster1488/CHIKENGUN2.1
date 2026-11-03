@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Сборка CHIKENGUN 2.2 — 4K ULTRA & CYBER OVERLOAD EDITION (Urho3D C++17)
+# Сборка CHIKENGUN 2.4 — 4K ULTRA & CYBER ARENA EDITION (Urho3D C++17)
 # Автоматически находит Urho3D / SDL2 / Bullet3, синхронизирует шейдеры,
 # PBR-материалы и звуки, генерирует 4K PBR текстуры (4096x4096) + 360° Skybox4K
 # + 4K Loading Art и компилирует build/MyShooter.
@@ -172,6 +172,7 @@ echo "[3/3] Компиляция src/MyApp.cpp -> build/MyShooter..."
     $SDL_CFLAGS \
     $BULLET_CFLAGS \
     -L"$URHO_LIBDIR" \
+    -Wl,-rpath,'$ORIGIN/lib' \
     -Wl,-rpath,"$URHO_LIBDIR" \
     -lUrho3D \
     "${BULLET_LIBS[@]}" \
@@ -179,6 +180,7 @@ echo "[3/3] Компиляция src/MyApp.cpp -> build/MyShooter..."
     -lGL -lX11 -lpthread -lrt -ldl -lm
 
 echo "================================================================"
-echo "Готово! Запускайте CHIKENGUN 2.2 [4K ULTRA EDITION]:"
+echo "Готово! Запускайте CHIKENGUN 2.4 [4K ULTRA C++ EDITION]:"
 echo "  ./run.sh   или   ./build/MyShooter"
+echo "Для сборки портативного архива для скачивания: ./tools/package_linux.sh"
 echo "================================================================"

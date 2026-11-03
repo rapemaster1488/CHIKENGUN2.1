@@ -100,22 +100,31 @@
   layout(location=2) in vec3 aTangent;
   layout(location=3) in vec2 aUV;
 
+  layout(location=4) in mat4 aInstModel;
+  layout(location=8) in vec4 aInstTint;
+  layout(location=9) in vec4 aInstParams; // xyz = emissive(HDR), w = useTex
+
   uniform mat4 uVP;
-  uniform mat4 uModel;
   uniform vec2 uUVScale;
 
   out vec3 vWorldPos;
   out vec3 vNormal;
   out vec3 vTangent;
   out vec2 vUV;
+  out vec4 vTint;
+  out vec3 vEmissive;
+  out float vUseTex;
 
   void main() {
-    vec4 wp = uModel * vec4(aPos, 1.0);
+    vec4 wp = aInstModel * vec4(aPos, 1.0);
     vWorldPos = wp.xyz;
-    mat3 nm = mat3(uModel);
+    mat3 nm = mat3(aInstModel);
     vNormal  = normalize(nm * aNormal);
     vTangent = normalize(nm * aTangent);
     vUV = aUV * uUVScale;
+    vTint = aInstTint;
+    vEmissive = aInstParams.xyz;
+    vUseTex = aInstParams.w;
     gl_Position = uVP * wp;
   }`;
 
@@ -125,16 +134,16 @@
   in vec3 vNormal;
   in vec3 vTangent;
   in vec2 vUV;
+  in vec4 vTint;
+  in vec3 vEmissive;
+  in float vUseTex;
 
   uniform sampler2D uAlbedoMap;
   uniform sampler2D uNormalMap;
   uniform sampler2D uRoughMetalMap;
   uniform samplerCube uEnvCube;
 
-  uniform vec4  uTint;        // rgb + alpha
-  uniform vec3  uEmissive;    // HDR linear emissive
   uniform vec2  uPbrOverride; // x = roughnessMul, y = metallicOverride (<0 = use texture)
-  uniform float uUseTex;      // 1.0 = full PBR textures, 0.0 = solid PBR
 
   uniform vec3  uCamPos;
   uniform vec3  uSunDir;
@@ -155,11 +164,11 @@
 
   void main() {
     vec3 N = normalize(vNormal);
-    vec3 albedo = uTint.rgb;
+    vec3 albedo = vTint.rgb;
     float rough = clamp(uPbrOverride.x, 0.06, 0.98);
     float metal = clamp(max(uPbrOverride.y, 0.0), 0.0, 1.0);
 
-    if (uUseTex > 0.5) {
+    if (vUseTex > 0.5) {
       vec3 texCol = pow(texture(uAlbedoMap, vUV).rgb, vec3(2.2));
       albedo *= texCol;
       vec3 T = normalize(vTangent - N * dot(vTangent, N));
@@ -210,7 +219,7 @@
     float hemi = N.y * 0.5 + 0.5;
     vec3 amb = kD * albedo * uSkyAmb * mix(0.38, 1.05, hemi) + F * envSample * (1.0 - rough * 0.72);
 
-    vec3 color = amb + sunLit + ptLit + uEmissive;
+    vec3 color = amb + sunLit + ptLit + vEmissive;
 
     // Exponential squared atmospheric fog
     float dist = length(vWorldPos - uCamPos);
@@ -219,7 +228,7 @@
 
     // ACES Filmic HDR + Gamma 2.2
     vec3 mapped = pow(ACESFilm(color * 1.08), vec3(1.0 / 2.2));
-    fragColor = vec4(mapped, uTint.a);
+    fragColor = vec4(mapped, vTint.a);
   }`;
 
   const VS_SKY = `#version 300 es
@@ -371,8 +380,8 @@
 
     const U = {};
     [
-      "uVP","uModel","uUVScale","uAlbedoMap","uNormalMap","uRoughMetalMap","uEnvCube",
-      "uTint","uEmissive","uPbrOverride","uUseTex","uCamPos","uSunDir","uSunColor",
+      "uVP","uUVScale","uAlbedoMap","uNormalMap","uRoughMetalMap","uEnvCube",
+      "uPbrOverride","uUseTex","uCamPos","uSunDir","uSunColor",
       "uSkyAmb","uFogColor","uFogDensity",
       "uPointPos[0]","uPointPos[1]","uPointPos[2]","uPointPos[3]",
       "uPointCol[0]","uPointCol[1]","uPointCol[2]","uPointCol[3]"
@@ -391,6 +400,78 @@
       cone: buildCylinderMesh(gl, 14, 0.04, 0.5),
       sph:  buildSphereMesh(gl, 12, 16)
     };
+
+    // ---------- 4b. GPU instancing (2.4) ----------
+    // Один instanced draw call вместо сотни drawMesh(): статика арены,
+    // снаряды и частицы рисуются пачками. Атрибуты 4..9 (mat4 + tint + params).
+    const INST_FLOATS = 24; // mat4(16) + tint(4) + params(4)
+    function createInstBuffer(mesh, divisorLocations) {
+      const buf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      gl.bufferData(gl.ARRAY_BUFFER, INST_FLOATS * 4 * 2048, gl.DYNAMIC_DRAW);
+      gl.bindVertexArray(mesh.vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+      for (let i = 0; i < 4; i++) {
+        gl.enableVertexAttribArray(4 + i);
+        gl.vertexAttribPointer(4 + i, 4, gl.FLOAT, false, INST_FLOATS * 4, i * 16);
+        gl.vertexAttribDivisor(4 + i, 1);
+      }
+      gl.enableVertexAttribArray(8);
+      gl.vertexAttribPointer(8, 4, gl.FLOAT, false, INST_FLOATS * 4, 64);
+      gl.vertexAttribDivisor(8, 1);
+      gl.enableVertexAttribArray(9);
+      gl.vertexAttribPointer(9, 4, gl.FLOAT, false, INST_FLOATS * 4, 80);
+      gl.vertexAttribDivisor(9, 1);
+      gl.bindVertexArray(null);
+      return buf;
+    }
+    const instBufs = {
+      box: createInstBuffer(meshes.box),
+      cyl: createInstBuffer(meshes.cyl),
+      cone: createInstBuffer(meshes.cone),
+      sph: createInstBuffer(meshes.sph),
+    };
+    const instData = new Float32Array(INST_FLOATS * 4096);
+    let instCount = 0;
+    let instMesh = null;
+    let instMat = null;
+    let instUvKey = -1;
+    let instUvs = [1, 1];
+    let instRmKey = -1e9;
+    const instStats = { draws: 0 };
+
+    // Поставить инстанс в текущую пачку (пачка = меш + набор PBR-текстур).
+    function pushInstance(meshName, matSet, modelMat, uvs, tint, emissive) {
+      // uUVScale — это uniform, поэтому пачка дополнительно режется по uvs
+      const uvKey = uvs[0] * 1000 + uvs[1];
+      if (instMesh !== meshName || instMat !== matSet || instUvKey !== uvKey || instCount >= 4096) {
+        flushInstances();
+        instMesh = meshName; instMat = matSet; instUvKey = uvKey; instUvs = uvs;
+      }
+      const o = instCount * INST_FLOATS;
+      for (let i = 0; i < 16; i++) instData[o + i] = modelMat[i];
+      instData[o + 16] = tint[0]; instData[o + 17] = tint[1]; instData[o + 18] = tint[2]; instData[o + 19] = tint[3];
+      instData[o + 20] = emissive[0]; instData[o + 21] = emissive[1]; instData[o + 22] = emissive[2]; instData[o + 23] = matSet ? 1 : 0;
+      instCount++;
+    }
+
+    function flushInstances() {
+      if (instCount === 0) return;
+      const mesh = meshes[instMesh];
+      gl.uniform2f(U.uUVScale, instUvs[0], instUvs[1]);
+      gl.bindBuffer(gl.ARRAY_BUFFER, instBufs[instMesh]);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, instData, 0, instCount * INST_FLOATS);
+      if (instMat) {
+        gl.uniform1f(U.uUseTex, 1.0);
+        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, instMat.diff);
+        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, instMat.norm);
+        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, instMat.rm);
+      }
+      gl.bindVertexArray(mesh.vao);
+      gl.drawElementsInstanced(gl.TRIANGLES, mesh.count, gl.UNSIGNED_SHORT, 0, instCount);
+      S.drawCalls++; S.triCount += mesh.count / 3 * instCount; instStats.draws++;
+      instCount = 0; instMesh = null; instMat = null; instUvKey = -1;
+    }
 
     // Load 2D PBR Texture Trios + Sky4K Cubemap
     function makeFallbackTex(r, g, b) {
@@ -551,11 +632,14 @@
     ];
 
     const MUTATORS = [
-      { name: "СТАНДАРТ",          grav: 1.00, spd: 1.00, cred: 1.00, boom: false },
-      { name: "ЛУННАЯ ГРАВИТАЦИЯ", grav: 0.52, spd: 1.00, cred: 1.15, boom: false },
-      { name: "ТУРБО-СТАЯ",        grav: 1.00, spd: 1.28, cred: 1.35, boom: false },
-      { name: "ЗОЛОТАЯ ЛИХОРАДКА", grav: 1.00, spd: 1.05, cred: 2.00, boom: false },
-      { name: "ПИРО-ШТОРМ",        grav: 1.00, spd: 1.08, cred: 1.25, boom: true  }
+      { name: "СТАНДАРТ",          grav: 1.00, spd: 1.00, cred: 1.00, boom: false, fog: 1.00 },
+      { name: "ЛУННАЯ ГРАВИТАЦИЯ", grav: 0.52, spd: 1.00, cred: 1.15, boom: false, fog: 1.00 },
+      { name: "ТУРБО-СТАЯ",        grav: 1.00, spd: 1.28, cred: 1.35, boom: false, fog: 1.00 },
+      { name: "ЗОЛОТАЯ ЛИХОРАДКА", grav: 1.00, spd: 1.05, cred: 2.00, boom: false, fog: 1.00 },
+      { name: "ПИРО-ШТОРМ",        grav: 1.00, spd: 1.08, cred: 1.25, boom: true,  fog: 1.10 },
+      { name: "ЯДОВИТЫЙ ТУМАН",    grav: 0.92, spd: 1.12, cred: 1.45, boom: false, fog: 1.85 },
+      { name: "СТЕКЛЯННЫЕ КУРЫ",   grav: 1.00, spd: 1.10, cred: 1.60, boom: false, fog: 1.00, fragile: true },
+      { name: "РОЙ ЯИЦ",           grav: 0.80, spd: 1.05, cred: 1.30, boom: false, fog: 1.00, eggStorm: true }
     ];
 
     // ---------- 7. Game State ----------
@@ -578,10 +662,90 @@
       grenCd: 0, turretCd: 0, meleeCd: 0, meleeT: 0, overdriveT: 0, slowMo: 0, shake: 0,
       perks: [0, 0, 0, 0], achiev: savedAch,
       multiKill: 0, multiT: 0,
-      barrels: [], pads: [], chickens: [], orbs: [], enemyEggs: [], grenades: [], turrets: [], beams: [], particles: [], pickups: [],
+      // 2.4: смерть и статистика вместо бесконечного «кибер-клона»
+      gameOver: false, paused: false, reviveCd: 0, runId: 1,
+      shotsFired: 0, shotsHit: 0, dmgDealt: 0, dmgTaken: 0, bestWave: 1,
+      comboTimer: 0, combo: 1, comboKills: 0, lastKillName: "", killStreak: 0,
+      timeAlive: 0, waveProgress: 0,
+      // 2.4: навыки и враги
+      dashCharges: 2, dashRecharge: 0, dashMax: 2, invulnT: 0, aimKick: 0, waveClearT: 0,
+      hitStopT: 0, killCamT: 0,
+      critChance: 0.06, lifesteal: 0, regen: 0, crouchBlend: 0,
+      radarPulse: 0, hitFlash: 0,
+      barrels: [], pads: [], chickens: [], orbs: [], enemyEggs: [], grenades: [], turrets: [], beams: [], particles: [], pickups: [], telegraphed: [],
       weather: Array.from({ length: 42 }, () => ({ ox: (Math.random()-0.5)*34, oy: Math.random()*13, oz: (Math.random()-0.5)*34, sp: 2+Math.random()*3, ph: Math.random()*6.28 })),
-      showFps: false, fps: 60, drawCalls: 0
+      showFps: false, fps: 60, drawCalls: 0, triCount: 0
     };
+
+    // Камера меню/паузы (не трогает позицию игрока)
+    const menuCam = { x: 0, y: 8, z: 24, yaw: 0, pitch: -0.18, blend: 1 };
+
+    // ---------- 7b. Gameplay ability extensions (2.4) ----------
+    // Прокачиваемые перки: каждый уровень меняет реальные поля S, а не только HUD.
+    function applyPerkStats() {
+      const p = S.perks;
+      S.dashMax = 2 + (p[3] >= 3 ? 1 : 0);
+      S.critChance = 0.06 + 0.03 * p[2];
+      S.lifesteal = p[0] >= 3 ? 0.04 * (p[0] - 2) : 0;
+      S.regen = p[0] >= 5 ? 1.5 : 0;
+    }
+
+    function hurtPlayer(raw) {
+      if (S.gameOver) return;
+      if (S.invulnT > 0) return;
+      const dmg = Math.max(0, raw);
+      S.dmgTaken += dmg;
+      const takeA = Math.min(S.armor, dmg * 0.65);
+      S.armor -= takeA;
+      S.hp = Math.max(0, S.hp - (dmg - takeA));
+      S.shake = Math.min(0.3, S.shake + 0.12);
+      S.hitFlash = 0.16;
+      opts.flashDamage();
+      if (S.hp <= 0) triggerGameOver();
+    }
+
+    function triggerGameOver() {
+      if (S.gameOver) return;
+      S.gameOver = true;
+      S.hp = 0;
+      S.slowMo = 0.75;
+      S.shake = 0.34;
+      opts.playSfx("RoosterBoss.wav", 0.85);
+      opts.pushFeed("💀 КИБЕР-КУРЯТИНА ОДОЛЕЛА БОЙЦА...");
+      if (S.score > S.highScore) {
+        S.highScore = S.score;
+        try { localStorage.setItem("cg23_hi", String(S.highScore)); } catch (_) {}
+      }
+      opts.showGameOver({
+        score: Math.round(S.score), wave: S.bestWave, kills: S.kills, headshots: S.headshots,
+        accuracy: S.shotsFired > 0 ? Math.round(100 * S.shotsHit / S.shotsFired) : 0,
+        time: Math.round(S.timeAlive), highScore: S.highScore, best: S.score >= S.highScore,
+        maxCombo: S.comboKills
+      });
+    }
+
+    function restartRun() {
+      S.gameOver = false;
+      S.hp = S.maxHp; S.armor = 50;
+      S.score = 0; S.credits = 100; S.kills = 0; S.headshots = 0;
+      S.shotsFired = 0; S.shotsHit = 0; S.dmgDealt = 0; S.dmgTaken = 0;
+      S.wave = 1; S.bestWave = 1; S.mutator = 0; S.orbitalPct = 40;
+      S.timeAlive = 0; S.comboKills = 0; S.combo = 1; S.multiKill = 0; S.multiT = 0;
+      S.x = 0; S.y = 1.75; S.z = -26; S.vx = S.vy = S.vz = 0;
+      S.yaw = 0; S.pitch = 0.04; S.onGround = true; S.fromPad = false;
+      S.ammo = WEAPONS.map(w => w.mag); S.reloadT = 0; S.fireCd = 0; S.recoil = 0;
+      S.wep = 2; S.aiming = false;
+      S.grappleOn = false; S.grappleCd = 0; S.grappleT = 0;
+      S.dashT = 0; S.dashCd = 0; S.dashCharges = S.dashMax; S.dashRecharge = 0;
+      S.grenCd = 0; S.turretCd = 0; S.meleeCd = 0; S.overdriveT = 0; S.slowMo = 0;
+      S.perks = [0, 0, 0, 0]; applyPerkStats();
+      S.orbitalStrikes = []; S.beams = []; S.particles = []; S.grenades = []; S.orbs = [];
+      S.enemyEggs = []; S.turrets = []; S.chickens = []; S.telegraphed = [];
+      S.shake = 0; S.hitFlash = 0; S.runId++;
+      resetWorldItems();
+      spawnWave(1);
+      opts.hideGameOver();
+    }
 
     function rayBox(ox,oy,oz, dx,dy,dz, cx,cy,cz, hx,hy,hz) {
       let tmin = 0, tmax = 1e9;
@@ -641,7 +805,8 @@
 
     function spawnWave(num) {
       S.wave = num;
-      S.mutator = num <= 1 ? 0 : (num % 5 === 0 ? 3 : ((num * 3) % 5));
+      S.bestWave = Math.max(S.bestWave || 1, num);
+      S.mutator = num <= 1 ? 0 : (num % 5 === 0 ? 3 : ((num * 3 + 1) % MUTATORS.length));
       if (num > 1) { S.credits += 45; opts.pushFeed(`+45₵ БОНУС ЗА ВОЛНУ ${num}!`); }
       if (num >= 5) unlockAch(4, "ШТУРМОВИК 5-Й ВОЛНЫ");
       if (num >= 10) unlockAch(9, "ЛЕГЕНДА КУРЯТНИКА (10 ВОЛН)");
@@ -661,14 +826,89 @@
           else if (rl < 0.68) type = "charger";
           else if (rl < 0.86) type = "shooter";
         }
-        const hp = type === "boss" ? 560 + num * 30 : type === "drone" ? 90 : type === "kamikaze" ? 55 : 95 + num * 10;
+        let hp = type === "boss" ? 560 + num * 30 : type === "drone" ? 90 : type === "kamikaze" ? 55 : 95 + num * 10;
+        if (MUTATORS[S.mutator].fragile) hp *= 0.45;
+        const pos = findSpawnPos(a, r, type === "drone" ? 4.4 : 0);
         S.chickens.push({
-          x: Math.cos(a) * r, y: type === "drone" ? 4.4 : 0, z: Math.sin(a) * r,
-          type, hp, maxHp: hp, phase: Math.random() * 6.28, atkCd: 1.0 + Math.random(), enraged: false, beepT: 0.4
+          x: pos.x, y: pos.y, z: pos.z,
+          type, hp, maxHp: hp, phase: Math.random() * 6.28, atkCd: 1.0 + Math.random(), enraged: false, beepT: 0.4,
+          telegraphT: 0, telegraphCd: 1.2, stunT: 0, burnT: 0, burnDps: 0, spawnedAt: S.timeAlive
         });
       }
+      // 2.4: с 3-й волны в каждой второй появляется МИНИ-БОСС «ЛЕТАЮЩЕЕ ЯЙЦО»
+      if (num >= 3 && num % 2 === 1) {
+        const pos = findSpawnPos(Math.random() * 6.28, 26, 6.2);
+        const hp = 240 + num * 45;
+        S.chickens.push({
+          x: pos.x, y: pos.y, z: pos.z, type: "egg", hp, maxHp: hp,
+          phase: Math.random() * 6.28, atkCd: 1.4, enraged: false, beepT: 0.4, telegraphT: 0,
+          stunT: 0, burnT: 0, burnDps: 0, spawnedAt: S.timeAlive, orbit: Math.random() * 6.28
+        });
+        opts.pushFeed("🥚 ВНИМАНИЕ: ЛЕТАЮЩЕЕ ЯЙЦО-МИНИ-БОСС!");
+        opts.playSfx("Chicken_Egg.wav", 0.9);
+      }
+      const mut = MUTATORS[S.mutator];
+      if (mut.eggStorm) {
+        for (let i = 0; i < 3; i++) {
+          const pos = findSpawnPos(Math.random() * 6.28, 22, 7.5);
+          const hp = 60 + num * 6;
+          S.chickens.push({ x: pos.x, y: pos.y, z: pos.z, type: "egglet", hp, maxHp: hp, phase: Math.random() * 6.28,
+            atkCd: 2.2, enraged: false, beepT: 0.4, telegraphT: 0, stunT: 0, burnT: 0, burnDps: 0, spawnedAt: S.timeAlive });
+        }
+      }
       if (bossWave) opts.playSfx("RoosterBoss.wav", 0.9);
-      opts.showBanner(`ВОЛНА ${num}  •  ${MUTATORS[S.mutator].name}${bossWave ? " [МЕГА-ИНДЮК!]" : ""}`);
+      opts.showBanner(`ВОЛНА ${num}  •  ${mut.name}${bossWave ? " [МЕГА-ИНДЮК!]" : ""}`);
+    }
+
+    // Спавн вне геометрии: до 24 попыток, иначе — край арены.
+    function findSpawnPos(angle, radius, y) {
+      for (let attempt = 0; attempt < 24; attempt++) {
+        const a = angle + (Math.random() - 0.5) * 0.9;
+        const r = radius + (Math.random() - 0.5) * 8;
+        const x = Math.cos(a) * r, z = Math.sin(a) * r;
+        if (Math.abs(x) > 44 || Math.abs(z) > 44) continue;
+        if (!isPosBlocked(x, y, z, 1.1)) return { x, y, z };
+      }
+      return { x: Math.cos(angle) * 42, y, z: Math.sin(angle) * 42 };
+    }
+
+    // 2.4: враги не проходят сквозь статику. Скользим по осям (как игрок), а если
+    // враг уже застрял в геометрии — выталкиваем его по кратчайшей оси.
+    function moveChicken(c, dx, dz) {
+      const r = 0.75;
+      const tryX = c.x + dx, tryZ = c.z + dz;
+      let nx = c.x, nz = c.z;
+      if (!isPosBlocked(tryX, c.y, c.z, r)) nx = tryX;
+      if (!isPosBlocked(nx, c.y, tryZ, r)) nz = tryZ;
+      c.x = nx; c.z = nz;
+    }
+
+    function resolveChickenCollisions(c) {
+      const r = 0.85;
+      for (let i = 0; i < colliders.length; i++) {
+        const b = colliders[i];
+        const ox = (b.hx + r) - Math.abs(c.x - b.cx);
+        const oz = (b.hz + r) - Math.abs(c.z - b.cz);
+        if (ox <= 0 || oz <= 0) continue;
+        if (c.y > b.cy + b.hy + 0.2 || c.y + 1.6 < b.cy - b.hy) continue;
+        if (ox < oz) c.x += (c.x < b.cx ? -ox : ox);
+        else c.z += (c.z < b.cz ? -oz : oz);
+      }
+    }
+
+    // Грубая проверка «точка внутри статики/врага» (радиус r по горизонтали).
+    function isPosBlocked(x, y, z, r) {
+      r = r || 0.8;
+      for (let i = 0; i < colliders.length; i++) {
+        const c = colliders[i];
+        if (Math.abs(x - c.cx) < c.hx + r && Math.abs(z - c.cz) < c.hz + r &&
+            y > c.cy - c.hy - 0.2 && y < c.cy + c.hy + 1.4) return true;
+      }
+      for (let i = 0; i < S.chickens.length; i++) {
+        const c = S.chickens[i];
+        if (c.hp > 0 && Math.hypot(c.x - x, c.z - z) < 1.6) return true;
+      }
+      return false;
     }
 
     resetWorldItems();
@@ -682,6 +922,8 @@
     }
 
     function explodeAt(ex, ey, ez, radius, maxDmg) {
+      // 2.4: пул частиц ограничен, чтобы длинные сессии не деградировали
+      if (S.particles.length > 420) S.particles.splice(0, S.particles.length - 420);
       opts.playSfx("BarrelBoom.wav", 0.85);
       addFlashLight(ex, ey + 1.0, ez, 4.5, 2.2, 0.5, 18, 0.35);
       S.shake = Math.min(0.35, S.shake + 0.18);
@@ -709,7 +951,9 @@
 
     function damageChicken(c, dmg, headshot) {
       if (c.hp <= 0) return;
+      const wasAlive = c.hp > 0;
       c.hp -= dmg;
+      S.dmgDealt += Math.min(dmg, dmg + Math.min(0, c.hp)); // не считаем «оверкилл»
       opts.flashHit(headshot, c.hp <= 0);
       opts.spawnDmgNum(c.x, c.y + 1.8, c.z, Math.round(dmg), headshot);
       if (headshot) {
@@ -734,8 +978,8 @@
         opts.playSfx(c.type === "boss" ? "RoosterBoss.wav" : "ChickenDie.wav", 0.78);
         S.kills++;
         const mut = MUTATORS[S.mutator];
-        const pts = c.type === "boss" ? 950 : c.type === "drone" ? 260 : 165;
-        const cr  = Math.round((c.type === "boss" ? 120 : 28) * mut.cred);
+        const pts = c.type === "boss" ? 950 : c.type === "egg" ? 520 : c.type === "egglet" ? 140 : c.type === "drone" ? 260 : 165;
+        const cr  = Math.round((c.type === "boss" ? 120 : c.type === "egg" ? 70 : 28) * mut.cred);
         S.score += pts; S.credits += cr;
         if (S.score > S.highScore) {
           S.highScore = S.score;
@@ -756,8 +1000,18 @@
         S.multiT = 3.2;
         if (S.multiKill === 3) opts.pushFeed("🔥🔥 ТРОЙНОЙ ШАШЛЫК!");
         else if (S.multiKill >= 5) { opts.pushFeed(`💀 КУРИНЫЙ АПОКАЛИПСИС x${S.multiKill}!`); S.slowMo = 0.32; }
-        opts.pushFeed(`${c.type === "boss" ? "👑 БОСС ПАЛ" : "🐔 Курица ощипана"} +${pts} (+${cr}₵)`);
+        const killName = c.type === "boss" ? "👑 БОСС ПАЛ" : c.type === "egg" ? "🥚 ЯЙЦО-МИНИ-БОСС РАЗБИТО" : "🐔 Курица ощипана";
+        opts.pushFeed(`${killName} +${pts} (+${cr}₵)`);
+
+        // 2.4: вампиризм с перка «Титановое оперение» 3+ уровня
+        if (S.lifesteal > 0 && S.hp < S.maxHp) {
+          const heal = Math.max(1, Math.round(S.lifesteal * c.maxHp));
+          S.hp = Math.min(S.maxHp, S.hp + heal);
+        }
+        S.comboKills = Math.max(S.comboKills, S.multiKill);
+        S.lastKillName = c.type;
       }
+      return wasAlive;
     }
 
     function getAimDir(spread = 0) {
@@ -774,15 +1028,19 @@
 
     function fireWeapon() {
       const w = WEAPONS[S.wep];
+      if (S.gameOver || S.paused) return;
       if (S.fireCd > 0 || S.reloadT > 0) return;
       if (S.ammo[S.wep] <= 0) {
-        S.reloadT = w.reload * Math.pow(0.88, S.perks[1]);
-        opts.playSfx("EmptyClick.wav", 0.7);
-        opts.pushFeed(`🔄 Перезарядка ${w.name}...`);
+        if (S.reloadT <= 0) {
+          S.reloadT = w.reload * Math.pow(0.88, S.perks[1]);
+          opts.playSfx("EmptyClick.wav", 0.7);
+          opts.pushFeed(`🔄 Перезарядка ${w.name}...`);
+        }
         return;
       }
       S.ammo[S.wep]--;
       S.inspectT = 0;
+      S.shotsFired++;
       const rofMul = Math.pow(0.88, S.perks[1]) * (S.overdriveT > 0 ? 0.65 : 1.0);
       S.fireCd = w.rof * rofMul;
       S.recoil = Math.min(0.26, S.recoil + (w.pierce ? 0.16 : 0.055));
@@ -792,8 +1050,10 @@
       addFlashLight(S.x + fx * 1.1, S.y - 0.1 + fy * 1.1, S.z + fz * 1.1, w.color[0]*3, w.color[1]*3, w.color[2]*3, 9, 0.06);
 
       const dmgMul = (1 + 0.15 * S.perks[2]) * (S.overdriveT > 0 ? 2.0 : 1.0);
+      // Крит: шанс растёт с перком «Калибр Вольфрам», крит-попадание бьёт x2.
+      const crit = Math.random() < S.critChance;
       if (w.plasma) {
-        S.orbs.push({ x: S.x + fx*0.9, y: S.y - 0.12 + fy*0.9, z: S.z + fz*0.9, vx: fx*42, vy: fy*42, vz: fz*42, dmg: w.dmg * dmgMul, ttl: 2.2, bounces: 2 });
+        S.orbs.push({ x: S.x + fx*0.9, y: S.y - 0.12 + fy*0.9, z: S.z + fz*0.9, vx: fx*42, vy: fy*42, vz: fz*42, dmg: w.dmg * dmgMul, ttl: 2.2, bounces: 2, crit });
         return;
       }
 
@@ -841,12 +1101,25 @@
             explodeAt(h.obj.x, 0.7, h.obj.z, 8.5, 190);
           } else {
             const wasAlive = h.obj.hp > 0;
-            damageChicken(h.obj, w.dmg * dmgMul * (h.head ? 2.0 : 1.0), h.head);
+            const critMul = crit && p === 0 ? 2.0 : 1.0;
+            damageChicken(h.obj, w.dmg * dmgMul * (h.head ? 2.0 : 1.0) * critMul, h.head || crit);
             if (w.pierce && wasAlive && h.obj.hp <= 0) railKills++;
           }
         });
+        // Точность: выстрел считается попаданием, если хоть одна дробинка/луч нашла цель.
+        if (hits.length > 0) { S.shotsHit++; }
       }
       if (railKills >= 2) { S.slowMo = 0.36; unlockAch(5, "СКВОЗНОЙ РЕЛЬС (2+ ЗА ВЫСТРЕЛ)"); }
+      S.aimKick = 0.12;
+    }
+
+    // Перезарядка по таймеру (вызывается из tick): магазин + обнуление дробин
+    function finishReload() {
+      const w = WEAPONS[S.wep];
+      S.ammo[S.wep] = w.mag;
+      S.reloadT = 0;
+      opts.playSfx("Reload.wav", 0.6);
+      opts.pushFeed(`✔ ${w.name} перезаряжен (${w.mag})`);
     }
 
     function triggerGrapple() {
@@ -931,6 +1204,7 @@
     window.addEventListener("wheel", e => {
       if (document.pointerLockElement !== canvas) return;
       S.wep = (S.wep + (e.deltaY > 0 ? 1 : WEAPONS.length - 1)) % WEAPONS.length;
+      S.reloadT = 0;
     }, { passive: true });
 
     window.addEventListener("keydown", e => {
@@ -945,7 +1219,7 @@
       if (e.code === "KeyM") { opts.cycleMusic(); return; }
       if (!opts.isPlaying()) return;
 
-      if (e.code >= "Digit1" && e.code <= "Digit9") { S.wep = Number(e.code.slice(5)) - 1; S.reloadT = 0; }
+      if (e.code >= "Digit1" && e.code <= "Digit9") { S.wep = Number(e.code.slice(5)) - 1; S.reloadT = 0; opts.playSfx("UI_Select.wav", 0.35); }
       if (e.code === "KeyQ") S.skin = (S.skin + 1) % SKINS.length;
       if (e.code === "KeyE") S.skin = (S.skin + SKINS.length - 1) % SKINS.length;
       if (e.code === "KeyI") S.inspectT = 2.0;
@@ -955,11 +1229,14 @@
         opts.playSfx("EmptyClick.wav", 0.6);
       }
       if (e.code === "KeyB") opts.togglePerkModal();
-      if ((e.code === "AltLeft" || e.code === "AltRight") && S.dashCd <= 0) {
+      if (e.code === "KeyP" || e.code === "Escape") { togglePause(); return; }
+      if ((e.code === "AltLeft" || e.code === "AltRight") && S.dashCharges > 0) {
         e.preventDefault();
+        S.dashCharges--;
         S.dashCd = 2.1 * Math.pow(0.86, S.perks[3]);
         S.dashT = 0.18;
         S.dashDir = [Math.sin(S.yaw), Math.cos(S.yaw)];
+        S.invulnT = 0.16;
         opts.playSfx("Dash.wav", 0.8);
       }
       if (e.code === "KeyZ") triggerGrapple();
@@ -968,7 +1245,11 @@
         S.meleeCd = 0.55; S.meleeT = 0.28;
         opts.playSfx("WingSlap.wav", 0.85);
         S.chickens.forEach(c => {
-          if (c.hp > 0 && Math.hypot(c.x - S.x, c.z - S.z) < 3.6) damageChicken(c, 75, false);
+          if (c.hp > 0 && Math.hypot(c.x - S.x, c.z - S.z) < 3.6) {
+            damageChicken(c, 75 * (1 + 0.15 * S.perks[2]), false);
+            c.stunT = 0.35;
+            opts.hitStop(0.035);
+          }
         });
       }
       if (e.code === "KeyG" && S.grenCd <= 0) {
@@ -984,29 +1265,32 @@
         unlockAch(8, "ИНЖЕНЕР ПТИЦЕФАБРИКИ (ТУРЕЛЬ [T])");
       }
     });
+
+    // ---------- 8b. Pause / resume ----------
+    function togglePause() {
+      if (S.gameOver) return;
+      S.paused = !S.paused;
+      if (S.paused) {
+        if (document.pointerLockElement === canvas) document.exitPointerLock();
+        opts.showPause();
+      } else {
+        opts.hidePause();
+        if (opts.isPlaying()) canvas.requestPointerLock && canvas.requestPointerLock();
+      }
+    }
     window.addEventListener("keyup", e => { keys[e.code] = false; });
 
     // ---------- 9. Draw Helpers ----------
     const vpMat = M4.ident(), projMat = M4.ident(), viewMat = M4.ident(), skyVP = M4.ident(), tmpM = M4.ident();
 
+    // Вся геометрия пакуется в инстанс-пачки: смена меша/материала сама
+    // сбрасывает пачку в один drawElementsInstanced().
     function drawMesh(meshName, matSet, modelMat, uvs, tint, emissive, rough, metal) {
-      const m = meshes[meshName];
-      gl.bindVertexArray(m.vao);
-      gl.uniformMatrix4fv(U.uModel, false, modelMat);
-      gl.uniform2f(U.uUVScale, uvs[0], uvs[1]);
-      gl.uniform4f(U.uTint, tint[0], tint[1], tint[2], tint[3]);
-      gl.uniform3f(U.uEmissive, emissive[0], emissive[1], emissive[2]);
+      // rough/metal — uniform на пачку; разные значения => разные пачки
+      const rmKey = rough * 1000 + metal;
+      if (instRmKey !== rmKey) { flushInstances(); instRmKey = rmKey; }
       gl.uniform2f(U.uPbrOverride, rough, metal);
-      if (matSet) {
-        gl.uniform1f(U.uUseTex, 1.0);
-        gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, matSet.diff);
-        gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, matSet.norm);
-        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, matSet.rm);
-      } else {
-        gl.uniform1f(U.uUseTex, 0.0);
-      }
-      gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
-      S.drawCalls++;
+      pushInstance(meshName, matSet, modelMat, uvs, tint, emissive);
     }
 
     // ---------- 10. Main Simulation & WebGL2 Render Loop ----------
@@ -1022,11 +1306,14 @@
       const cw = Math.floor(window.innerWidth * dpr), ch = Math.floor(window.innerHeight * dpr);
       if (canvas.width !== cw || canvas.height !== ch) { canvas.width = cw; canvas.height = ch; }
 
-      const dt = S.slowMo > 0 ? (S.slowMo -= rawDt, rawDt * 0.38) : rawDt;
-      const active = opts.isPlaying() && !opts.isPerkModalOpen();
+      let dt = S.slowMo > 0 ? (S.slowMo -= rawDt, rawDt * 0.38) : rawDt;
+      // 2.4: хит-стоп — короткая «заморозка» на попаданиях для веса удара
+      if (S.hitStopT > 0) { S.hitStopT -= rawDt; dt *= 0.12; }
+      const active = opts.isPlaying() && !opts.isPerkModalOpen() && !S.paused && !S.gameOver;
 
       // Update timers & player physics
       if (active) {
+        S.timeAlive += dt;
         S.fireCd    = Math.max(0, S.fireCd - dt);
         S.dashCd    = Math.max(0, S.dashCd - dt);
         S.dashT     = Math.max(0, S.dashT - dt);
@@ -1040,15 +1327,28 @@
         S.multiT    = Math.max(0, S.multiT - dt);
         S.recoil    = Math.max(0, S.recoil - dt * 1.45);
         S.shake     = Math.max(0, S.shake - dt * 1.6);
+        S.hitFlash  = Math.max(0, S.hitFlash - dt * 4.0);
+        S.invulnT   = Math.max(0, S.invulnT - dt);
+        S.aimKick   = Math.max(0, (S.aimKick || 0) - dt * 1.8);
+
+        // 2.4: заряд рывков (2 базовых + 1 с перком «Турбо-приводы III»)
+        if (S.dashCharges < S.dashMax) {
+          S.dashRecharge += dt;
+          if (S.dashRecharge >= 2.6) { S.dashRecharge = 0; S.dashCharges++; opts.playSfx("UI_Hover.wav", 0.25); }
+        }
+
+        // 2.4: регенерация с «Титанового оперения V»
+        if (S.regen > 0 && S.hp < S.maxHp) S.hp = Math.min(S.maxHp, S.hp + S.regen * dt);
 
         if (S.reloadT > 0) {
           S.reloadT -= dt;
-          if (S.reloadT <= 0) S.ammo[S.wep] = WEAPONS[S.wep].mag;
+          if (S.reloadT <= 0) finishReload();
         }
         if (mouseDown && !WEAPONS[S.wep].semi) fireWeapon();
 
         S.crouch = !!(keys["ControlLeft"] || keys["KeyC"]);
-        const eyeH = S.crouch ? 1.05 : 1.75;
+        S.crouchBlend += ((S.crouch ? 1 : 0) - S.crouchBlend) * Math.min(1, dt * 10);
+        const eyeH = 1.75 - S.crouchBlend * 0.7;
 
         if (S.grappleOn) {
           S.grappleT -= dt;
@@ -1106,8 +1406,13 @@
         if (canX) S.x = nx; else S.vx = 0;
         if (canZ) S.z = nz; else S.vz = 0;
 
+        const prevY = S.y;
         S.y += S.vy * dt;
         if (S.y <= groundTop + eyeH && S.vy <= 0) {
+          if (!S.onGround && prevY - (groundTop + eyeH) > 0.6 && S.vy < -8) {
+            opts.playSfx("Land.wav", 0.5);
+            S.shake = Math.min(0.16, S.shake + 0.06);
+          }
           S.y = groundTop + eyeH; S.vy = 0; S.onGround = true; S.fromPad = false;
         } else if (S.y > groundTop + eyeH + 0.15) {
           S.onGround = false;
@@ -1127,7 +1432,12 @@
           if (pk.cd > 0) { pk.cd -= dt; return; }
           if (Math.hypot(S.x - pk.x, S.z - pk.z) < 1.7) {
             pk.cd = 16;
-            if (pk.kind === "hp") { S.hp = Math.min(S.maxHp, S.hp + 35); opts.playSfx("ArmorPickup.wav", 0.7); opts.pushFeed("💚 +35 HP АПТЕЧКА"); }
+            if (pk.kind === "hp") {
+              const before = S.hp;
+              S.hp = Math.min(S.maxHp, S.hp + 35);
+              opts.playSfx("ArmorPickup.wav", 0.7);
+              opts.pushFeed(`💚 +${Math.round(S.hp - before)} HP АПТЕЧКА`);
+            }
             else if (pk.kind === "armor") { S.armor = Math.min(100, S.armor + 50); opts.playSfx("ArmorPickup.wav", 0.8); opts.pushFeed("🛡 +50 ТИТАНОВАЯ БРОНЯ"); }
             else { S.overdriveT = 10; opts.playSfx("Overdrive.wav", 0.85); opts.pushFeed("⚡ КИБЕР-ОВЕРДРАЙВ 2X УРОН (10с)!"); }
           }
@@ -1200,8 +1510,8 @@
         S.chickens.forEach(c => {
           if (c.hp <= 0) return;
           aliveCnt++;
-          if (c.type === "boss") {
-            bossRef = c;
+          if (c.type === "boss" || c.type === "egg") {
+            if (c.type === "boss") bossRef = c;
             if (!c.enraged && c.hp <= c.maxHp * 0.5) {
               c.enraged = true;
               opts.playSfx("RoosterBoss.wav", 0.95);
@@ -1209,6 +1519,13 @@
             }
           }
           c.phase += dt * 8.5;
+          if (c.stunT > 0) { c.stunT -= dt; return; }
+          if (c.burnT > 0) {
+            c.burnT -= dt;
+            c.hp -= c.burnDps * dt;
+            if (Math.random() < dt * 9) S.particles.push({ x: c.x, y: c.y + 1.0, z: c.z, vx: 0, vy: 2.2, vz: 0, col: [2.2, 0.8, 0.15], sz: 0.1, ttl: 0.4 });
+            if (c.hp <= 0) { damageChicken(c, 0.01, false); return; }
+          }
           const dx = S.x - c.x, dz = S.z - c.z, d = Math.hypot(dx, dz) || 1;
           const baseSpd = (c.type === "kamikaze" ? 6.2 : c.type === "charger" ? 4.6 : c.type === "drone" ? 3.4 : 2.8) * mutSpd * (c.enraged ? 1.32 : 1.0);
 
@@ -1217,25 +1534,60 @@
             if (c.beepT <= 0) { c.beepT = Math.max(0.12, d / 26); if (d < 18) opts.playSfx("KamikazeBeep.wav", 0.35); }
           }
 
-          if (c.type === "shooter" || c.type === "drone") {
+          if (c.type === "egg" || c.type === "egglet") {
+            // Летающее яйцо: кружит на орбите и стреляет залпами во все стороны
+            c.orbit = (c.orbit || 0) + dt * (c.type === "egg" ? 0.85 : 1.25);
+            const orbitR = c.type === "egg" ? 13 : 17;
+            const tx = S.x + Math.cos(c.orbit) * orbitR;
+            const tz = S.z + Math.sin(c.orbit) * orbitR;
+            c.x += (tx - c.x) * Math.min(1, dt * 1.6);
+            c.z += (tz - c.z) * Math.min(1, dt * 1.6);
+            c.y = (c.type === "egg" ? 6.0 : 7.4) + Math.sin(c.phase * 0.5) * 0.5;
+            c.atkCd -= dt;
+            if (c.atkCd <= 0) {
+              c.atkCd = c.type === "egg" ? 3.0 : 3.8;
+              const n = c.type === "egg" ? (c.enraged ? 12 : 8) : 6;
+              for (let k = 0; k < n; k++) {
+                const ang = (k / n) * Math.PI * 2 + Math.random() * 0.2;
+                S.enemyEggs.push({ x: c.x, y: c.y, z: c.z,
+                  vx: Math.cos(ang) * 11, vy: -3.2, vz: Math.sin(ang) * 11,
+                  dmg: c.type === "egg" ? 9 : 6, ttl: 3.2, splash: c.type === "egg" });
+              }
+              opts.playSfx("Chicken_Egg.wav", 0.55);
+              addFlashLight(c.x, c.y, c.z, 2.6, 1.1, 0.2, 12, 0.25);
+            }
+          } else if (c.type === "shooter" || c.type === "drone") {
             const sx = -dz / d, sz = dx / d;
             const approach = d > 15 ? 1 : (d < 8 ? -0.6 : 0);
             c.x += (dx/d * approach + sx * Math.sin(c.phase*0.25) * 0.7) * baseSpd * dt;
             c.z += (dz/d * approach + sz * Math.sin(c.phase*0.25) * 0.7) * baseSpd * dt;
             if (c.type === "drone") c.y = 4.2 + Math.sin(c.phase * 0.35) * 0.65;
             c.atkCd -= dt;
-            if (c.atkCd <= 0 && d < 32) {
-              c.atkCd = c.type === "drone" ? 1.55 : 1.9;
-              const ey = c.y + 1.0, len = Math.hypot(dx, (S.y - 0.2) - ey, dz) || 1;
-              S.enemyEggs.push({ x: c.x, y: ey, z: c.z, vx: dx/len*19, vy: ((S.y-0.2)-ey)/len*19, vz: dz/len*19, dmg: 10, ttl: 2.5 });
+            if (c.telegraphT > 0) {
+              c.telegraphT -= dt;
+              if (c.telegraphT <= 0) {
+                c.telegraphT = 0; c.telegraphCd = 0;
+                const ey = c.y + 1.0, len = Math.hypot(dx, (S.y - 0.2) - ey, dz) || 1;
+                S.enemyEggs.push({ x: c.x, y: ey, z: c.z, vx: dx/len*19, vy: ((S.y-0.2)-ey)/len*19, vz: dz/len*19, dmg: 10, ttl: 2.5 });
+                opts.playSfx("ChickenCluck.wav", 0.4);
+              }
+            } else if (c.atkCd <= 0 && d < 32) {
+              // 2.4: телеграф — 0.42s мигание перед выстрелом (игрок успевает уйти в уклон)
+              c.atkCd = c.type === "drone" ? 1.7 : 2.1;
+              c.telegraphT = 0.42;
+              addFlashLight(c.x, c.y + 1.1, c.z, 2.2, 0.25, 0.3, 6, 0.2);
             }
           } else {
-            if (d > 1.7) { c.x += (dx/d)*baseSpd*dt; c.z += (dz/d)*baseSpd*dt; }
+            if (d > 1.7) {
+              const sp = baseSpd * (S.crouch ? 0.85 : 1.0);
+              moveChicken(c, (dx/d) * sp * dt, (dz/d) * sp * dt);
+            }
             c.atkCd -= dt;
             if (d <= 2.1 && c.atkCd <= 0) {
               c.atkCd = c.enraged ? 0.85 : 1.15;
-              if (c.type === "kamikaze") { c.hp = 0; explodeAt(c.x, 0.5, c.z, 6.0, 38); hurtPlayer(26); }
-              else hurtPlayer(c.type === "boss" ? (c.enraged ? 30 : 22) : 12);
+              opts.playSfx("ChickenCluck.wav", 0.5);
+              if (c.type === "kamikaze") { c.hp = 0; explodeAt(c.x, 0.5, c.z, 6.0, 38); hurtPlayer(26); opts.shakeCamera(0.3); }
+              else { hurtPlayer(c.type === "boss" ? (c.enraged ? 30 : 22) : 12); opts.hitStop(c.type === "boss" ? 0.07 : 0.04); }
             } else if (c.type === "boss" && c.atkCd <= 0 && d > 6) {
               c.atkCd = c.enraged ? 1.5 : 2.3;
               const spreadSet = c.enraged ? [-0.18, 0, 0.18] : [0];
@@ -1246,32 +1598,35 @@
               });
             }
           }
+          // 2.4: враги больше не проходят сквозь стены/ящики — мягкое выталкивание из коллайдеров
+          resolveChickenCollisions(c);
           c.x = Math.max(-45.5, Math.min(45.5, c.x));
           c.z = Math.max(-45.5, Math.min(45.5, c.z));
         });
         S.chickens = S.chickens.filter(c => c.hp > 0);
-        if (aliveCnt === 0) spawnWave(S.wave + 1);
+        S.waveProgress = aliveCnt;
+        // 2.4: пауза между волнами — 1.1с на сбор кредитов/перков, а не мгновенный спавн
+        if (aliveCnt === 0 && !S.gameOver) {
+          S.waveClearT = (S.waveClearT || 0) + dt;
+          if (S.waveClearT >= 1.1) { S.waveClearT = 0; spawnWave(S.wave + 1); }
+        }
         opts.updateBossHud(bossRef);
-      } else {
-        // Menu orbit camera!
-        const t = now * 0.00022;
-        S.x = Math.sin(t) * 24;
-        S.z = Math.cos(t) * 24;
-        S.y = 6.5 + Math.sin(t * 1.7) * 1.2;
-        S.yaw = Math.atan2(-S.x, -S.z);
-        S.pitch = -0.18;
       }
 
-      function hurtPlayer(raw) {
-        const takeA = Math.min(S.armor, raw * 0.65);
-        S.armor -= takeA;
-        S.hp = Math.max(0, S.hp - (raw - takeA));
-        S.shake = Math.min(0.3, S.shake + 0.12);
-        opts.flashDamage();
-        if (S.hp <= 0) {
-          S.hp = S.maxHp; S.armor = 50;
-          opts.pushFeed("⚡ РЕЗЕРВНЫЙ КИБЕР-КЛОН АКТИВИРОВАН!");
+      // 2.4: камера меню — ОТДЕЛЬНЫЕ переменные. Раньше она писала прямо в S.x/S.y/S.z,
+      // и игрок после «ВЫСАДИТЬСЯ» телепортировался в воздух (y=6.5) вместо старта.
+      if (!active) {
+        if (!S.gameOver && !opts.isPlaying()) {
+          const t = now * 0.00022;
+          menuCam.x = Math.sin(t) * 24;
+          menuCam.z = Math.cos(t) * 24;
+          menuCam.y = 6.5 + Math.sin(t * 1.7) * 1.2;
+          menuCam.yaw = Math.atan2(-menuCam.x, -menuCam.z);
+          menuCam.pitch = -0.18;
+          menuCam.blend = Math.min(1, menuCam.blend + rawDt * 2.5);
         }
+      } else {
+        menuCam.blend = Math.max(0, menuCam.blend - rawDt * 4);
       }
 
       // Decay FX
@@ -1300,8 +1655,13 @@
 
       const bobY = active ? Math.abs(Math.sin(S.bobPhase)) * 0.055 : 0;
       const shX = (Math.random() - 0.5) * S.shake, shY = (Math.random() - 0.5) * S.shake;
-      const camX = S.x + shX, camY = S.y + bobY + shY, camZ = S.z;
-      M4.viewFPS(viewMat, camX, camY, camZ, S.yaw, S.pitch + S.recoil * 0.55, S.grappleOn ? 0.04 : 0);
+      const mb = menuCam.blend;
+      const camX = (S.x + shX) * (1 - mb) + menuCam.x * mb;
+      const camY = (S.y + bobY + shY) * (1 - mb) + menuCam.y * mb;
+      const camZ = (S.z + shX * 0) * (1 - mb) + menuCam.z * mb;
+      const camYaw = S.yaw * (1 - mb) + menuCam.yaw * mb;
+      const camPitch = (S.pitch + S.recoil * 0.55) * (1 - mb) + menuCam.pitch * mb;
+      M4.viewFPS(viewMat, camX, camY, camZ, camYaw, camPitch, S.grappleOn ? 0.04 : 0);
       M4.mul(vpMat, projMat, viewMat);
 
       // 1) Skybox Cubemap Pass
@@ -1334,7 +1694,7 @@
       gl.uniform3fv(U.uSunColor, atm.sunCol);
       gl.uniform3fv(U.uSkyAmb, atm.skyAmb);
       gl.uniform3fv(U.uFogColor, atm.fogCol);
-      gl.uniform1f(U.uFogDensity, atm.fogD);
+      gl.uniform1f(U.uFogDensity, atm.fogD * MUTATORS[S.mutator].fog);
 
       for (let i = 0; i < 4; i++) {
         const L = dynLights[i];
@@ -1351,6 +1711,7 @@
         const p = staticProps[i];
         drawMesh(p.mesh, p.mat, p.model, p.uvs, p.tint, p.emissive, p.rough, p.metal);
       }
+      flushInstances();
 
       // Overhead Spinning Holographic Sky-Ring
       M4.trs(tmpM, 0, 14.5 + Math.sin(now*0.0015)*0.6, 0, now*0.0006, 0, 0, 18, 0.35, 18);
@@ -1389,8 +1750,27 @@
         drawMesh("box", MATS.panel, tmpM, [1,1], [0.3,0.85,1,1], [0.1,0.8,1.1], 0.25, 0.88);
       });
 
+      // 2.4: Летающие яйца-мини-боссы (отдельная упрощённая модель)
+      S.chickens.forEach(c => {
+        if (c.type !== "egg" && c.type !== "egglet") return;
+        const eg = c.type === "egg" ? 1.6 : 0.95;
+        const pulse = 1 + Math.sin(c.phase * 1.6) * 0.06;
+        M4.trs(tmpM, c.x, c.y, c.z, now * 0.0012, Math.sin(c.phase * 0.4) * 0.3, 0, eg * pulse, eg * 1.35 * pulse, eg * pulse);
+        drawMesh("sph", MATS.feather, tmpM, [2, 2], [1.0, 0.93, 0.82, 1], [0, 0, 0], 0.55, 0.05);
+        // неоновый «желток» с глазом-визором
+        M4.trs(tmpM, c.x, c.y + eg * 0.1, c.z, 0, 0, 0, eg * 0.62, eg * 0.62, eg * 0.62);
+        drawMesh("sph", null, tmpM, [1, 1], [1, 0.62, 0.06, 1],
+          c.enraged ? [3.4, 0.9, 0.1] : [2.2, 1.5, 0.15], 0.1, 0.4);
+        // «клетка» из рёбер-каркаса
+        for (let k = 0; k < 3; k++) {
+          M4.trs(tmpM, c.x, c.y, c.z, now * 0.0008 + k * 1.05, 0, 0, eg * 1.55, 0.08, eg * 1.55);
+          drawMesh("cyl", null, tmpM, [1, 1], [0.2, 0.95, 1, 1], [0.4, 2.6, 3.0], 0.15, 0.8);
+        }
+      });
+
       // 3D Articulated Cyber-Chickens (6 Breeds!)
       S.chickens.forEach(c => {
+        if (c.type === "egg" || c.type === "egglet") return;
         const sc = c.type === "boss" ? 1.85 : c.type === "kamikaze" ? 0.82 : 1.0;
         const yawC = Math.atan2(S.x - c.x, S.z - c.z);
         const cy = Math.cos(yawC), sy = Math.sin(yawC);
@@ -1487,6 +1867,8 @@
         drawMesh("cyl", null, tmpM, [1,1], [1,0.85,0.2,1], [3.2*(1-u), 2.2*(1-u), 0.4], 0.1, 0.9);
       });
 
+      flushInstances();
+
       // 3) 3D First-Person Viewmodel Pass (Weapon + Chicken Wing Hand!)
       if (active) {
         gl.clear(gl.DEPTH_BUFFER_BIT);
@@ -1522,15 +1904,41 @@
           drawMesh("cyl", MATS.metal, vmId, [1,1], [0.15,0.18,0.22,1], [0.1,0.5,0.7], 0.2, 0.92);
         }
       }
+      flushInstances();
 
       opts.syncHud(S, WEAPONS[S.wep], SKINS[S.skin], ATMOSPHERES[S.atmIdx], MUTATORS[S.mutator], vpMat);
       requestAnimationFrame(tick);
     }
 
     requestAnimationFrame(tick);
-    return {
+
+    // ---------- 11. Public engine handle ----------
+    applyPerkStats();
+    const api = {
       state: S,
-      cycleAtmosphere() { S.atmIdx = (S.atmIdx + 1) % ATMOSPHERES.length; }
+      // внешний контракт для index.html
+      hurtPlayer,
+      togglePause,
+      restartRun,
+      applyPerkStats,
+      buyPerk(i) {
+        applyPerkStats();
+        if (i === 0) { S.maxHp += 25; S.hp = Math.min(S.maxHp, S.hp + 40); }
+      },
+      cycleAtmosphere() { S.atmIdx = (S.atmIdx + 1) % ATMOSPHERES.length; },
+      startRun() { menuCam.blend = 0; S.paused = false; S.gameOver = false; },
+      // экраны, которыми управляет index.html
+      showGameOver: (st) => opts.showGameOver(st),
+      hideGameOver: () => opts.hideGameOver(),
+      showPause: () => opts.showPause(),
+      hidePause: () => opts.hidePause(),
+      isPaused: () => S.paused,
+      isGameOver: () => S.gameOver,
+      setPaused(v) { S.paused = !!v; },
+      // для тестов и отладки: отключить пиксель-лок, сменить оружие, добить волну
+      weaponList: WEAPONS.map(w => w.name)
     };
+    window.__CHIKENGUN_ENGINE__ = api;
+    return api;
   };
 })();

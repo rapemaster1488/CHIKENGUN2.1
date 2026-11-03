@@ -175,6 +175,45 @@
   .view-panel.active { display: block; }
   body.playing .view-panel { display: none !important; }
 
+  /* ===== 2.4: GAME OVER / PAUSE / COMBO / ACCURACY ===== */
+  #scoreBox { color: var(--text); }
+  #scoreBox #hudScore { color: var(--gold); }
+  #hudStats { font-size: 11.5px; color: #9cc3e8; margin-top: 4px; letter-spacing: 0.02em; }
+  #hudStats b { color: var(--emerald); }
+  #comboPop {
+    position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%) scale(0.8);
+    font-size: 30px; font-weight: 900; color: var(--gold); opacity: 0; pointer-events: none;
+    text-shadow: 0 0 24px rgba(255, 190, 40, 0.85), 0 3px 8px #000; transition: opacity .18s, transform .18s;
+  }
+  #comboPop.show { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  #vignetteHp {
+    position: fixed; inset: 0; pointer-events: none; z-index: 27;
+    box-shadow: inset 0 0 140px 30px rgba(255, 20, 40, 0.75); opacity: 0; transition: opacity .25s;
+  }
+  .overlay-screen {
+    position: fixed; inset: 0; z-index: 120; display: none;
+    align-items: center; justify-content: center; padding: 24px;
+    background: radial-gradient(circle at 50% 40%, rgba(24, 6, 10, 0.86), rgba(2, 4, 10, 0.96));
+    backdrop-filter: blur(7px);
+  }
+  .overlay-screen.open { display: flex; }
+  .overlay-card {
+    width: min(760px, 95vw); background: rgba(8, 18, 36, 0.97);
+    border: 2px solid var(--danger); border-radius: 16px; padding: 26px 30px;
+    box-shadow: 0 30px 90px rgba(0, 0, 0, 0.9);
+  }
+  .overlay-card h2 { font-size: 30px; font-weight: 900; color: var(--danger); letter-spacing: 0.04em; }
+  .overlay-card h2 small { display: block; font-size: 13px; color: #9cc3e8; font-weight: 600; letter-spacing: 0; margin-top: 4px; }
+  .go-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 16px; }
+  .go-stat { background: rgba(3, 10, 22, 0.85); border: 1px solid rgba(46, 242, 255, 0.3); border-radius: 9px; padding: 10px 12px; }
+  .go-stat span { display: block; font-size: 11px; color: #8fb4d8; text-transform: uppercase; letter-spacing: 0.06em; }
+  .go-stat b { font-size: 21px; color: var(--gold); }
+  .go-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+  .go-actions .tab-btn { flex: 1; min-width: 180px; padding: 13px 16px; font-size: 14px; }
+  #gameOverScreen .overlay-card { border-color: var(--danger); }
+  #pauseScreen .overlay-card { border-color: var(--cyan); }
+  #pauseScreen h2 { color: var(--cyan); }
+
   .hero-box {
     max-width: 980px; margin: 10px auto 0;
     background: var(--panel); border: 1px solid rgba(46, 242, 255, 0.36);
@@ -270,6 +309,7 @@
 <!-- 3. HARDWARE WEBGL2 3D CANVAS & HUD -->
 <canvas id="glCanvas"></canvas>
 <div id="dmgFlash"></div>
+<div id="vignetteHp"></div>
 <div id="toastBanner"></div>
 
 <div id="hud">
@@ -284,7 +324,9 @@
   <div id="scoreBox">
     <div id="hudScore">СЧЁТ: 0 &nbsp;|&nbsp; ₵100 &nbsp;|&nbsp; ВОЛНА 1</div>
     <div id="hudSub" style="font-size:12px;color:var(--cyan)">РЕКОРД: 0 &nbsp;|&nbsp; 🏆 0/12</div>
+    <div id="hudStats">ТОЧНОСТЬ: — &nbsp;|&nbsp; X-KILL: — &nbsp;|&nbsp; КУР: 0</div>
   </div>
+  <div id="comboPop"></div>
   <div id="dmgLayer"></div>
   <div class="crosshair">
     <div class="ch-dot"></div>
@@ -311,6 +353,46 @@
       <div id="weaponTitle" style="color:var(--gold);font-weight:900;font-size:14.5px">3. RIFLE &nbsp;•&nbsp; CYBER NEON</div>
       <div id="ammoLabel" style="font-size:22px;font-weight:900;margin-top:2px">30 / ∞</div>
       <div style="font-size:11px;color:#9cc3e8;margin-top:2px">[Q/E] Скин &nbsp;•&nbsp; [I] Осмотр &nbsp;•&nbsp; [ПКМ] Прицел</div>
+    </div>
+  </div>
+</div>
+
+<!-- 2.4: GAME OVER -->
+<div id="gameOverScreen" class="overlay-screen">
+  <div class="overlay-card">
+    <h2>💀 КИБЕР-КУРЯТИНА ОДОЛЕЛА БОЙЦА<small>Ветеринарная комиссия зафиксировала критическую потерю оперения. Итоги рейда:</small></h2>
+    <div class="go-stats">
+      <div class="go-stat"><span>Счёт</span><b id="goScore">0</b></div>
+      <div class="go-stat"><span>Волна</span><b id="goWave">1</b></div>
+      <div class="go-stat"><span>Куриц ощипано</span><b id="goKills">0</b></div>
+      <div class="go-stat"><span>Точность</span><b id="goAcc">0%</b></div>
+      <div class="go-stat"><span>Хэдшотов</span><b id="goHeads">0</b></div>
+      <div class="go-stat"><span>Время в бою</span><b id="goTime">0с</b></div>
+      <div class="go-stat"><span>Лучшее комбо</span><b id="goCombo">0</b></div>
+      <div class="go-stat"><span>Рекорд</span><b id="goBest">0</b></div>
+    </div>
+    <div class="go-actions">
+      <button class="play-cta" id="restartBtn">↻ В БОЙ СНОВА [ENTER]</button>
+      <button class="tab-btn" id="goPerksBtn">⚡ Перки [B]</button>
+      <button class="tab-btn" id="goMenuBtn">← В ГЛАВНОЕ МЕНЮ</button>
+    </div>
+  </div>
+</div>
+
+<!-- 2.4: PAUSE -->
+<div id="pauseScreen" class="overlay-screen">
+  <div class="overlay-card" style="border-color:var(--cyan)">
+    <h2 style="color:var(--cyan)">⏸ ПАУЗА<small>Игра остановлена, но куры всё помнят.</small></h2>
+    <div class="go-stats">
+      <div class="go-stat"><span>Волна</span><b id="pauseWave">1</b></div>
+      <div class="go-stat"><span>Счёт</span><b id="pauseScore">0</b></div>
+      <div class="go-stat"><span>Кредиты</span><b id="pauseCredits">0₵</b></div>
+      <div class="go-stat"><span>Точность</span><b id="pauseAcc">—</b></div>
+    </div>
+    <div class="go-actions">
+      <button class="play-cta" id="resumeBtn">▶ ПРОДОЛЖИТЬ [P]</button>
+      <button class="tab-btn" id="pausePerksBtn">⚡ Перки [B]</button>
+      <button class="tab-btn" id="pauseMenuBtn">← В ГЛАВНОЕ МЕНЮ</button>
     </div>
   </div>
 </div>
@@ -577,6 +659,10 @@
   ];
 
   let engine = null;
+  const $ = (id) => document.getElementById(id);
+  const fmtTime = (sec) => `${Math.floor(sec / 60)}:${String(Math.round(sec % 60)).padStart(2, "0")}`;
+  function accuracyText(S) { return S.shotsFired > 0 ? Math.round(100 * S.shotsHit / S.shotsFired) + "%" : "—"; }
+
   function refreshPerks() {
     if (!engine) return;
     const S = engine.state;
@@ -595,10 +681,11 @@
     const S = engine.state, lvl = S.perks[i], cost = 75 + lvl * 65;
     if (lvl >= 5 || S.credits < cost) { playSfx("EmptyClick.wav", 0.6); return; }
     S.credits -= cost; S.perks[i]++;
-    if (i === 0) { S.maxHp += 25; S.hp = Math.min(S.maxHp, S.hp + 40); }
+    engine.buyPerk(i);
     playSfx("PerkBuy.wav", 0.85);
     refreshPerks();
   }
+  window.__CHIKENGUN_BUY_PERK__ = buyPerk;
   function togglePerkModal() {
     const m = document.getElementById("perkModal");
     if (!m.classList.contains("open")) {
@@ -621,6 +708,32 @@
       const df = document.getElementById("dmgFlash");
       df.style.opacity = "1"; setTimeout(() => df.style.opacity = "0", 130);
     },
+    hitStop() { /* визуальный хит-стоп обрабатывается в движке */ },
+    shakeCamera() {},
+    showGameOver(stats) {
+      $("goScore").textContent = stats.score;
+      $("goWave").textContent = stats.wave;
+      $("goKills").textContent = stats.kills;
+      $("goAcc").textContent = stats.accuracy + "%";
+      $("goHeads").textContent = stats.headshots;
+      $("goTime").textContent = fmtTime(stats.time);
+      $("goCombo").textContent = "x" + Math.max(1, stats.maxCombo || 1);
+      $("goBest").textContent = stats.best ? "НОВЫЙ РЕКОРД!" : stats.highScore;
+      $("gameOverScreen").classList.add("open");
+      if (document.pointerLockElement) document.exitPointerLock();
+      document.body.classList.remove("playing");
+      renderAchievements(engine.state.achiev);
+    },
+    hideGameOver() { $("gameOverScreen").classList.remove("open"); document.body.classList.add("playing"); },
+    showPause() {
+      const S = engine.state;
+      $("pauseWave").textContent = S.wave;
+      $("pauseScore").textContent = Math.round(S.score);
+      $("pauseCredits").textContent = Math.round(S.credits) + "₵";
+      $("pauseAcc").textContent = accuracyText(S);
+      $("pauseScreen").classList.add("open");
+    },
+    hidePause() { $("pauseScreen").classList.remove("open"); },
     spawnDmgNum(x, y, z, val, crit) {
       const el = document.createElement("div");
       el.className = "dmg-num";
@@ -651,13 +764,29 @@
       document.getElementById("ammoLabel").textContent = S.reloadT > 0 ? "ПЕРЕЗАРЯДКА..." : `${S.ammo[S.wep]} / ∞`;
 
       let achCnt = 0; for (let i = 0; i < 12; i++) if (S.achiev & (1 << i)) achCnt++;
-      document.getElementById("hudScore").innerHTML = `СЧЁТ: ${S.score} &nbsp;|&nbsp; ₵${S.credits} &nbsp;|&nbsp; ВОЛНА ${S.wave}`;
+      document.getElementById("hudScore").innerHTML = `СЧЁТ: ${Math.round(S.score)} &nbsp;|&nbsp; ₵${Math.round(S.credits)} &nbsp;|&nbsp; ВОЛНА ${S.wave}`;
       document.getElementById("hudSub").innerHTML = `РЕКОРД: ${S.highScore} &nbsp;|&nbsp; 🏆 ${achCnt}/12 &nbsp;|&nbsp; ${mut.name}`;
+      document.getElementById("hudStats").innerHTML =
+        `ТОЧНОСТЬ: <b>${accuracyText(S)}</b> &nbsp;|&nbsp; X-KILL: <b>x${Math.max(1, S.multiKill)}</b> &nbsp;|&nbsp; ОСТАЛОСЬ: <b>${S.waveProgress ?? 0}</b>`;
+
+      // 2.4: виньетка низкого HP + комбо-поп
+      const hpPct = S.hp / S.maxHp;
+      const vig = $("vignetteHp");
+      vig.style.opacity = hpPct < 0.35 ? String((0.35 - hpPct) * 2.6).slice(0, 5) : "0";
+      const cp = $("comboPop");
+      if (S.multiKill >= 2) {
+        cp.textContent = `x${S.multiKill} КОМБО`;
+        cp.classList.add("show");
+      } else cp.classList.remove("show");
+
+      // низкое HP: красный пульс на баре
+      $("hpFill").style.background = hpPct < 0.35 ? "linear-gradient(90deg,#ff2a4b,#ff8a3a)" : "var(--emerald)";
       document.getElementById("abilityLine").innerHTML =
         `[Z] ${S.grappleCd <= 0 ? "КРЮК" : S.grappleCd.toFixed(1)+"с"} &nbsp;•&nbsp; ` +
         `[X] ${S.orbitalPct >= 99.9 ? "☢ ЯЙЦЕГЕДДОН!" : "ОРБИТА " + Math.floor(S.orbitalPct) + "%"} &nbsp;•&nbsp; ` +
         `[G] ${S.grenCd <= 0 ? "ГРАНАТА" : S.grenCd.toFixed(1)+"с"} &nbsp;•&nbsp; ` +
-        `[T] ${S.turretCd <= 0 ? "ТУРЕЛЬ (100₵)" : Math.ceil(S.turretCd)+"с"} &nbsp;•&nbsp; [B] ПЕРКИ`;
+        `[T] ${S.turretCd <= 0 ? "ТУРЕЛЬ (100₵)" : Math.ceil(S.turretCd)+"с"} &nbsp;•&nbsp; ` +
+        `[ALT] РЫВОК ${"◆".repeat(S.dashCharges)}${"◇".repeat(Math.max(0, S.dashMax - S.dashCharges))} &nbsp;•&nbsp; [B] ПЕРКИ`;
 
       const tel = document.getElementById("telemetryHud");
       if (S.showFps) {
@@ -707,9 +836,17 @@
   });
 
   const glCanvas = document.getElementById("glCanvas");
+  function enterBattle() {
+    playing = true;
+    document.body.classList.add("playing");
+    engine.hideGameOver(); engine.hidePause();
+  }
+  window.__CHIKENGUN_ENTER_BATTLE__ = enterBattle;
   document.getElementById("startArenaBtn").onclick = () => {
+    engine.startRun();
+    engine.hideGameOver(); engine.hidePause();
     glCanvas.requestPointerLock?.();
-    playing = true; document.body.classList.add("playing");
+    enterBattle();
     if (musicIdx === -1) cycleMusic();
   };
   glCanvas.addEventListener("click", () => {
@@ -718,10 +855,41 @@
   });
   document.addEventListener("pointerlockchange", () => {
     if (!document.pointerLockElement && !document.getElementById("perkModal").classList.contains("open")) {
-      playing = false; document.body.classList.remove("playing");
+      // 2.4: Esc больше не выкидывает из боя в меню — ставим паузу с сохранением прогресса.
+      // Важно: не «перещёлкивать» паузу, если игрок уже на паузе (сам вышел из pointer-lock).
+      if (playing && !engine.isGameOver() && !engine.isPaused()) engine.togglePause();
+      else { playing = false; document.body.classList.remove("playing"); }
       renderAchievements(engine.state.achiev);
     }
   });
+  // Enter на экране смерти = рестарт
+  window.addEventListener("keydown", (e) => {
+    if (e.code === "Enter" && engine.isGameOver()) { $("restartBtn").click(); }
+  });
+  $("restartBtn").onclick = () => {
+    engine.startRun(); engine.restartRun(); enterBattle();
+    if (musicIdx === -1) cycleMusic();
+    glCanvas.requestPointerLock?.();
+  };
+  $("goMenuBtn").onclick = () => {
+    engine.hideGameOver(); engine.state.gameOver = false;
+    document.body.classList.remove("playing");
+    playing = false; engine.setPaused(true);
+    document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+    $("arenaView").classList.add("active");
+    $("gameOverScreen").classList.remove("open");
+    renderAchievements(engine.state.achiev);
+  };
+  $("resumeBtn").onclick = () => { engine.startRun(); enterBattle(); glCanvas.requestPointerLock?.(); };
+  $("pauseMenuBtn").onclick = () => {
+    engine.setPaused(true); engine.hidePause();
+    playing = false; document.body.classList.remove("playing");
+    document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
+    $("arenaView").classList.add("active");
+  };
+  $("pausePerksBtn").onclick = () => { engine.hidePause(); togglePerkModal(); };
+  $("goPerksBtn").onclick = () => { engine.hideGameOver(); togglePerkModal(); };
+
   document.getElementById("closePerkBtn").onclick = togglePerkModal;
   document.getElementById("perkMenuBtn").onclick = togglePerkModal;
   document.getElementById("atmMenuBtn").onclick = () => engine.cycleAtmosphere();

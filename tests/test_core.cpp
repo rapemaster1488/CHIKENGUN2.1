@@ -20,6 +20,8 @@
 
 #include "../src/LitePhysics.h"
 #include "../src/CyberSystems.h"
+#include "../src/ArsenalSystems.h"
+#include "../src/ArcadeAndCasino.h"
 
 namespace fs = std::filesystem;
 
@@ -123,6 +125,83 @@ int main(int argc, char** argv) {
         assert(Cyber::PerkUpgradeCost(2) == 205);
         assert(Cyber::CountUnlockedAchievements(0b101001000101) == 5);
         assert(Cyber::CountUnlockedAchievements(Cyber::ALL_ACHIEVEMENTS_MASK) == 12);
+
+        // 2.4: новые мутаторы и их параметры
+        assert(Cyber::MUT_COUNT == 8);
+        assert(Cyber::GetMutatorInfo(Cyber::MUT_TOXIC).fogMul > 1.5f);
+        assert(Cyber::GetMutatorInfo(Cyber::MUT_GLASS).enemyHpMul < 0.5f);
+        assert(Cyber::GetMutatorInfo(Cyber::MUT_GLASS).damageMul > 1.0f);
+        assert(Cyber::GetMutatorInfo(Cyber::MUT_SWARM).extraEggs);
+        for (int m = 0; m < Cyber::MUT_COUNT; ++m) {
+            assert(Cyber::GetMutatorInfo(m).name != nullptr);
+            assert(Cyber::GetMutatorInfo(m).fogMul >= 0.0f);
+            assert(Cyber::GetMutatorInfo(m).enemyHpMul > 0.0f);
+        }
+
+        // 2.4: мини-босс «Летающее яйцо» только на нечётных волнах с 3-й
+        assert(!Cyber::ShouldSpawnEggBoss(1));
+        assert(!Cyber::ShouldSpawnEggBoss(2));
+        assert(Cyber::ShouldSpawnEggBoss(3));
+        assert(!Cyber::ShouldSpawnEggBoss(4));
+        assert(Cyber::ShouldSpawnEggBoss(7));
+        assert(Cyber::EggBossHp(5) > Cyber::EggBossHp(3));
+        assert(Cyber::EggBossEggsPerVolley(true) > Cyber::EggBossEggsPerVolley(false));
+
+        // 2.4: хрупкие куры теряют HP, но не до нуля
+        assert(Cyber::ScaleEnemyHp(100, Cyber::MUT_GLASS) == 45);
+        assert(Cyber::ScaleEnemyHp(100, Cyber::MUT_STANDARD) == 100);
+        assert(Cyber::ScaleEnemyHp(2, Cyber::MUT_GLASS) >= 1);
+    }
+
+    std::cout << "[test_core] 4b/7 Проверка боевой статистики, ранга рейда, комбо и урона...\n";
+    {
+        // Точность: защита от деления на ноль и от shotsHit > shotsFired
+        assert(Cyber::AccuracyPercent(0, 0) == 0);
+        assert(Cyber::AccuracyPercent(40, 10) == 25);
+        assert(Cyber::AccuracyPercent(10, 99) == 100);
+
+        // Ранг рейда: чистый рейд = S, пустой = F
+        Cyber::RaidStats sEmpty{};
+        assert(Cyber::RaidGrade(sEmpty) == 'F');
+
+        Cyber::RaidStats sGod{};
+        sGod.score = 40000; sGod.wave = 14; sGod.kills = 80; sGod.headshots = 30;
+        sGod.shotsFired = 300; sGod.shotsHit = 210; sGod.timeAliveSec = 900; sGod.maxCombo = 12;
+        assert(Cyber::RaidGrade(sGod) == 'S');
+
+        Cyber::RaidStats sMid{};
+        sMid.kills = 20; sMid.wave = 4; sMid.shotsFired = 120; sMid.shotsHit = 60; sMid.maxCombo = 4;
+        assert(Cyber::RaidGrade(sMid) == 'C' || Cyber::RaidGrade(sMid) == 'B');
+
+        // Комбо-множитель ограничен x4 (раньше рос без предела)
+        assert(std::fabs(Cyber::ComboMultiplier(1) - 1.0f) < 1e-5f);
+        assert(std::fabs(Cyber::ComboMultiplier(3) - 1.5f) < 1e-5f);
+        assert(std::fabs(Cyber::ComboMultiplier(50) - 4.0f) < 1e-5f);
+        assert(std::fabs(Cyber::ComboMultiplier(0) - 1.0f) < 1e-5f);
+
+        int plain = Cyber::AwardKillScore(100, 1, Cyber::MUT_STANDARD);
+        int combo = Cyber::AwardKillScore(100, 8, Cyber::MUT_STANDARD);
+        assert(plain == 100);
+        assert(combo > plain && combo <= 400);
+
+        // Урон: база, перк, овердрайв, крит и хэдшот
+        assert(std::fabs(Cyber::ComputeShotDamage(100, false, false, 0, false) - 100.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, true,  false, 0, false) - 200.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, false, true,  0, false) - 200.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, true,  true,  0, false) - 400.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, false, false, 5, false) - 175.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, false, false, 0, true) - 200.0f) < 1e-4f);
+        assert(std::fabs(Cyber::CritChanceFromPerks(0) - 0.06f) < 1e-5f);
+        assert(Cyber::CritChanceFromPerks(5) < 0.3f);
+
+        // Пул частиц и форматирование времени
+        assert(Cyber::ClampParticleBudget(900, 420) == 420);
+        assert(Cyber::ClampParticleBudget(100, 420) == 100);
+        char buf[16];
+        Cyber::FormatRaidTime(754, buf, sizeof(buf));
+        assert(std::strcmp(buf, "12:34") == 0);
+        Cyber::FormatRaidTime(-5, buf, sizeof(buf));
+        assert(std::strcmp(buf, "0:00") == 0);
     }
 
     std::cout << "[test_core] 5/7 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
@@ -179,6 +258,104 @@ int main(int argc, char** argv) {
         fs::remove_all(tmpOut);
     }
 
-    std::cout << "[test_core] ВСЕ 7 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
+    std::cout << "[test_core] 8/9 Проверка Арсенала 2.5 (20 пушек/ножей и процедурных анимаций)...\n";
+    {
+        assert(Arsenal::WEAPON_TOTAL_COUNT == 20);
+        for (int i = 0; i < 16; ++i) {
+            assert(!Arsenal::IsKnife(i));
+            assert(Arsenal::GetWeaponSpec(i).magSize > 0);
+        }
+        for (int i = 16; i < 20; ++i) {
+            assert(Arsenal::IsKnife(i));
+            assert(Arsenal::GetWeaponSpec(i).speedBonusMul > 1.10f);
+            assert(Arsenal::GetWeaponSpec(i).meleeRange >= 2.7f);
+            assert(Arsenal::GetWeaponSpec(i).bonusCritChance >= 0.15f);
+        }
+        assert(Arsenal::NextKnifeId(Arsenal::W_RIFLE) == Arsenal::W_KNIFE_COMBAT);
+        assert(Arsenal::NextKnifeId(Arsenal::W_KNIFE_COMBAT) == Arsenal::W_KNIFE_KARAMBIT);
+        assert(Arsenal::NextKnifeId(Arsenal::W_KNIFE_KARAMBIT) == Arsenal::W_KNIFE_BUTTERFLY);
+        assert(Arsenal::NextKnifeId(Arsenal::W_KNIFE_BUTTERFLY) == Arsenal::W_KNIFE_KATANA);
+        assert(Arsenal::NextKnifeId(Arsenal::W_KNIFE_KATANA) == Arsenal::W_KNIFE_COMBAT);
+
+        // 3-фазная перезарядка: фаза 1 опускает магазин, фаза 3 передёргивает затвор
+        Arsenal::AnimPose r1 = Arsenal::ComputeReloadPose(Arsenal::W_RIFLE, 0.34f);
+        Arsenal::AnimPose r3 = Arsenal::ComputeReloadPose(Arsenal::W_RIFLE, 0.87f);
+        assert(r1.magDropY < -0.18f);
+        assert(r3.slideBackZ < -0.05f);
+
+        // Трюки осмотра [I]: вращение керамбита/барабана револьвера и раскрытие бабочки
+        Arsenal::AnimPose inspKar = Arsenal::ComputeInspectPose(Arsenal::W_KNIFE_KARAMBIT, 0.5f);
+        Arsenal::AnimPose inspBal = Arsenal::ComputeInspectPose(Arsenal::W_KNIFE_BUTTERFLY, 0.5f);
+        Arsenal::AnimPose inspRev = Arsenal::ComputeInspectPose(Arsenal::W_REVOLVER, 0.5f);
+        assert(inspKar.spinDeg > 300.0f);
+        assert(inspBal.balisongOpenDeg > 20.0f);
+        assert(inspRev.spinDeg > 100.0f);
+
+        // 3-комбо ножа и тяжёлый выпад ПКМ
+        Arsenal::AnimPose sl0 = Arsenal::ComputeKnifeSlashPose(Arsenal::W_KNIFE_KATANA, 0, false, 0.4f);
+        Arsenal::AnimPose slH = Arsenal::ComputeKnifeSlashPose(Arsenal::W_KNIFE_KATANA, 0, true, 0.4f);
+        assert(std::fabs(sl0.yaw) > 5.0f);
+        assert(slH.posZ > 0.15f);
+    }
+
+    std::cout << "[test_core] 9/9 Проверка C++ Казино «Золотая Рулетка & 777» и 6 мини-игр Pixel Arcade...\n";
+    {
+        // Проверяем биекцию 37 карманов европейского колеса (0..36) и непересечение Voisins / Tiers
+        bool seen[37] = {};
+        int vCount = 0, tCount = 0;
+        for (int i = 0; i < 37; ++i) {
+            int pocket = MiniHub::CasinoEngine::WHEEL_ORDER[i];
+            assert(pocket >= 0 && pocket <= 36 && !seen[pocket]);
+            seen[pocket] = true;
+            bool inV = MiniHub::CasinoEngine::InVoisins(pocket);
+            bool inT = MiniHub::CasinoEngine::InTiers(pocket);
+            assert(!(inV && inT) && "Voisins и Tiers не должны пересекаться!");
+            if (inV) ++vCount;
+            if (inT) ++tCount;
+        }
+        assert(vCount == 17 && tCount == 12);
+        assert(!MiniHub::CasinoEngine::IsRed(0));
+        assert(MiniHub::CasinoEngine::IsRed(32) && !MiniHub::CasinoEngine::IsRed(15));
+        assert(MiniHub::CasinoEngine::ZoneMultiplier(MiniHub::CasinoEngine::BET_STRAIGHT, 17, 17) == 36);
+        assert(MiniHub::CasinoEngine::ZoneMultiplier(MiniHub::CasinoEngine::BET_STRAIGHT, 17, 5) == 0);
+        assert(MiniHub::CasinoEngine::ZoneMultiplier(MiniHub::CasinoEngine::BET_RED, 32, 0) == 2);
+        assert(MiniHub::CasinoEngine::ZoneMultiplier(MiniHub::CasinoEngine::BET_DOZEN_2, 18, 0) == 3);
+
+        // Полный цикл рулетки и слотов 777 + рендер в RGBA8 буфер
+        MiniHub::PixelCanvas cv;
+        MiniHub::CasinoEngine cas;
+        int credits = 1000;
+        cas.chipIdx_ = 1; // 25₵
+        assert(cas.PlaceBet(MiniHub::CasinoEngine::BET_RED, credits));
+        assert(cas.PlaceBet(MiniHub::CasinoEngine::BET_BLACK, credits));
+        assert(credits == 950 && cas.TotalBet() == 50);
+        assert(cas.StartSpin());
+        for (int step = 0; step < 300 && cas.spinning_; ++step) cas.Update(0.02f, credits);
+        assert(!cas.spinning_ && cas.hasResult_ && cas.historyCount_ == 1);
+        cas.Render(cv);
+
+        cas.modeTab_ = 1;
+        assert(cas.SpinSlots(credits));
+        for (int step = 0; step < 150 && cas.slotSpinning_; ++step) cas.Update(0.02f, credits);
+        assert(!cas.slotSpinning_);
+        cas.Render(cv);
+
+        // Все 6 классических аркадных игр: Snake, Pong, Breakout, Flappy, Dino Run, Tetris
+        MiniHub::ArcadeSuite arc;
+        for (int g = 0; g < MiniHub::ArcadeSuite::GAME_COUNT; ++g) {
+            arc.ResetGame(g);
+            arc.tapAction_ = true;
+            arc.holdRight_ = true;
+            for (int step = 0; step < 90; ++step) {
+                if (step % 18 == 0) arc.tapAction_ = true;
+                int earned = arc.Update(1.0f / 60.0f);
+                assert(earned >= 0);
+            }
+            arc.Render(cv);
+        }
+        assert(cv.data.size() == (size_t)(MiniHub::SCREEN_W * MiniHub::SCREEN_H * 4));
+    }
+
+    std::cout << "[test_core] ВСЕ 9 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
     return 0;
 }
