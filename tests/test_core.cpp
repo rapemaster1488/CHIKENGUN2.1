@@ -20,6 +20,8 @@
 
 #include "../src/LitePhysics.h"
 #include "../src/CyberSystems.h"
+#include "../src/ArsenalSystems.h"
+#include "../src/ArcadeAndCasino.h"
 
 namespace fs = std::filesystem;
 
@@ -256,6 +258,104 @@ int main(int argc, char** argv) {
         fs::remove_all(tmpOut);
     }
 
-    std::cout << "[test_core] ВСЕ 7 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
+    std::cout << "[test_core] 8/9 Проверка Арсенала 2.5 (20 пушек/ножей и процедурных анимаций)...\n";
+    {
+        assert(Arsenal::WEAPON_TOTAL_COUNT == 20);
+        for (int i = 0; i < 16; ++i) {
+            assert(!Arsenal::IsKnife(i));
+            assert(Arsenal::GetWeaponSpec(i).magSize > 0);
+        }
+        for (int i = 16; i < 20; ++i) {
+            assert(Arsenal::IsKnife(i));
+            assert(Arsenal::GetWeaponSpec(i).speedBonusMul > 1.10f);
+            assert(Arsenal::GetWeaponSpec(i).meleeRange >= 2.7f);
+            assert(Arsenal::GetWeaponSpec(i).bonusCritChance >= 0.15f);
+        }
+        assert(Arsenal::NextKnifeId(Arsenal::W_RIFLE) == Arsenal::W_KNIFE_COMBAT);
+        assert(Arsenal::NextKnifeId(Arsenal::W_KNIFE_COMBAT) == Arsenal::W_KNIFE_KARAMBIT);
+        assert(Arsenal::NextKnifeId(Arsenal::W_KNIFE_KARAMBIT) == Arsenal::W_KNIFE_BUTTERFLY);
+        assert(Arsenal::NextKnifeId(Arsenal::W_KNIFE_BUTTERFLY) == Arsenal::W_KNIFE_KATANA);
+        assert(Arsenal::NextKnifeId(Arsenal::W_KNIFE_KATANA) == Arsenal::W_KNIFE_COMBAT);
+
+        // 3-фазная перезарядка: фаза 1 опускает магазин, фаза 3 передёргивает затвор
+        Arsenal::AnimPose r1 = Arsenal::ComputeReloadPose(Arsenal::W_RIFLE, 0.34f);
+        Arsenal::AnimPose r3 = Arsenal::ComputeReloadPose(Arsenal::W_RIFLE, 0.87f);
+        assert(r1.magDropY < -0.18f);
+        assert(r3.slideBackZ < -0.05f);
+
+        // Трюки осмотра [I]: вращение керамбита/барабана револьвера и раскрытие бабочки
+        Arsenal::AnimPose inspKar = Arsenal::ComputeInspectPose(Arsenal::W_KNIFE_KARAMBIT, 0.5f);
+        Arsenal::AnimPose inspBal = Arsenal::ComputeInspectPose(Arsenal::W_KNIFE_BUTTERFLY, 0.5f);
+        Arsenal::AnimPose inspRev = Arsenal::ComputeInspectPose(Arsenal::W_REVOLVER, 0.5f);
+        assert(inspKar.spinDeg > 300.0f);
+        assert(inspBal.balisongOpenDeg > 20.0f);
+        assert(inspRev.spinDeg > 100.0f);
+
+        // 3-комбо ножа и тяжёлый выпад ПКМ
+        Arsenal::AnimPose sl0 = Arsenal::ComputeKnifeSlashPose(Arsenal::W_KNIFE_KATANA, 0, false, 0.4f);
+        Arsenal::AnimPose slH = Arsenal::ComputeKnifeSlashPose(Arsenal::W_KNIFE_KATANA, 0, true, 0.4f);
+        assert(std::fabs(sl0.yaw) > 5.0f);
+        assert(slH.posZ > 0.15f);
+    }
+
+    std::cout << "[test_core] 9/9 Проверка C++ Казино «Золотая Рулетка & 777» и 6 мини-игр Pixel Arcade...\n";
+    {
+        // Проверяем биекцию 37 карманов европейского колеса (0..36) и непересечение Voisins / Tiers
+        bool seen[37] = {};
+        int vCount = 0, tCount = 0;
+        for (int i = 0; i < 37; ++i) {
+            int pocket = MiniHub::CasinoEngine::WHEEL_ORDER[i];
+            assert(pocket >= 0 && pocket <= 36 && !seen[pocket]);
+            seen[pocket] = true;
+            bool inV = MiniHub::CasinoEngine::InVoisins(pocket);
+            bool inT = MiniHub::CasinoEngine::InTiers(pocket);
+            assert(!(inV && inT) && "Voisins и Tiers не должны пересекаться!");
+            if (inV) ++vCount;
+            if (inT) ++tCount;
+        }
+        assert(vCount == 17 && tCount == 12);
+        assert(!MiniHub::CasinoEngine::IsRed(0));
+        assert(MiniHub::CasinoEngine::IsRed(32) && !MiniHub::CasinoEngine::IsRed(15));
+        assert(MiniHub::CasinoEngine::ZoneMultiplier(MiniHub::CasinoEngine::BET_STRAIGHT, 17, 17) == 36);
+        assert(MiniHub::CasinoEngine::ZoneMultiplier(MiniHub::CasinoEngine::BET_STRAIGHT, 17, 5) == 0);
+        assert(MiniHub::CasinoEngine::ZoneMultiplier(MiniHub::CasinoEngine::BET_RED, 32, 0) == 2);
+        assert(MiniHub::CasinoEngine::ZoneMultiplier(MiniHub::CasinoEngine::BET_DOZEN_2, 18, 0) == 3);
+
+        // Полный цикл рулетки и слотов 777 + рендер в RGBA8 буфер
+        MiniHub::PixelCanvas cv;
+        MiniHub::CasinoEngine cas;
+        int credits = 1000;
+        cas.chipIdx_ = 1; // 25₵
+        assert(cas.PlaceBet(MiniHub::CasinoEngine::BET_RED, credits));
+        assert(cas.PlaceBet(MiniHub::CasinoEngine::BET_BLACK, credits));
+        assert(credits == 950 && cas.TotalBet() == 50);
+        assert(cas.StartSpin());
+        for (int step = 0; step < 300 && cas.spinning_; ++step) cas.Update(0.02f, credits);
+        assert(!cas.spinning_ && cas.hasResult_ && cas.historyCount_ == 1);
+        cas.Render(cv);
+
+        cas.modeTab_ = 1;
+        assert(cas.SpinSlots(credits));
+        for (int step = 0; step < 150 && cas.slotSpinning_; ++step) cas.Update(0.02f, credits);
+        assert(!cas.slotSpinning_);
+        cas.Render(cv);
+
+        // Все 6 классических аркадных игр: Snake, Pong, Breakout, Flappy, Dino Run, Tetris
+        MiniHub::ArcadeSuite arc;
+        for (int g = 0; g < MiniHub::ArcadeSuite::GAME_COUNT; ++g) {
+            arc.ResetGame(g);
+            arc.tapAction_ = true;
+            arc.holdRight_ = true;
+            for (int step = 0; step < 90; ++step) {
+                if (step % 18 == 0) arc.tapAction_ = true;
+                int earned = arc.Update(1.0f / 60.0f);
+                assert(earned >= 0);
+            }
+            arc.Render(cv);
+        }
+        assert(cv.data.size() == (size_t)(MiniHub::SCREEN_W * MiniHub::SCREEN_H * 4));
+    }
+
+    std::cout << "[test_core] ВСЕ 9 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
     return 0;
 }

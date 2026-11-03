@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Упаковщик портативного релиза CHIKENGUN 2.4 (C++17 / Urho3D, Linux x86_64)
+# Упаковщик портативного релиза CHIKENGUN 2.5 (C++17 / Urho3D, Linux x86_64)
 # Собирает готовый к скачиванию автономный архив:
-#   dist/CHIKENGUN-2.4-Linux-x86_64.tar.gz + dist/SHA256SUMS.txt
+#   dist/CHIKENGUN-2.5-Linux-x86_64.tar.gz + dist/SHA256SUMS.txt
 # Внутри архива: нативный бинарник MyShooter, libUrho3D (в ./lib с $ORIGIN/lib),
 # очищенные Data/ и CoreData/ без мусорных дублей, settings.ini и лаунчер.
 # ============================================================================
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-VERSION="${VERSION:-2.4}"
+VERSION="${VERSION:-2.5}"
 ARCH="$(uname -m)"
 PKG_NAME="CHIKENGUN-${VERSION}-Linux-${ARCH}"
 STAGE_DIR="$ROOT/build/stage/${PKG_NAME}"
