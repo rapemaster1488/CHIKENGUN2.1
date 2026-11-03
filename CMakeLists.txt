@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ChikenGun4K VERSION 2.2.0 LANGUAGES CXX)
+project(ChikenGun4K VERSION 2.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -12,7 +12,7 @@ add_executable(gen_textures_4k tools/gen_textures_4k.cpp)
 target_compile_options(gen_textures_4k PRIVATE -O3 -Wall -Wextra)
 target_link_libraries(gen_textures_4k PRIVATE Threads::Threads)
 
-# 2. Модульные тесты ядра (Lite-физика, рейкасты, компакция коллайдеров, парсер настроек, PNG 4K)
+# 2. Модульные тесты C++ ядра (LitePhysics, CyberSystems 2.4, рейкасты, настройки XML, PNG 4K)
 enable_testing()
 add_executable(test_core tests/test_core.cpp)
 target_compile_options(test_core PRIVATE -O2 -Wall -Wextra)
@@ -26,8 +26,8 @@ add_custom_target(textures_4k
     COMMENT "Генерация PBR текстур ${TEX_SIZE}x${TEX_SIZE} + Skybox4K + LoadingBg4K..."
 )
 
-# 4. Поиск Urho3D и сборка MyShooter (опционально отключается через -DBUILD_GAME=OFF для headless CI)
-option(BUILD_GAME "Собирать игровой клиент MyShooter (требует Urho3D, SDL2, OpenGL)" ON)
+# 4. Поиск Urho3D и сборка нативного C++ клиента MyShooter (отключается через -DBUILD_GAME=OFF в быстрых CI-проверках)
+option(BUILD_GAME "Собирать нативный C++ игровой клиент MyShooter (требует Urho3D, SDL2, OpenGL)" ON)
 
 if(BUILD_GAME)
     set(URHO_HINTS
@@ -62,6 +62,10 @@ if(BUILD_GAME)
 
         add_executable(MyShooter src/MyApp.cpp)
         target_compile_options(MyShooter PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare)
+        set_target_properties(MyShooter PROPERTIES
+            BUILD_RPATH "$ORIGIN/lib"
+            INSTALL_RPATH "$ORIGIN/lib"
+        )
         target_include_directories(MyShooter PRIVATE
             "${URHO3D_INCLUDE_DIR}"
             "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty"
@@ -80,7 +84,28 @@ if(BUILD_GAME)
         if(X11_FOUND)
             target_link_libraries(MyShooter PRIVATE ${X11_LIBRARIES})
         endif()
+
+        install(TARGETS MyShooter RUNTIME DESTINATION .)
     else()
         message(WARNING "Urho3D не найден — цель MyShooter пропущена (собраны gen_textures_4k и test_core). Укажите -DURHO3D_INCLUDE_DIR=... -DURHO3D_LIBRARY=...")
     endif()
 endif()
+
+# 5. Установка ресурсов и упаковка скачиваемого архива игры (CPack TGZ / ZIP)
+install(TARGETS gen_textures_4k RUNTIME DESTINATION tools)
+install(DIRECTORY CoreData DESTINATION .)
+install(DIRECTORY Data DESTINATION .
+    PATTERN "Data/Data" EXCLUDE
+    PATTERN "Data/Urho2D" EXCLUDE
+    PATTERN "Data/LuaScripts" EXCLUDE
+    PATTERN "Data/Scripts" EXCLUDE
+)
+install(FILES bin/settings.ini DESTINATION .)
+install(PROGRAMS run.sh DESTINATION .)
+
+set(CPACK_PACKAGE_NAME "CHIKENGUN")
+set(CPACK_PACKAGE_VENDOR "ChikenGun Team")
+set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
+set(CPACK_PACKAGE_FILE_NAME "CHIKENGUN-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
+set(CPACK_GENERATOR "TGZ;ZIP")
+include(CPack)

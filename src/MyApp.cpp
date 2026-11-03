@@ -511,7 +511,7 @@ private:
     SharedPtr<Material> enemyShotMat_;
     // Кэш материалов глаз роботов и «железа» оружия: раньше новые Material создавались
     // на каждого заспавненного врага и на каждое переключение оружия.
-    SharedPtr<Material> eyeMatMelee_, eyeMatCharger_, eyeMatShooter_, eyeMatBoss_, eyeMatKamikaze_, eyeMatDrone_;
+    SharedPtr<Material> eyeMatMelee_, eyeMatCharger_, eyeMatShooter_, eyeMatBoss_, eyeMatKamikaze_, eyeMatDrone_, eyeMatEgg_;
     SharedPtr<Material> weaponDarkMat_, weaponAccentMat_;
     
     // Состояние ввода
@@ -622,7 +622,8 @@ private:
     SharedPtr<UIElement> settingsPanel_;
     Vector<SharedPtr<Text>> settingsItems_;
     // Арена: волны роботов-курят (6 пород в 2.2: + Камикадзе с C4 и Реактивная Валькирия-Дрон!)
-    enum EnemyType { E_MELEE = 0, E_CHARGER, E_SHOOTER, E_BOSS, E_KAMIKAZE, E_DRONE, E_TYPE_COUNT };
+    // 2.4: 7 классов врагов (+ E_EGG — летающий мини-босс «Кибер-Яйцо» с круговым залпом)
+    enum EnemyType { E_MELEE = 0, E_CHARGER, E_SHOOTER, E_BOSS, E_KAMIKAZE, E_DRONE, E_EGG, E_TYPE_COUNT };
     struct EnemyData {
         WeakPtr<Node> node_;
         int colliderIdx_ = -1;           // индекс в Lite-реестре коллайдеров
@@ -733,11 +734,13 @@ private:
     float comboTimer_ = 0.0f;
     int bestCombo_ = 0;
     int highScore_ = 0;
+    float totalDamageDealt_ = 0.0f;
+    float totalDamageTaken_ = 0.0f;
     float rangeRespawnTimer_ = 0.0f;
     SharedPtr<Material> robotBodyMat_;
 
     // === Куриные материалы (перья, гребень, клюв, лапы, яйца) ===
-    SharedPtr<Material> chickWhite_, chickBrown_, chickBlack_, chickBoss_, chickKamikaze_, chickDrone_;
+    SharedPtr<Material> chickWhite_, chickBrown_, chickBlack_, chickBoss_, chickKamikaze_, chickDrone_, chickEgg_;
     SharedPtr<Material> combMat_, beakMat_, legMat_, eggMat_, featherMat_;
 
     // === 2.2 CYBER OVERLOAD: Джамп-пады, Плазмомет, Кластерные гранаты [G], Авто-турели [T], Перки [B], Погода [F8], Достижения ===
@@ -1009,7 +1012,7 @@ public:
         if (!engineParameters_.Contains(EP_RESOURCE_PREFIX_PATHS))
             engineParameters_[EP_RESOURCE_PREFIX_PATHS] = ".;..;bin;../bin";
 
-        engineParameters_[EP_WINDOW_TITLE] = "CHIKENGUN 2.3 — 4K ULTRA & CYBER EVOLUTION";
+        engineParameters_[EP_WINDOW_TITLE] = "CHIKENGUN 2.4 — 4K ULTRA & CYBER ARENA (C++17)";
         engineParameters_[EP_HIGH_DPI] = true;
         engineParameters_[EP_WINDOW_RESIZABLE] = true;
         engineParameters_[EP_TRIPLE_BUFFER] = true;
@@ -1566,6 +1569,7 @@ private:
         chickBoss_     = MakeFeatheredPBR(Color(238, 242, 255), -0.14f);  // кибер-индюк босс (перламутр)
         chickKamikaze_ = MakeFeatheredPBR(Color(255,  72,  24), -0.08f);  // камикадзе-цыплёнок с C4
         chickDrone_    = MakeFeatheredPBR(Color( 75, 215, 255), -0.12f);  // реактивная куро-валькирия (дрон)
+        chickEgg_      = MakePBR(Color(255, 246, 218), 0.16f, 0.38f, Color(0.22f, 0.16f, 0.04f)); // перламутровая бронескорлупа мини-босса
         combMat_    = MakePBR(Color(228,  28,  42), 0.32f, 0.04f, Color(0.18f, 0.01f, 0.02f));
         beakMat_    = MakePBR(Color(255, 182,  35), 0.20f, 0.08f);     // глянцевый роговой клюв
         legMat_     = MakePBR(Color(238, 168,  48), 0.42f, 0.04f);
@@ -2519,6 +2523,10 @@ private:
             ac.a_ = iblAlpha;
             sceneZone_->SetAmbientColor(ac);
             sceneZone_->SetFogColor(kFogCol[atm]);
+            // 2.4: мутаторы «Ядовитый туман»/«Пиро-шторм» реально сгущают дымку
+            float fogMul = Cyber::GetMutatorInfo(activeMutator_).fogMul;
+            sceneZone_->SetFogStart(75.0f / Max(0.25f, fogMul));
+            sceneZone_->SetFogEnd(265.0f / Max(0.25f, fogMul));
         }
     }
 
@@ -2787,6 +2795,7 @@ private:
             case E_BOSS:     feathers = chickBoss_.Get();     combScale = 2.0f;  break;
             case E_KAMIKAZE: feathers = chickKamikaze_.Get(); combScale = 1.25f; break;
             case E_DRONE:    feathers = chickDrone_.Get();    combScale = 0.9f;  break;
+            case E_EGG:      feathers = chickEgg_.Get();      combScale = 1.65f; break;
             default: break;
         }
         if (!feathers) feathers = fallbackMat_;
@@ -2872,6 +2881,22 @@ private:
                 AddPart(root, Vector3(jx, 0.72f, -0.05f), Vector3(0.22f, 0.42f, 0.22f), jetMat, cyl, true);
                 AddPart(root, Vector3(jx, 0.46f, -0.05f), Vector3(0.18f, 0.16f, 0.18f), nozMat, cone, false);
             }
+        } else if (type == E_EGG) {
+            // 2.4 Мини-босс «Летающее Кибер-Яйцо»: яйцевидная бронекапсула, золотое HDR-ядро желтка и 3 гирокольца!
+            body->SetScale(Vector3(1.28f, 1.52f, 1.28f));
+            body->SetRotation(Quaternion::IDENTITY);
+            Material* ringMat = hdPanel_ ? hdPanel_ : metalMaterial_;
+            Material* yolkMat = eyeMatEgg_ ? eyeMatEgg_.Get() : comb;
+            AddPart(root, Vector3(0, 0.90f, 0.62f), Vector3(0.38f, 0.38f, 0.18f), yolkMat, sph, false);
+            for (int r = 0; r < 3; ++r) {
+                Node* ring = AddPart(root, Vector3(0, 0.88f, 0.02f), Vector3(1.72f, 0.07f, 1.72f), ringMat, cyl, false);
+                ring->SetRotation(Quaternion(32.0f + (float)r * 52.0f, Vector3(1, 0, 1).Normalized()));
+            }
+            for (int j = 0; j < 2; ++j) {
+                float jx = (j == 0) ? -0.74f : 0.74f;
+                AddPart(root, Vector3(jx, 0.62f, 0.10f), Vector3(0.24f, 0.36f, 0.24f), ringMat, cyl, true);
+                AddPart(root, Vector3(jx, 0.38f, 0.10f), Vector3(0.20f, 0.18f, 0.20f), yolkMat, sph, false);
+            }
         }
 
         // --- голова + гребень + бородка + клюв
@@ -2895,6 +2920,7 @@ private:
                      : (type == E_BOSS)     ? eyeMatBoss_.Get()
                      : (type == E_KAMIKAZE) ? eyeMatKamikaze_.Get()
                      : (type == E_DRONE)    ? eyeMatDrone_.Get()
+                     : (type == E_EGG)      ? eyeMatEgg_.Get()
                                             : eyeMatMelee_.Get();
         if (!em) em = comb;
         for (int i = 0; i < 2; ++i) {
@@ -3352,10 +3378,12 @@ private:
             if (!enemies_[i].alive_ || !enemies_[i].node_) continue;
             EnemyType et = enemies_[i].type_;
             Color ec = (et == E_BOSS)     ? Color(1.0f, 0.85f, 0.15f, 1.0f)
+                     : (et == E_EGG)      ? Color(1.0f, 0.78f, 0.22f, 1.0f)
                      : (et == E_KAMIKAZE) ? Color(1.0f, 0.50f, 0.10f, 1.0f)
                      : (et == E_DRONE)    ? Color(0.35f, 0.90f, 1.0f, 1.0f)
                                           : Color(1.0f, 0.22f, 0.22f, 0.95f);
-            placeBlip(enemies_[i].node_->GetPosition(), ec, (et == E_BOSS) ? S(9.0f) : S(5.5f));
+            float blipSz = (et == E_BOSS) ? S(9.0f) : (et == E_EGG ? S(7.5f) : S(5.5f));
+            placeBlip(enemies_[i].node_->GetPosition(), ec, blipSz);
         }
         for (unsigned i = 0; i < turrets_.Size(); ++i) {
             if (turrets_[i].ttl_ > 0.0f)
@@ -3763,17 +3791,27 @@ private:
         for (unsigned i = 0; i < enemies_.Size(); ++i) {
             if (enemies_[i].alive_ && enemies_[i].type_ == E_BOSS) { boss = &enemies_[i]; break; }
         }
+        if (!boss) {
+            for (unsigned i = 0; i < enemies_.Size(); ++i) {
+                if (enemies_[i].alive_ && enemies_[i].type_ == E_EGG) { boss = &enemies_[i]; break; }
+            }
+        }
         bool show = (boss != nullptr) && !inMenu_ && !gameOver_ && !photoMode_;
         bossBarBg_->SetVisible(show);
         bossBarFill_->SetVisible(show);
         if (bossBarText_) bossBarText_->SetVisible(show);
         if (!show) return;
+        const bool isEgg = (boss->type_ == E_EGG);
         float ratio = boss->maxHealth_ > 0.0f ? Clamp(boss->health_ / boss->maxHealth_, 0.0f, 1.0f) : 0.0f;
         bossBarFill_->SetSize((int)(S(640.0f) * ratio), S(20.0f));
-        bossBarFill_->SetColor(ratio > 0.5f ? Color(0.95f, 0.30f, 0.25f, 1.0f)
-                              : ratio > 0.25f ? Color(1.0f, 0.60f, 0.15f, 1.0f)
-                                             : Color(1.0f, 0.20f, 0.20f, 1.0f));
-        if (bossBarText_) bossBarText_->SetText("КИБЕР-ИНДЮК БОСС   " + String((int)boss->health_) + " / " + String((int)boss->maxHealth_));
+        bossBarFill_->SetColor(isEgg ? Color(1.0f, 0.78f, 0.18f, 1.0f)
+                              : (ratio > 0.5f ? Color(0.95f, 0.30f, 0.25f, 1.0f)
+                                : ratio > 0.25f ? Color(1.0f, 0.60f, 0.15f, 1.0f)
+                                               : Color(1.0f, 0.20f, 0.20f, 1.0f)));
+        if (bossBarText_) {
+            String label = isEgg ? "ЛЕТАЮЩЕЕ КИБЕР-ЯЙЦО [МИНИ-БОСС]   " : "КИБЕР-ИНДЮК БОСС   ";
+            bossBarText_->SetText(label + String((int)boss->health_) + " / " + String((int)boss->maxHealth_));
+        }
     }
 
     void UpdateAmmoDisplay() {
@@ -3922,7 +3960,7 @@ private:
 
             Text* title = helpPanel_->CreateChild<Text>();
             title->SetFont(font_, SF(40));
-            title->SetText("CHIKENGUN 2.1 — 4K ULTRA СПРАВКА");
+            title->SetText("CHIKENGUN 2.4 — 4K ULTRA СПРАВКА");
             title->SetTextAlignment(HA_CENTER);
             title->SetPosition(sw / 2 - S(540), sh / 2 - S(280));
             title->SetWidth(S(1080));
@@ -3937,7 +3975,7 @@ private:
             body->SetColor(Color(0.90f, 0.94f, 0.98f, 1.0f));
             StyleCrispText(body);
             body->SetText(
-                "БОЕВОЕ УПРАВЛЕНИЕ 2.2 (4K CYBER OVERLOAD)\n"
+                "БОЕВОЕ УПРАВЛЕНИЕ 2.4 (4K CYBER ARENA C++)\n"
                 "  WASD — движение      SHIFT — бег        SPACE — прыжок       CTRL / C — присед\n"
                 "  ALT / X — рывок      V — удар крылом    G — яйце-граната     T — авто-турель (100₵)\n"
                 "  ЛКМ / ПКМ — огонь    R — перезарядка    1..9 — 9 стволов     B — магазин перков\n"
@@ -5535,7 +5573,7 @@ private:
         if (currentWeapon_ != W_RAILGUN && currentWeapon_ != W_PLASMA) SpawnShellCasing();
         
         const WeaponDef& wdef = WEAPON_DEFS[currentWeapon_];
-        float dmg = wdef.damage * (1.0f + 0.14f * (float)perkDmgLvl_) * (overdriveTimer_ > 0.0f ? 2.0f : 1.0f);
+        float dmg = Cyber::ComputeShotDamage(wdef.damage, false, false, perkDmgLvl_, overdriveTimer_ > 0.0f);
         bool anyPelletHit = false;
         if (currentWeapon_ == W_RAILGUN) {
             anyPelletHit = PerformRailgunPierce(dmg, wdef.spread);
@@ -5788,11 +5826,13 @@ private:
                     float sc = hitNode->GetScale().y_;
                     float headThreshY = hitNode->GetPosition().y_ + 1.04f * sc;
                     bool headshot = (hitPosition.y_ >= headThreshY);
-                    float finalDmg = headshot ? (damage * 2.0f) : damage;
+                    // 2.4: шанс вольфрамового крита (6% + 3% за уровень перка урона)
+                    bool critHit = ((float)(rand() % 10000) / 10000.0f) < Cyber::CritChanceFromPerks(perkDmgLvl_);
+                    float finalDmg = Cyber::ComputeShotDamage(damage, headshot, critHit, 0, false);
                     bool killed = (e.health_ - finalDmg <= 0.0f);
 
-                    ShowHitMarker(killed, headshot);
-                    SpawnFloatingDamage(hitPosition, (int)finalDmg, headshot);
+                    ShowHitMarker(killed, headshot || critHit);
+                    SpawnFloatingDamage(hitPosition, (int)finalDmg, headshot || critHit);
 
                     if (headshot) {
                         player_.headshots_++;
@@ -6203,7 +6243,7 @@ private:
 
         loadingTitleText_ = loadingPanel_->CreateChild<Text>();
         loadingTitleText_->SetFont(font_, SF(60));
-        loadingTitleText_->SetText("CHIKENGUN 2.2");
+        loadingTitleText_->SetText("CHIKENGUN 2.4");
         loadingTitleText_->SetTextAlignment(HA_CENTER);
         loadingTitleText_->SetPosition(sw / 2 - S(410), sh / 2 - S(198));
         loadingTitleText_->SetWidth(S(820));
@@ -6521,6 +6561,9 @@ private:
         if (gameOver_ || amount <= 0.0f) return;
         // Во время реактивного рывка — снижаем входящий урон вдвое
         if (dashTimer_ > 0.0f) amount *= 0.5f;
+        // 2.4: мутаторы могут усиливать урон врагов (Стеклянные куры, Ядовитый туман)
+        if (gameMode_ == MODE_ARENA)
+            amount *= Cyber::GetMutatorInfo(activeMutator_).damageMul;
 
         if (player_.armor_ > 0.0f) {
             float absorbed = Min(player_.armor_, amount * 0.65f);
@@ -6528,6 +6571,7 @@ private:
             amount -= absorbed;
         }
         player_.health_ -= amount;
+        totalDamageTaken_ += amount;
         damageFlashTimer_ = 0.3f;
         AddCameraShake(Clamp(amount / 60.0f, 0.05f, 0.25f));
         UpdateHealthDisplay();
@@ -6535,6 +6579,23 @@ private:
             player_.health_ = 0.0f;
             TriggerGameOver();
         }
+    }
+
+    // 2.4: ранг рейда для экрана смерти (S/A/B/C/D/F) — считается в CyberSystems.h
+    char ComputeRaidGrade() {
+        Cyber::RaidStats st{};
+        st.score = player_.score_;
+        st.wave = waveNum_;
+        st.kills = player_.kills_;
+        st.headshots = player_.headshots_;
+        st.shotsFired = player_.shotsFired_;
+        st.shotsHit = player_.shotsHit_;
+        st.timeAliveSec = (int)arenaTime_;
+        st.maxCombo = bestCombo_;
+        st.bestWave = waveNum_;
+        st.damageDealt = totalDamageDealt_;
+        st.damageTaken = totalDamageTaken_;
+        return Cyber::RaidGrade(st);
     }
 
     void TriggerGameOver() {
@@ -6551,14 +6612,17 @@ private:
             highScore_ = player_.score_;
             SaveSettingsFile();
         }
+        const char grade = ComputeRaidGrade();
         if (gameOverStatsText_) {
             gameOverStatsText_->SetText(
-                String("СЧЁТ: ") + String(player_.score_) + "   |   ВОЛНА: " + String(waveNum_) + "\n" +
+                String("РАНГ РЕЙДА: ") + String(grade) + "   |   СЧЁТ: " + String(player_.score_) +
+                "   |   ВОЛНА: " + String(waveNum_) + "\n" +
                 String("УБИЙСТВ: ") + String(player_.kills_) + "  (ХЭДШОТОВ ★: " + String(player_.headshots_) + ")   |   ЛУЧШЕЕ КОМБО: x" + String(bestCombo_) + "\n" +
-                String("ТОЧНОСТЬ: ") + String((int)player_.GetAccuracy()) + "%   |   РЕКОРД: " + String(highScore_) + "\n" +
+                String("ТОЧНОСТЬ: ") + String((int)player_.GetAccuracy()) + "%   |   УРОН: " + String((int)totalDamageDealt_) + "   |   РЕКОРД: " + String(highScore_) + "\n" +
                 String("ВРЕМЯ: ") + FormatTime(arenaTime_) + "   |   ТЕМП: " +
                 String(arenaTime_ > 5.0f ? (int)(player_.kills_ / (arenaTime_ / 60.0f)) : 0) + " уб/мин");
         }
+        ShowMessage(String("РАНГ РЕЙДА: ") + String(grade));
         ShowGameOver(true);
     }
 
@@ -6621,7 +6685,7 @@ private:
 
         Text* title = armoryPanel_->CreateChild<Text>();
         title->SetFont(font_, SF(36));
-        title->SetText("АРСЕНАЛ 4K PBR — CHIKENGUN 2.2");
+        title->SetText("АРСЕНАЛ 4K PBR — CHIKENGUN 2.4");
         title->SetTextAlignment(HA_CENTER);
         title->SetPosition(sw / 2 - S(360), S(32));
         title->SetWidth(S(720));
@@ -7002,7 +7066,7 @@ private:
 
         Text* title = mainMenuPanel_->CreateChild<Text>();
         title->SetFont(font_, SF(66));
-        title->SetText("CHIKENGUN 2.2");
+        title->SetText("CHIKENGUN 2.4");
         title->SetTextAlignment(HA_CENTER);
         title->SetPosition(sw / 2 - S(420), sh / 2 - S(232));
         title->SetWidth(S(840));
@@ -7412,6 +7476,9 @@ private:
         bestCombo_ = 0;
         comboCount_ = 0;
         comboTimer_ = 0.0f;
+        totalDamageDealt_ = 0.0f;
+        totalDamageTaken_ = 0.0f;
+        SyncPbrLightScale();
         waveRespawnTimer_ = 0.0f;
         rangeRespawnTimer_ = 0.0f;
         damageFlashTimer_ = 0.0f;
@@ -7493,13 +7560,15 @@ private:
         eyeMatBoss_     = MakeHDRGlow(Color(1.0f, 0.85f, 0.15f), 3.2f);
         eyeMatKamikaze_ = MakeHDRGlow(Color(1.0f, 0.28f, 0.05f), 3.4f);
         eyeMatDrone_    = MakeHDRGlow(Color(0.20f, 0.95f, 1.0f), 3.0f);
+        eyeMatEgg_      = MakeHDRGlow(Color(1.0f, 0.78f, 0.12f), 3.4f);
     }
 
     void SpawnEnemyRobot(const Vector3& pos, EnemyType type) {
         EnsureRobotMaterials();
         EnsureEyeMaterials();
         Node* rob = scene_->CreateChild("Enemy", LOCAL);
-        Vector3 initPos = (type == E_DRONE) ? Vector3(pos.x_, 3.2f, pos.z_) : pos;
+        Vector3 initPos = (type == E_EGG) ? Vector3(pos.x_, 4.2f, pos.z_)
+                        : (type == E_DRONE) ? Vector3(pos.x_, 3.2f, pos.z_) : pos;
         rob->SetPosition(initPos);
         rob->SetVar("enemy", true); rob->AddTag("Enemy");
 
@@ -7509,6 +7578,7 @@ private:
 
         // Масштаб модели: босс крупнее, камикадзе юркий, дрон-валькирия поджарая
         float scale = (type == E_BOSS)     ? 1.75f
+                    : (type == E_EGG)      ? 1.32f
                     : (type == E_KAMIKAZE) ? 0.80f
                     : (type == E_DRONE)    ? 0.90f
                     : (type == E_SHOOTER)  ? 0.92f : 1.0f;
@@ -7540,6 +7610,10 @@ private:
             case E_DRONE:
                 e.health_ = 85.0f;  e.speed_ = 2.65f; e.scoreValue_ = 260;
                 e.patrolRadius_ = 8.0f; break;
+            case E_EGG:
+                e.health_ = (float)Cyber::EggBossHp(waveNum_);
+                e.speed_  = 2.45f; e.scoreValue_ = 520;
+                e.patrolRadius_ = 11.0f; break;
             case E_BOSS:
                 e.health_ = 420.0f + (float)waveNum_ * 20.0f; e.speed_ = 2.25f; e.scoreValue_ = 900;
                 e.patrolRadius_ = 6.0f; break;
@@ -7548,6 +7622,8 @@ private:
                 e.speed_  = 1.9f; e.scoreValue_ = 150;
                 e.patrolRadius_ = 4.0f; break;
         }
+        // 2.4: мутатор «СТЕКЛЯННЫЕ КУРЫ» делает врагов хрупкими
+        e.health_ = (float)Cyber::ScaleEnemyHp((int)e.health_, activeMutator_);
         e.maxHealth_ = e.health_;
         e.alive_ = true;
         e.patrolCenter_ = pos;
@@ -7593,6 +7669,7 @@ private:
         ++waveNum_;
         activeMutator_ = Cyber::PickWaveMutator(waveNum_, rand() % 97);
         const Cyber::MutatorInfo& mut = Cyber::GetMutatorInfo(activeMutator_);
+        SyncPbrLightScale(); // 2.4: применяем множитель тумана мутатора к Zone
         if (waveNum_ > 1) {
             credits_ += 45;
             PushKillFeed("+45₵ БОНУС ЗА ЗАЧИСТКУ ВОЛНЫ!");
@@ -7634,7 +7711,17 @@ private:
             SpawnEnemyRobot(pos, t);
             ++spawned;
         }
+        // 2.4: Летающее Кибер-Яйцо (мини-босс с 3-й нечётной волны) + дополнительный выводок при «РОЕ ЯИЦ»
+        int eggBossesToSpawn = (Cyber::ShouldSpawnEggBoss(waveNum_) ? 1 : 0) + (mut.extraEggs ? 2 : 0);
+        for (int eb = 0; eb < eggBossesToSpawn; ++eb) {
+            float ang = (float)(rand() % 360) * 0.0174533f;
+            float r = 14.0f + (float)(rand() % 14);
+            Vector3 epos(Clamp(cosf(ang) * r, -half, half), 0.06f, Clamp(sinf(ang) * r, -half, half));
+            SpawnEnemyRobot(epos, E_EGG);
+            ++spawned;
+        }
         String msg = "ВОЛНА " + String(waveNum_) + "! Кур: " + String(spawned);
+        if (eggBossesToSpawn > 0) msg += "  [КИБЕР-ЯЙЦО!]";
         if (bossWave) msg += "  [БОСС!]";
         ShowMessage(msg);
 
@@ -7919,6 +8006,12 @@ private:
 
     // Мини-физика осколков: гравитация, отскок от пола y=0.05, затухание
     void UpdateDebrisLite(float dt) {
+        // 2.4: жёсткий бюджет частиц/осколков (420 узлов), чтобы взрывные волны не роняли FPS
+        int cap = Cyber::ClampParticleBudget((int)debrisLite_.Size(), 420);
+        while ((int)debrisLite_.Size() > cap) {
+            if (debrisLite_[0].node_) debrisLite_[0].node_->Remove();
+            debrisLite_.Erase(0);
+        }
         for (unsigned i = debrisLite_.Size(); i-- > 0; ) {
             DebrisData& d = debrisLite_[i];
             if (!d.node_ || !d.node_->GetScene()) { debrisLite_.Erase(i); continue; }
@@ -8027,7 +8120,7 @@ private:
             case E_KAMIKAZE: {
                 // Цыплёнок-камикадзе: несётся зигзагом с тикающей C4; вблизи взрывается сам!
                 Vector3 strafe(-toDir.z_, 0, toDir.x_);
-                move = (toDir + strafe * 0.50f * sinf(e.strafePhase_ * 1.9f)) * e.speed_;
+                move = (toDir + strafe * 0.50f * sinf(e.strafePhase_ * 1.9f)) * effSpd;
                 e.burstTimer_ -= dt;
                 float beepPeriod = Clamp(dist * 0.045f, 0.11f, 0.55f);
                 if (dist < 16.0f && e.burstTimer_ <= 0.0f) {
@@ -8051,13 +8144,37 @@ private:
             case E_DRONE: {
                 // Реактивная куро-валькирия: парит над укрытиями (y ~ 3.2..4.1 м) и ведёт огонь сверху!
                 Vector3 strafe(-toDir.z_, 0, toDir.x_);
-                if (dist > 15.0f)      move = toDir * e.speed_;
-                else if (dist < 8.5f)  move = -toDir * e.speed_ * 0.8f;
-                else                   move = strafe * e.speed_ * 0.9f * cosf(e.strafePhase_ * 0.7f);
+                if (dist > 15.0f)      move = toDir * effSpd;
+                else if (dist < 8.5f)  move = -toDir * effSpd * 0.8f;
+                else                   move = strafe * effSpd * 0.9f * cosf(e.strafePhase_ * 0.7f);
                 if (e.attackTimer_ <= 0.0f && dist < 26.0f) {
                     e.attackTimer_ = 1.95f + (float)(rand() % 70) / 100.0f;
                     e.recoilKick_ = 0.16f;
                     SpawnEnemyProjectile(p + Vector3(0, 0.9f, 0) + toDir * 0.5f, camPos, 10.0f);
+                }
+                break;
+            }
+            case E_EGG: {
+                // 2.4 Мини-босс «Летающее Кибер-Яйцо»: барражирует по орбите (y ~ 4.2 м) и даёт веерный залп яйцами!
+                if (!e.enraged_ && e.health_ <= e.maxHealth_ * 0.5f) {
+                    e.enraged_ = true;
+                    n->SetScale(n->GetScale() * 1.10f);
+                    CreateShockwave(p + Vector3(0, 0.6f, 0), eyeMatEgg_ ? eyeMatEgg_.Get() : nullptr, 0.58f);
+                    PushKillFeed("⚡ КИБЕР-ЯЙЦО РАСКОЛОЛОСЬ: ЗАЛП УСИЛЕН ДО 12 ЯИЦ!");
+                }
+                Vector3 strafe(-toDir.z_, 0, toDir.x_);
+                if (dist > 16.5f)      move = (toDir + strafe * 0.45f) * effSpd;
+                else if (dist < 10.5f) move = (-toDir * 0.7f + strafe * 0.8f) * effSpd;
+                else                   move = strafe * effSpd * 1.05f;
+                if (e.attackTimer_ <= 0.0f && dist < 34.0f) {
+                    e.attackTimer_ = e.enraged_ ? 2.15f : 3.05f;
+                    e.recoilKick_ = 0.24f;
+                    int volley = Cyber::EggBossEggsPerVolley(e.enraged_);
+                    for (int v = 0; v < volley; ++v) {
+                        float frac = ((float)v / (float)Max(1, volley - 1)) - 0.5f;
+                        Vector3 aimTarget = camPos + strafe * (frac * 7.5f) + Vector3(0.0f, -0.25f * fabsf(frac), 0.0f);
+                        SpawnEnemyProjectile(p + Vector3(0, 0.55f, 0) + toDir * 0.7f, aimTarget, e.enraged_ ? 11.0f : 9.0f);
+                    }
                 }
                 break;
             }
@@ -8072,10 +8189,10 @@ private:
                         Vector3 slide = outNormal.CrossProduct(Vector3::UP);
                         slide.y_ = 0;
                         if (slide.LengthSquared() > 0.001f)
-                            move = slide.Normalized() * e.speed_ * (sinf(e.strafePhase_) > 0 ? 1.0f : -1.0f);
+                            move = slide.Normalized() * effSpd * (sinf(e.strafePhase_) > 0 ? 1.0f : -1.0f);
                     }
                 }
-                if (!blocked) move = toDir * e.speed_;
+                if (!blocked) move = toDir * effSpd;
                 if (dist < 1.4f && e.attackTimer_ <= 0.0f) {
                     e.attackTimer_ = 1.0f;
                     e.recoilKick_ = 0.2f;
@@ -8098,8 +8215,9 @@ private:
             }
 
             // Интеграция движения с ограничением по арене.
-            // Для летающей E_DRONE обходим наземные ящики на высоте полёта!
-            Vector3 np = (e.type_ == E_DRONE) ? (p + move * dt) : PushOutOfObstacles(p + move * dt, 0.55f, 0.55f);
+            // Для летающих E_DRONE и E_EGG обходим наземные ящики на высоте полёта!
+            const bool isFlying = (e.type_ == E_DRONE || e.type_ == E_EGG);
+            Vector3 np = isFlying ? (p + move * dt) : PushOutOfObstacles(p + move * dt, 0.55f, 0.55f);
             const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 2.0f;
             np.x_ = Clamp(np.x_, -half, half);
             np.z_ = Clamp(np.z_, -half, half);
@@ -8107,7 +8225,8 @@ private:
             // Визуальный «откат» при выстреле/ударе: приседание модели
             if (e.recoilKick_ > 0.0f) e.recoilKick_ = Max(0.0f, e.recoilKick_ - dt);
             float kick = e.recoilKick_ * 0.6f;
-            float baseY = (e.type_ == E_DRONE) ? (3.25f + 0.55f * sinf(timeAcc_ * 2.3f + e.phase_)) : (0.06f + bob);
+            float baseY = (e.type_ == E_EGG)   ? (4.20f + 0.65f * sinf(timeAcc_ * 2.0f + e.phase_))
+                        : (e.type_ == E_DRONE) ? (3.25f + 0.55f * sinf(timeAcc_ * 2.3f + e.phase_)) : (0.06f + bob);
             Vector3 newPos(np.x_, baseY - kick, np.z_);
             n->SetPosition(newPos);
             MoveColliderLite(e.colliderIdx_, newPos + Vector3(0, 0.85f, 0)); // центр тела курицы
@@ -8146,7 +8265,8 @@ private:
     }
 
     void DamageEnemy(EnemyData& e, float damage) {
-        if (!e.alive_) return;
+        if (!e.alive_ || damage <= 0.0f) return;
+        totalDamageDealt_ += Min(damage, Max(0.0f, e.health_));
         e.health_ -= damage;
         Node* n = e.node_.Get();
         if (n) {
@@ -8204,10 +8324,12 @@ private:
                 }
             }
 
-            int baseCred = (killedType == E_BOSS) ? 120 : (killedType == E_DRONE || killedType == E_KAMIKAZE ? 35 : 22);
+            int baseCred = (killedType == E_BOSS) ? 120
+                         : (killedType == E_EGG)  ? 70
+                         : (killedType == E_DRONE || killedType == E_KAMIKAZE ? 35 : 22);
             int creditGain = (int)lroundf((float)baseCred * mut.creditMul);
             credits_ += creditGain;
-            orbitalCharge_ = Cyber::AddOrbitalCharge(orbitalCharge_, killedType == E_BOSS, false);
+            orbitalCharge_ = Cyber::AddOrbitalCharge(orbitalCharge_, killedType == E_BOSS || killedType == E_EGG, false);
 
             // Бонус за убийство в воздухе с джамп-платформы!
             if (!onGround_ && airborneFromPad_) {
@@ -8237,10 +8359,16 @@ private:
             }
 
             UpdateScoreDisplay();
-            ShowMessage((killedType == E_BOSS ? "БОСС-ИНДЮК ПАЛ! +" : "КУРИЦА ОЩИПАНА! +") +
+            const char* killBanner = (killedType == E_BOSS) ? "БОСС-ИНДЮК ПАЛ! +"
+                                   : (killedType == E_EGG)  ? "КИБЕР-ЯЙЦО РАЗБИТО! +"
+                                                            : "КУРИЦА ОЩИПАНА! +";
+            const char* killFeedLbl = (killedType == E_BOSS) ? "ИНДЮК ПАЛ +"
+                                    : (killedType == E_EGG)  ? "🥚 КИБЕР-ЯЙЦО +"
+                                                             : "курица ощипана +";
+            ShowMessage(String(killBanner) +
                         String(scoreVal) + " (+" + String(creditGain) + "₵)" +
                         (comboCount_ > 1 ? (" [COMBO x" + String(comboCount_) + "]") : ""));
-            PushKillFeed((killedType == E_BOSS ? "ИНДЮК ПАЛ +" : "курица ощипана +") +
+            PushKillFeed(String(killFeedLbl) +
                          String(scoreVal) +
                          (comboCount_ > 1 ? ("  x" + String(comboCount_)) : ""));
         }
@@ -8265,6 +8393,7 @@ private:
                 case E_BOSS:     sm->SetMaterial(chickBoss_     ? chickBoss_.Get()     : mat); break;
                 case E_KAMIKAZE: sm->SetMaterial(chickKamikaze_ ? chickKamikaze_.Get() : mat); break;
                 case E_DRONE:    sm->SetMaterial(chickDrone_    ? chickDrone_.Get()    : mat); break;
+                case E_EGG:      sm->SetMaterial(chickEgg_      ? chickEgg_.Get()      : mat); break;
                 default:         sm->SetMaterial(mat); break;
             }
             sm->SetCastShadows(false);
@@ -8332,7 +8461,10 @@ private:
         comboCount_++;
         comboTimer_ = 4.0f;
         bestCombo_ = Max(bestCombo_, comboCount_);
-        int gained = (int)(base * (1.0f + 0.5f * (float)(comboCount_ - 1)));
+        // 2.4: комбо-множитель с жёстким потолком x4 (раньше рос без предела и
+        // обесценивал рекорд: на 10 убийствах давал x5.5).
+        float mult = Cyber::ComboMultiplier(comboCount_);
+        int gained = (int)(base * mult + 0.5f);
         player_.score_ += gained;
         // Рекорд обновляем в памяти; на диск пишем только в GAME OVER/настройках.
         // Раньше settings.ini перезаписывался на КАЖДОМ убийстве (I/O в игровом цикле).

@@ -679,3 +679,19 @@ tools/syntax_check.sh          # или: URHO_INC=/usr/local/include tools/synta
    - Устранена утечка `tintedMatStore_` (п. 5 TL;DR аудита) за счёт O(1) FNV-1a кэша дедупликации `matCache_` в `MakeTinted`, `MakeHDRGlow` и `MakePBR`.
    - Расширен арсенал до **9 видов оружия** (`[8] RAILGUN` + `[9] PLASMA`), добавлены **энергетический грэппл-крюк `[Z]`**, **орбитальный ионный удар «ЯЙЦЕГЕДДОН» `[X]`**, **кластерная граната `[G]`**, **авто-турель `[T]`**, **магазин перков `[B]`**, **мутаторы волн**, **фаза ярости Босса (`<50% HP`)**, **4 пресета 3D-погоды `[F8]`**, **переключение саундтреков `[M]`**, **12 достижений**, **23 процедурных WAV-эффекта** и полноценный аппаратный **WebGL2 (`#version 300 es`) 3D PBR-движок** в `index.html` + `web/webgl2_arena.js`.
 
+---
+
+## 18. Обновление 2.4 — Нативное C++ ядро, мини-босс `E_EGG` и скачиваемый релиз
+
+1. **Закрытые дефекты и баланс `src/MyApp.cpp` + `src/CyberSystems.h`**:
+   - **Потолок комбо-множителя (§9 аудита)**: бесконечный рост `1 + 0.5*(combo-1)` в `AddScoreWithCombo` заменён на `Cyber::ComboMultiplier` с капом `×4.0`.
+   - **Полнота скорости мутаторов**: в `UpdateEnemies` классы `E_MELEE`, `E_KAMIKAZE` и `E_DRONE` раньше использовали сырой `e.speed_` в обход `effSpd` (множитель `MUT_TURBO` / `MUT_TOXIC` на них не работал) — переведены на `effSpd`.
+   - **Живой туман сцены**: при смене волны (`SpawnWave`) и старте режима (`StartGameMode`) вызывается `SyncPbrLightScale()`, пересчитывающий `Zone::SetFogStart/End` по `MutatorInfo::fogMul`.
+   - **Бюджет частиц (`Cyber::ClampParticleBudget`)**: `UpdateDebrisLite` ограничивает массив `debrisLite_` 420 узлами, удаляя старейшие осколки/перья при пиковых взрывах.
+   - **Единый расчёт критов и ранг рейда**: выстрелы используют `Cyber::ComputeShotDamage` и `Cyber::CritChanceFromPerks`, а `TriggerGameOver` считает итоговый ранг `S..F` (`Cyber::RaidGrade`) с учётом нанесённого и полученного урона.
+   - **7-й класс врага `E_EGG` («Летающее Кибер-Яйцо»)** и расширение таблицы мутаторов до 8 режимов (*Ядовитый туман*, *Стеклянные куры*, *Рой яиц*).
+2. **Скачиваемая C++ поставка (Linux x86_64)**:
+   - В `CMakeLists.txt` (`2.4.0`) настроены `$ORIGIN/lib` RPATH, `install(...)` с фильтрацией дублей `Data/Data`/`Urho2D` и `CPack` (`TGZ`/`ZIP`).
+   - Добавлен упаковщик `tools/package_linux.sh` и облачный пайплайн `.github/workflows/release-cpp.yml`, компилирующий `MyShooter` против Urho3D и собирающий автономный архив `CHIKENGUN-2.4-Linux-x86_64.tar.gz` + `SHA256SUMS.txt` для скачивания из GitHub Releases / Artifacts.
+
+

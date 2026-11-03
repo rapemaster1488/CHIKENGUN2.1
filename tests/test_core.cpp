@@ -123,6 +123,83 @@ int main(int argc, char** argv) {
         assert(Cyber::PerkUpgradeCost(2) == 205);
         assert(Cyber::CountUnlockedAchievements(0b101001000101) == 5);
         assert(Cyber::CountUnlockedAchievements(Cyber::ALL_ACHIEVEMENTS_MASK) == 12);
+
+        // 2.4: новые мутаторы и их параметры
+        assert(Cyber::MUT_COUNT == 8);
+        assert(Cyber::GetMutatorInfo(Cyber::MUT_TOXIC).fogMul > 1.5f);
+        assert(Cyber::GetMutatorInfo(Cyber::MUT_GLASS).enemyHpMul < 0.5f);
+        assert(Cyber::GetMutatorInfo(Cyber::MUT_GLASS).damageMul > 1.0f);
+        assert(Cyber::GetMutatorInfo(Cyber::MUT_SWARM).extraEggs);
+        for (int m = 0; m < Cyber::MUT_COUNT; ++m) {
+            assert(Cyber::GetMutatorInfo(m).name != nullptr);
+            assert(Cyber::GetMutatorInfo(m).fogMul >= 0.0f);
+            assert(Cyber::GetMutatorInfo(m).enemyHpMul > 0.0f);
+        }
+
+        // 2.4: мини-босс «Летающее яйцо» только на нечётных волнах с 3-й
+        assert(!Cyber::ShouldSpawnEggBoss(1));
+        assert(!Cyber::ShouldSpawnEggBoss(2));
+        assert(Cyber::ShouldSpawnEggBoss(3));
+        assert(!Cyber::ShouldSpawnEggBoss(4));
+        assert(Cyber::ShouldSpawnEggBoss(7));
+        assert(Cyber::EggBossHp(5) > Cyber::EggBossHp(3));
+        assert(Cyber::EggBossEggsPerVolley(true) > Cyber::EggBossEggsPerVolley(false));
+
+        // 2.4: хрупкие куры теряют HP, но не до нуля
+        assert(Cyber::ScaleEnemyHp(100, Cyber::MUT_GLASS) == 45);
+        assert(Cyber::ScaleEnemyHp(100, Cyber::MUT_STANDARD) == 100);
+        assert(Cyber::ScaleEnemyHp(2, Cyber::MUT_GLASS) >= 1);
+    }
+
+    std::cout << "[test_core] 4b/7 Проверка боевой статистики, ранга рейда, комбо и урона...\n";
+    {
+        // Точность: защита от деления на ноль и от shotsHit > shotsFired
+        assert(Cyber::AccuracyPercent(0, 0) == 0);
+        assert(Cyber::AccuracyPercent(40, 10) == 25);
+        assert(Cyber::AccuracyPercent(10, 99) == 100);
+
+        // Ранг рейда: чистый рейд = S, пустой = F
+        Cyber::RaidStats sEmpty{};
+        assert(Cyber::RaidGrade(sEmpty) == 'F');
+
+        Cyber::RaidStats sGod{};
+        sGod.score = 40000; sGod.wave = 14; sGod.kills = 80; sGod.headshots = 30;
+        sGod.shotsFired = 300; sGod.shotsHit = 210; sGod.timeAliveSec = 900; sGod.maxCombo = 12;
+        assert(Cyber::RaidGrade(sGod) == 'S');
+
+        Cyber::RaidStats sMid{};
+        sMid.kills = 20; sMid.wave = 4; sMid.shotsFired = 120; sMid.shotsHit = 60; sMid.maxCombo = 4;
+        assert(Cyber::RaidGrade(sMid) == 'C' || Cyber::RaidGrade(sMid) == 'B');
+
+        // Комбо-множитель ограничен x4 (раньше рос без предела)
+        assert(std::fabs(Cyber::ComboMultiplier(1) - 1.0f) < 1e-5f);
+        assert(std::fabs(Cyber::ComboMultiplier(3) - 1.5f) < 1e-5f);
+        assert(std::fabs(Cyber::ComboMultiplier(50) - 4.0f) < 1e-5f);
+        assert(std::fabs(Cyber::ComboMultiplier(0) - 1.0f) < 1e-5f);
+
+        int plain = Cyber::AwardKillScore(100, 1, Cyber::MUT_STANDARD);
+        int combo = Cyber::AwardKillScore(100, 8, Cyber::MUT_STANDARD);
+        assert(plain == 100);
+        assert(combo > plain && combo <= 400);
+
+        // Урон: база, перк, овердрайв, крит и хэдшот
+        assert(std::fabs(Cyber::ComputeShotDamage(100, false, false, 0, false) - 100.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, true,  false, 0, false) - 200.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, false, true,  0, false) - 200.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, true,  true,  0, false) - 400.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, false, false, 5, false) - 175.0f) < 1e-4f);
+        assert(std::fabs(Cyber::ComputeShotDamage(100, false, false, 0, true) - 200.0f) < 1e-4f);
+        assert(std::fabs(Cyber::CritChanceFromPerks(0) - 0.06f) < 1e-5f);
+        assert(Cyber::CritChanceFromPerks(5) < 0.3f);
+
+        // Пул частиц и форматирование времени
+        assert(Cyber::ClampParticleBudget(900, 420) == 420);
+        assert(Cyber::ClampParticleBudget(100, 420) == 100);
+        char buf[16];
+        Cyber::FormatRaidTime(754, buf, sizeof(buf));
+        assert(std::strcmp(buf, "12:34") == 0);
+        Cyber::FormatRaidTime(-5, buf, sizeof(buf));
+        assert(std::strcmp(buf, "0:00") == 0);
     }
 
     std::cout << "[test_core] 5/7 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
