@@ -94,6 +94,7 @@
 
 #include "LitePhysics.h"
 #include "CyberSystems.h"
+#include "BanyaSim.h"
 
 #include <Urho3D/IO/Log.h>
 #include <Urho3D/IO/File.h>
@@ -827,11 +828,50 @@ private:
     Vector<WeatherMote> weatherMotes_;
     int weatherAtmBuilt_ = -1;
 
-    // 12 постоянных достижений (битовая маска в settings.ini)
+    // 14 постоянных достижений (битовая маска в settings.ini, вкл. 2 банных)
     int achievementsMask_ = 0;
     SharedPtr<BorderImage> achievToastBg_;
     SharedPtr<Text> achievToastText_;
     float achievToastTimer_ = 0.0f;
+
+    // === 2.4 СИМУЛЯТОР ПАРНОЙ «КОЧЕТ В БАНЬКЕ» (src/BanyaSim.h: 14 концовок, 57 загадок, баффы Арены) ===
+    Banya::Simulator banyaSim_{0xC0C4E7u};
+    bool  banyaOpen_          = false;
+    bool  banyaFromMenu_      = false;
+    bool  banyaRewardApplied_ = false;
+    int   banyaBuffTier_      = 0;     // 0=нет, 1=Банный закал (+25 HP/Armor), 2=Ковш Смотрящего (+50 HP/Armor, +15% DMG, +35% Орбита)
+    int   banyaBonusCredits_  = 0;     // заработанные в бане кредиты (переносятся в бой)
+    float banyaVenikAnim_     = 0.0f;
+    float banyaCaptionTimer_  = 0.0f;
+    float banyaLastWarnTime_  = -12.0f;
+    float banyaSteamAcc_      = 0.0f;
+    Vector3 banyaDoorPos_{-28.0f, 0.0f, -30.2f};
+    float banyaPromptCooldown_ = 0.0f;
+
+    struct BanyaUIParticle {
+        SharedPtr<BorderImage> el_;
+        float x_ = 0.0f, y_ = 0.0f, vx_ = 0.0f, vy_ = 0.0f;
+        float life_ = 0.0f, ttl_ = 1.5f, sz_ = 6.0f;
+        int   kind_ = 0; // 0=steam, 1=smoke, 2=drop, 3=leaf, 4=snow, 5=ember, 6=spark
+    };
+    Vector<BanyaUIParticle> banyaParticles_;
+
+    SharedPtr<UIElement>   banyaPanel_, banyaSceneBox_, banyaRiddleBox_, banyaEndBox_, banyaStatsBox_;
+    SharedPtr<BorderImage> banyaHeatWash_, banyaAirWash_, banyaColdWash_, banyaEndTint_;
+    SharedPtr<BorderImage> banyaStoveFire_, banyaStonesGlow_, banyaVenikVis_, banyaRoosterBody_, banyaRoosterComb_, banyaRoosterCrown_;
+    SharedPtr<Text>        banyaRoosterEyesText_;
+    SharedPtr<Text>        banyaTempText_, banyaMoodText_, banyaClockText_, banyaCaptionText_, banyaBadgeText_;
+    SharedPtr<BorderImage> banyaBarSteam_, banyaBarFire_, banyaBarAir_, banyaBarLife_, banyaBarTime_;
+    SharedPtr<Text>        banyaRiddleQ_, banyaRiddleTime_, banyaRiddleFb_;
+    SharedPtr<BorderImage> banyaRiddleTimerBar_;
+    SharedPtr<BorderImage> banyaRiddleOptBg_[4];
+    SharedPtr<Text>        banyaRiddleOptTxt_[4];
+    SharedPtr<BorderImage> banyaActBtnBg_[5];
+    SharedPtr<BorderImage> banyaStatsBtnBg_;
+    SharedPtr<Text>        banyaEndTitle_, banyaEndText_, banyaEndHint_, banyaEndStats_;
+    SharedPtr<BorderImage> banyaEndBtnRestart_, banyaEndBtnStats_, banyaEndBtnBack_;
+    SharedPtr<Text>        banyaStatsRunText_, banyaStatsAllText_;
+    SharedPtr<BorderImage> banyaStatsCloseBtn_;
     SharedPtr<Material> decalMat_;     // пулевые отверстия
     SharedPtr<Material> shockMat_;     // ударная волна взрыва
     SharedPtr<Material> shellMat_;     // латунные гильзы
@@ -946,6 +986,10 @@ private:
     Sound* kamikazeBeepSound_ = nullptr;
     Sound* grappleSound_ = nullptr;
     Sound* orbitalSound_ = nullptr;
+    Sound* banyaSteamSound_ = nullptr;
+    Sound* banyaVenikSound_ = nullptr;
+    Sound* banyaSplashSound_ = nullptr;
+    Sound* banyaDoorSound_ = nullptr;
     SoundSource* soundSource_ = nullptr;   // 2D-микшер на камере
     SharedPtr<SoundSource> musicSource_;       // фоновая музыка
     SoundSource3D* explosionSource3D_ = nullptr; // взрывы в мировом пространстве
@@ -1277,6 +1321,10 @@ private:
         kamikazeBeepSound_= cache->GetResource<Sound>("Sounds/KamikazeBeep.wav");
         grappleSound_     = cache->GetResource<Sound>("Sounds/Grapple.wav");
         orbitalSound_     = cache->GetResource<Sound>("Sounds/OrbitalStrike.wav");
+        banyaSteamSound_  = cache->GetResource<Sound>("Sounds/BanyaSteam.wav");
+        banyaVenikSound_  = cache->GetResource<Sound>("Sounds/BanyaVenik.wav");
+        banyaSplashSound_ = cache->GetResource<Sound>("Sounds/BanyaSplash.wav");
+        banyaDoorSound_   = cache->GetResource<Sound>("Sounds/BanyaDoor.wav");
 
         cluckSounds_[0] = cache->GetResource<Sound>("Sounds/Chicken_Cluck.wav");
         if (!cluckSounds_[0]) cluckSounds_[0] = cache->GetResource<Sound>("Sounds/ChickenCluck.wav");
@@ -2344,6 +2392,43 @@ private:
             AnimatedDeco d; d.node_ = SharedPtr<Node>(pad); d.pos_ = p;
             d.spin_ = 12.0f; d.bobAmp_ = 0.0f; d.bobSpeed_ = 1.0f; d.phase_ = (float)i;
             animatedDeco_.Push(d);
+        }
+
+        // --- 3D Деревянная «БАНЬКА СМОТРЯЩЕГО» на арене ([P] — вход в симулятор парной!) ---
+        {
+            SharedPtr<Material> warmGlow = MakeHDRGlow(Color(2.5f, 1.45f, 0.38f, 1.0f));
+            SharedPtr<Material> frostWin = MakeHDRGlow(Color(0.85f, 1.45f, 1.95f, 1.0f));
+            Material* woodMat = hdCrate_ ? hdCrate_ : fallbackMat_;
+            Material* pipeMat = hdMetal_ ? hdMetal_ : metalMaterial_;
+            Vector3 bp(-28.0f, 0.0f, -34.0f);
+            Node* banya = scene_->CreateChild("BanyaCabin");
+            banya->SetPosition(bp);
+            // Бревенчатый сруб + двускатная крыша + крыльцо + печная труба
+            box(banya, Vector3(0.0f, 1.75f, 0.0f),  Vector3(6.8f, 3.5f, 5.8f), woodMat);
+            box(banya, Vector3(0.0f, 3.85f, 0.0f),  Vector3(7.4f, 0.65f, 6.4f), woodMat);
+            box(banya, Vector3(0.0f, 4.35f, 0.0f),  Vector3(5.2f, 0.55f, 6.2f), woodMat);
+            box(banya, Vector3(0.0f, 0.12f, 3.55f), Vector3(3.4f, 0.24f, 1.5f), woodMat);
+            // Светящийся тёплый дверной проём (+Z к центру арены) и запотевшее окошко
+            box(banya, Vector3(0.0f, 1.25f, 2.93f), Vector3(1.45f, 2.35f, 0.12f), warmGlow.Get());
+            box(banya, Vector3(2.05f, 1.95f, 2.93f), Vector3(1.15f, 0.95f, 0.12f), frostWin.Get());
+            // Стальная труба печи-каменки
+            Node* chim = banya->CreateChild("BanyaChimney");
+            chim->SetPosition(Vector3(-2.1f, 5.2f, -1.2f));
+            chim->SetScale(Vector3(0.55f, 2.4f, 0.55f));
+            StaticModel* csm = chim->CreateComponent<StaticModel>();
+            csm->SetModel(cylModel_ ? cylModel_ : boxModel_);
+            csm->SetMaterial(pipeMat);
+            // Тёплый оранжевый свет из предбанника
+            Node* lNode = banya->CreateChild("BanyaWarmLight");
+            lNode->SetPosition(Vector3(0.0f, 2.2f, 3.9f));
+            Light* bLight = lNode->CreateComponent<Light>();
+            bLight->SetLightType(LIGHT_POINT);
+            bLight->SetColor(Color(1.0f, 0.62f, 0.22f));
+            bLight->SetRange(14.0f);
+            bLight->SetBrightness((gfxQualityIdx_ >= 2) ? 4.5f : 1.2f);
+            // Коллайдер сруба для физики и грэппл-крюка
+            AddBoxCollider(bp + Vector3(0.0f, 1.9f, 0.0f), Vector3(3.4f, 1.9f, 2.9f));
+            banyaDoorPos_ = bp + Vector3(0.0f, 0.0f, 3.6f);
         }
     }
 
@@ -3831,6 +3916,8 @@ private:
         }
         if (statusBuffText_) {
             String b;
+            if (banyaBuffTier_ >= 2)      b += "👑 СМОТРЯЩИЙ (+50HP/+15%УР)  ";
+            else if (banyaBuffTier_ == 1) b += "♨ БАННЫЙ ЗАКАЛ (+25HP)  ";
             if (overdriveTimer_ > 0.0f)
                 b += "⚡ ОВЕРДРАЙВ 2X (" + String(overdriveTimer_, 1) + "с)  ";
             b += (grappleCooldown_ <= 0.0f) ? "[Z] КРЮК  " : ("[Z] " + String(grappleCooldown_, 1) + "с  ");
@@ -3840,7 +3927,7 @@ private:
                 b += "[X] ОРБИТА " + String((int)orbitalCharge_) + "%  ";
             b += (grenadeCooldown_ <= 0.0f) ? "[G] ГРАНАТА  " : ("[G] " + String(grenadeCooldown_, 1) + "с  ");
             b += (turretCooldown_ <= 0.0f)  ? "[T] ТУРЕЛЬ (100₵)  " : ("[T] " + String((int)turretCooldown_) + "с  ");
-            b += "[B] ПЕРКИ (" + String(credits_) + "₵)";
+            b += "[B] ПЕРКИ (" + String(credits_) + "₵)  [P] БАНЯ";
             statusBuffText_->SetText(b);
         }
     }
@@ -3937,19 +4024,20 @@ private:
             body->SetColor(Color(0.90f, 0.94f, 0.98f, 1.0f));
             StyleCrispText(body);
             body->SetText(
-                "БОЕВОЕ УПРАВЛЕНИЕ 2.2 (4K CYBER OVERLOAD)\n"
+                "БОЕВОЕ УПРАВЛЕНИЕ 2.3 (4K CYBER EVOLUTION + КОЧЕТ В БАНЬКЕ)\n"
                 "  WASD — движение      SHIFT — бег        SPACE — прыжок       CTRL / C — присед\n"
-                "  ALT / X — рывок      V — удар крылом    G — яйце-граната     T — авто-турель (100₵)\n"
-                "  ЛКМ / ПКМ — огонь    R — перезарядка    1..9 — 9 стволов     B — магазин перков\n"
+                "  ALT — рывок          Z — грэппл-крюк    X — орбита ЯЙЦЕГЕДДОН P — БАНЬКА СМОТРЯЩЕГО\n"
+                "  V — удар крылом      G — яйце-граната   T — авто-турель      B — магазин перков\n"
+                "  ЛКМ / ПКМ — огонь    R — перезарядка    1..9 — 9 стволов     M — смена музыки\n"
                 "  Q / E — PBR-скин     L — 3D лазер       I — осмотр оружия    TAB — арсенал\n"
                 "  F — Тир/Арена        F2 — 4K фоторежим  F3 — телеметрия      F8 — атмосфера 4K\n"
-                "  F9 — пресет графики  F11 — полный экран F12 — 4K скриншот\n"
                 "\n"
-                "ТАКТИКА, НОВОЕ ОРУЖИЕ И ПЕРКИ\n"
+                "ТАКТИКА, БАНЬКА СМОТРЯЩЕГО [P] И ПЕРКИ\n"
+                "  • [P] «КОЧЕТ В БАНЬКЕ»: продержись 3 минуты и разгадай загадки смотрящего (14 концовок, 57 загадок)!\n"
+                "    Выход с зачётом даёт кредиты (₵) и бафф «Банный закал» (+25 HP/Брони) или «Ковш Смотрящего» (+50 HP, +15% урона)!\n"
                 "  • [8] RAILGUN прошивает ВСЕХ врагов и бочки насквозь! [9] PLASMA бьёт рикошетной плазмой.\n"
-                "  • Опасайся оранжевых ЦЫПЛЯТ-КАМИКАДЗЕ с C4 и летающих КУРО-ВАЛЬКИРИЙ на джетпаках!\n"
-                "  • Встань на светящуюся ДЖАМП-ПЛАТФОРМУ для взлёта и аэро-фрагов с высоты!\n"
-                "  • Копи кредиты (₵) за убийства и качай здоровье, скорострельность, урон и скорость в [B]!");
+                "  • Встань на ДЖАМП-ПЛАТФОРМУ или зацепись крюком [Z] для аэро-фрагов с высоты!\n"
+                "  • Копи кредиты (₵) за убийства и парение в баньке — качай перки в лаборатории [B]!");
 
             Text* hint = helpPanel_->CreateChild<Text>();
             hint->SetFont(font_, SF(18));
@@ -4134,7 +4222,7 @@ private:
 
         Text* hint = pausePanel_->CreateChild<Text>();
         hint->SetFont(font_, SF(20));
-        hint->SetText("ESC / ENTER — продолжить   |   M — в главное меню   |   Q — выход");
+        hint->SetText("ESC / ENTER — продолжить   |   P — БАНЬКА   |   M — в меню   |   Q — выход");
         hint->SetTextAlignment(HA_CENTER);
         hint->SetPosition(sw / 2 - S(480), sh / 2 + S(105));
         hint->SetWidth(S(960));
@@ -4208,15 +4296,17 @@ private:
         deployBarFill_ = nullptr; deployTimer_ = 0.0f;
         achievToastBg_ = nullptr; achievToastText_ = nullptr;
         perkShopPanel_ = nullptr; perkShopBody_ = nullptr;
+        ResetBanyaUIPointers();
 
         CreateUI();
         CreateMainMenu();
 
-        SetGameHudVisible(!inMenu_ && !gameOver_ && !paused_ && !perkShopOpen_ && !photoMode_);
-        if (mainMenuPanel_) mainMenuPanel_->SetVisible(inMenu_);
+        SetGameHudVisible(!inMenu_ && !gameOver_ && !paused_ && !perkShopOpen_ && !banyaOpen_ && !photoMode_);
+        if (mainMenuPanel_) mainMenuPanel_->SetVisible(inMenu_ && !banyaOpen_);
         if (inSettings_) { CreateSettingsPanel(); if (settingsPanel_) settingsPanel_->SetVisible(true); }
         if (armoryOpen_) { CreateArmoryMenu(); if (armoryPanel_) armoryPanel_->SetVisible(true); }
         if (perkShopOpen_) { CreatePerkShop(); if (perkShopPanel_) perkShopPanel_->SetVisible(true); }
+        if (banyaOpen_) { CreateBanyaPanel(); if (banyaPanel_) banyaPanel_->SetVisible(true); SyncBanyaVisuals(0.0f); }
         if (gameOverPanel_) gameOverPanel_->SetVisible(gameOver_);
         if (paused_) { CreatePausePanel(); if (pausePanel_) pausePanel_->SetVisible(true); }
         UpdateMainMenuSelection();
@@ -4284,6 +4374,11 @@ private:
         UpdateTelemetry(dt);
         UpdateDeployOverlay(dt);
         UpdateAchievementToast(dt);
+
+        if (banyaOpen_) {
+            UpdateBanyaSimulator(dt);
+            return;
+        }
 
         if (paused_ || helpOpen_ || perkShopOpen_) return;
 
@@ -4404,6 +4499,17 @@ private:
         if (!inMenu_ && !gameOver_ && gameMode_ == MODE_ARENA) arenaTime_ += dt;
         UpdatePickups(dt);
 
+        // Подсказка у входа в 3D «Баньку Смотрящего»
+        if (!inMenu_ && !gameOver_ && cameraNode_) {
+            if (banyaPromptCooldown_ > 0.0f) banyaPromptCooldown_ -= dt;
+            Vector3 ppos = cameraNode_->GetPosition();
+            float dBanya = Vector3(ppos.x_ - banyaDoorPos_.x_, 0.0f, ppos.z_ - banyaDoorPos_.z_).Length();
+            if (dBanya < 5.4f && banyaPromptCooldown_ <= 0.0f) {
+                banyaPromptCooldown_ = 6.5f;
+                ShowMessage("♨ БАНЬКА СМОТРЯЩЕГО — нажмите [P], чтобы попариться (бафф + ₵)!");
+            }
+        }
+
         if (comboTimer_ > 0.0f) {
             comboTimer_ -= dt;
             if (comboTimer_ <= 0.0f && comboCount_ > 0) {
@@ -4450,7 +4556,7 @@ private:
     void HandleMouseMove(StringHash eventType, VariantMap& eventData) {
         using namespace MouseMove;
         (void)eventType; (void)eventData;
-        if (loadingScreenActive_ || isMouseVisible_ || paused_ || helpOpen_ || perkShopOpen_) return;
+        if (loadingScreenActive_ || isMouseVisible_ || banyaOpen_ || paused_ || helpOpen_ || perkShopOpen_) return;
         
         auto* input = GetSubsystem<Input>();
         IntVector2 mouseMove = input->GetMouseMove();
@@ -4517,6 +4623,12 @@ private:
             return;
         }
 
+        // ===== Симулятор парной «КОЧЕТ В БАНЬКЕ» =====
+        if (banyaOpen_) {
+            HandleBanyaKey(key);
+            return;
+        }
+
         // ===== Магазин перков [B] =====
         if (perkShopOpen_) {
             if (key >= KEY_1 && key <= KEY_4) { BuyPerk(key - KEY_1); return; }
@@ -4527,11 +4639,12 @@ private:
         // ===== Экран GAME OVER =====
         if (gameOver_) {
             if (key == KEY_RETURN || key == KEY_SPACE) { PlayUISound(); RestartArena(); }
+            else if (key == KEY_P) { PlayUISound(); ShowGameOver(false); OpenBanyaSimulator(true); }
             else if (key == KEY_ESCAPE) { PlayUISound(); ShowGameOver(false); ShowMainMenu(true); }
             return;
         }
 
-        // ===== Главное меню и 14-строчные 4K настройки =====
+        // ===== Главное меню (5 пунктов: вкл. «КОЧЕТ В БАНЬКЕ») и 14-строчные 4K настройки =====
         if (inMenu_) {
             if (inSettings_) {
                 const int kRows = 14;
@@ -4543,12 +4656,14 @@ private:
                 else if (key == KEY_ESCAPE) { ShowSettings(false); }
                 return;
             }
-            if (key == KEY_UP || key == KEY_W) { menuSel_ = (menuSel_ + 3) % 4; PlayUISound(); UpdateMainMenuSelection(); }
-            else if (key == KEY_DOWN || key == KEY_S) { menuSel_ = (menuSel_ + 1) % 4; PlayUISound(); UpdateMainMenuSelection(); }
+            if (key == KEY_P) { PlayUISound(); OpenBanyaSimulator(true); return; }
+            if (key == KEY_UP || key == KEY_W) { menuSel_ = (menuSel_ + 4) % 5; PlayUISound(); UpdateMainMenuSelection(); }
+            else if (key == KEY_DOWN || key == KEY_S) { menuSel_ = (menuSel_ + 1) % 5; PlayUISound(); UpdateMainMenuSelection(); }
             else if (key == KEY_RETURN || key == KEY_SPACE) {
                 if (menuSel_ == 0) StartGameMode(MODE_RANGE);
                 else if (menuSel_ == 1) StartGameMode(MODE_ARENA);
-                else if (menuSel_ == 2) ShowSettings(true);
+                else if (menuSel_ == 2) OpenBanyaSimulator(true);
+                else if (menuSel_ == 3) ShowSettings(true);
                 else engine_->Exit();
             }
             else if (key == KEY_ESCAPE) engine_->Exit();
@@ -4558,9 +4673,16 @@ private:
         // ===== Пауза =====
         if (paused_) {
             if (key == KEY_F1) { PlayUISound(); ToggleHelp(); return; }
+            if (key == KEY_P)  { TogglePause(); OpenBanyaSimulator(false); return; }
             if (key == KEY_ESCAPE || key == KEY_RETURN) TogglePause();
             else if (key == KEY_M) { TogglePause(); ShowMainMenu(true); }
             else if (key == KEY_Q) engine_->Exit();
+            return;
+        }
+
+        // P — вход в парную «КОЧЕТ В БАНЬКЕ» прямо из боя
+        if (key == KEY_P) {
+            OpenBanyaSimulator(false);
             return;
         }
 
@@ -4692,6 +4814,11 @@ private:
         if (loadingScreenActive_) return;
         int button = eventData[P_BUTTON].GetI32();
         
+        if (banyaOpen_) {
+            if (button == MOUSEB_LEFT) HandleBanyaClick();
+            return;
+        }
+
         if (armoryOpen_) {
             HandleArmoryClick(button == MOUSEB_LEFT);
             return;
@@ -5535,7 +5662,8 @@ private:
         if (currentWeapon_ != W_RAILGUN && currentWeapon_ != W_PLASMA) SpawnShellCasing();
         
         const WeaponDef& wdef = WEAPON_DEFS[currentWeapon_];
-        float dmg = wdef.damage * (1.0f + 0.14f * (float)perkDmgLvl_) * (overdriveTimer_ > 0.0f ? 2.0f : 1.0f);
+        float banyaDmgMul = (banyaBuffTier_ >= 2) ? 1.15f : 1.0f;
+        float dmg = wdef.damage * (1.0f + 0.14f * (float)perkDmgLvl_) * banyaDmgMul * (overdriveTimer_ > 0.0f ? 2.0f : 1.0f);
         bool anyPelletHit = false;
         if (currentWeapon_ == W_RAILGUN) {
             anyPelletHit = PerformRailgunPierce(dmg, wdef.spread);
@@ -6793,6 +6921,18 @@ private:
             highScore_ = Max(0, XmlGetInt(prog, "highscore", highScore_));
         if (prog.HasAttribute("achievements"))
             achievementsMask_ = Clamp(XmlGetInt(prog, "achievements", achievementsMask_), 0, Cyber::ALL_ACHIEVEMENTS_MASK);
+        if (prog.HasAttribute("banyaSeen"))
+            banyaSim_.lifetime.seenEndingsMask = Clamp(XmlGetInt(prog, "banyaSeen", 0), 0, Banya::ALL_ENDINGS_MASK);
+        if (prog.HasAttribute("banyaRuns"))
+            banyaSim_.lifetime.runs = Max(0, XmlGetInt(prog, "banyaRuns", 0));
+        if (prog.HasAttribute("banyaWins"))
+            banyaSim_.lifetime.wins = Max(0, XmlGetInt(prog, "banyaWins", 0));
+        if (prog.HasAttribute("banyaBest"))
+            banyaSim_.lifetime.bestScore = Max(0, XmlGetInt(prog, "banyaBest", 0));
+        if (prog.HasAttribute("banyaBuff"))
+            banyaBuffTier_ = Clamp(XmlGetInt(prog, "banyaBuff", 0), 0, 2);
+        if (prog.HasAttribute("banyaCredits"))
+            banyaBonusCredits_ = Clamp(XmlGetInt(prog, "banyaCredits", 0), 0, 50000);
     }
 
     void SaveSettingsFile() {
@@ -6825,6 +6965,12 @@ private:
         XMLElement prog = rootEl.CreateChild("progress");
         XmlSetInt(prog, "highscore",    highScore_);
         XmlSetInt(prog, "achievements", achievementsMask_);
+        XmlSetInt(prog, "banyaSeen",    banyaSim_.lifetime.seenEndingsMask);
+        XmlSetInt(prog, "banyaRuns",    banyaSim_.lifetime.runs);
+        XmlSetInt(prog, "banyaWins",    banyaSim_.lifetime.wins);
+        XmlSetInt(prog, "banyaBest",    banyaSim_.lifetime.bestScore);
+        XmlSetInt(prog, "banyaBuff",    banyaBuffTier_);
+        XmlSetInt(prog, "banyaCredits", banyaBonusCredits_);
         String dst = SettingsPath();
         String tmp = dst + ".tmp";
         auto* fs = GetSubsystem<FileSystem>();
@@ -6979,19 +7125,19 @@ private:
             menuParticleSpeed_.Push((18.0f + rand() % 42) * uiScale_);
         }
 
-        int plateW = S(700), plateH = S(490);
+        int plateW = S(720), plateH = S(544);
         menuPlate_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuPlate_->SetPosition(sw / 2 - plateW / 2, sh / 2 - S(260));
+        menuPlate_->SetPosition(sw / 2 - plateW / 2, sh / 2 - S(278));
         menuPlate_->SetSize(plateW, plateH);
         menuPlate_->SetColor(Color(0.018f, 0.042f, 0.088f, 0.64f));
 
         int bTh = Max(2, S(2.0f));
         struct Edge { int x, y, w, h; };
         Edge edges[4] = {
-            { sw/2 - plateW/2 - bTh, sh/2 - S(260) - bTh, plateW + bTh*2, bTh },
-            { sw/2 - plateW/2 - bTh, sh/2 - S(260) + plateH, plateW + bTh*2, bTh },
-            { sw/2 - plateW/2 - bTh, sh/2 - S(260) - bTh, bTh, plateH + bTh*2 },
-            { sw/2 + plateW/2,       sh/2 - S(260) - bTh, bTh, plateH + bTh*2 }
+            { sw/2 - plateW/2 - bTh, sh/2 - S(278) - bTh, plateW + bTh*2, bTh },
+            { sw/2 - plateW/2 - bTh, sh/2 - S(278) + plateH, plateW + bTh*2, bTh },
+            { sw/2 - plateW/2 - bTh, sh/2 - S(278) - bTh, bTh, plateH + bTh*2 },
+            { sw/2 + plateW/2,       sh/2 - S(278) - bTh, bTh, plateH + bTh*2 }
         };
         for (int i = 0; i < 4; ++i) {
             BorderImage* e = mainMenuPanel_->CreateChild<BorderImage>();
@@ -7001,53 +7147,59 @@ private:
         }
 
         Text* title = mainMenuPanel_->CreateChild<Text>();
-        title->SetFont(font_, SF(66));
-        title->SetText("CHIKENGUN 2.2");
+        title->SetFont(font_, SF(64));
+        title->SetText("CHIKENGUN 2.3");
         title->SetTextAlignment(HA_CENTER);
-        title->SetPosition(sw / 2 - S(420), sh / 2 - S(232));
+        title->SetPosition(sw / 2 - S(420), sh / 2 - S(252));
         title->SetWidth(S(840));
         title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
         StyleCrispText(title, true);
         menuTitle_ = SharedPtr<Text>(title);
 
         menuAccentBar_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuAccentBar_->SetPosition(sw / 2 - S(200), sh / 2 - S(148));
+        menuAccentBar_->SetPosition(sw / 2 - S(200), sh / 2 - S(170));
         menuAccentBar_->SetSize(S(400), Max(2, S(2.5f)));
         menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.9f));
 
         Text* sub = mainMenuPanel_->CreateChild<Text>();
-        sub->SetFont(font_, SF(17));
-        sub->SetText("[ 4K ULTRA PBR ]   •   [ ACES HDR + CAS ]   •   [ CYBER ARENA ]");
+        sub->SetFont(font_, SF(16));
+        sub->SetText("[ 4K ULTRA PBR ]   •   [ CYBER ARENA ]   •   [ КОЧЕТ В БАНЬКЕ ]");
         sub->SetTextAlignment(HA_CENTER);
-        sub->SetPosition(sw / 2 - S(420), sh / 2 - S(132));
-        sub->SetWidth(S(840));
+        sub->SetPosition(sw / 2 - S(440), sh / 2 - S(154));
+        sub->SetWidth(S(880));
         sub->SetColor(Color(0.48f, 0.86f, 1.0f, 0.95f));
         StyleCrispText(sub);
         menuSub_ = SharedPtr<Text>(sub);
 
-        const char* items[4] = { "ПОЛИГОН (тир 4K)", "КИБЕР-АРЕНА (волны + босс)", "НАСТРОЙКИ 4K ULTRA", "ВЫХОД" };
-        for (int i = 0; i < 4; ++i) {
+        const char* items[5] = {
+            "ПОЛИГОН (тир 4K)",
+            "КИБЕР-АРЕНА (волны + босс)",
+            "КОЧЕТ В БАНЬКЕ (симулятор парной)",
+            "НАСТРОЙКИ 4K ULTRA",
+            "ВЫХОД"
+        };
+        for (int i = 0; i < 5; ++i) {
             BorderImage* rowBg = mainMenuPanel_->CreateChild<BorderImage>();
-            rowBg->SetPosition(sw / 2 - S(280), sh / 2 - S(72) + i * S(50));
-            rowBg->SetSize(S(560), S(42));
+            rowBg->SetPosition(sw / 2 - S(300), sh / 2 - S(100) + i * S(49));
+            rowBg->SetSize(S(600), S(42));
             rowBg->SetColor(Color(0.05f, 0.14f, 0.24f, i == menuSel_ ? 0.52f : 0.0f));
             rowBg->SetName(String("MenuRow") + String(i));
             menuRows_.Push(rowBg);
 
             Text* it = mainMenuPanel_->CreateChild<Text>();
-            it->SetFont(font_, SF(26));
+            it->SetFont(font_, SF(25));
             it->SetText(items[i]);
-            it->SetPosition(sw / 2 - S(270), sh / 2 - S(66) + i * S(50));
-            it->SetWidth(S(540));
+            it->SetPosition(sw / 2 - S(290), sh / 2 - S(94) + i * S(49));
+            it->SetWidth(S(580));
             StyleCrispText(it);
             mainMenuItems_.Push(SharedPtr<Text>(it));
         }
 
         Text* hint = mainMenuPanel_->CreateChild<Text>();
         hint->SetFont(font_, SF(15));
-        hint->SetText("W/S или стрелки — выбор   •   ENTER — запуск   •   F11 — полный экран   •   F3 — телеметрия 4K");
+        hint->SetText("W/S — выбор   •   ENTER — запуск   •   [P] БАНЬКА   •   F11 — полный экран   •   F3 — FPS");
         hint->SetTextAlignment(HA_CENTER);
-        hint->SetPosition(sw / 2 - S(440), sh / 2 + S(162));
+        hint->SetPosition(sw / 2 - S(440), sh / 2 + S(186));
         hint->SetWidth(S(880));
         hint->SetColor(Color(0.75f, 0.82f, 0.90f, 0.92f));
         StyleCrispText(hint);
@@ -7159,19 +7311,28 @@ private:
     }
 
     void UpdateMainMenuSelection() {
-        static const char* labels[4] = { "ПОЛИГОН (тир 4K)", "КИБЕР-АРЕНА (волны + босс)", "НАСТРОЙКИ 4K ULTRA", "ВЫХОД" };
+        static const char* labels[5] = {
+            "ПОЛИГОН (тир 4K)",
+            "КИБЕР-АРЕНА (волны + босс)",
+            "КОЧЕТ В БАНЬКЕ (симулятор парной)",
+            "НАСТРОЙКИ 4K ULTRA",
+            "ВЫХОД"
+        };
         auto* gfx = GetSubsystem<Graphics>();
         int sw = gfx->GetWidth();
         for (unsigned i = 0; i < mainMenuItems_.Size(); ++i) {
             bool sel = ((int)i == menuSel_);
             mainMenuItems_[i]->SetText((sel ? "\xe2\x96\xb6  " : "   ") + String(labels[i]) + (sel ? "  \xe2\x97\x80" : ""));
-            mainMenuItems_[i]->SetColor(sel ? Color(1.0f, 0.87f, 0.30f, 1.0f) : Color(0.58f, 0.66f, 0.76f, 1.0f));
+            Color unselCol = (i == 2) ? Color(0.96f, 0.76f, 0.48f, 1.0f) : Color(0.58f, 0.66f, 0.76f, 1.0f);
+            mainMenuItems_[i]->SetColor(sel ? Color(1.0f, 0.87f, 0.30f, 1.0f) : unselCol);
             if ((int)menuRows_.Size() > (int)i && i < mainMenuItems_.Size()) {
                 BorderImage* bi = static_cast<BorderImage*>(menuRows_[i]);
                 if (bi) {
-                    bi->SetColor(Color(0.06f, 0.16f, 0.28f, sel ? 0.56f : 0.0f));
+                    bi->SetColor(i == 2
+                        ? Color(0.28f, 0.14f, 0.05f, sel ? 0.68f : 0.22f)
+                        : Color(0.06f, 0.16f, 0.28f, sel ? 0.56f : 0.0f));
                     IntVector2 base = bi->GetPosition();
-                    bi->SetPosition(sw / 2 - S(280) + (sel ? S(5) : 0), base.y_);
+                    bi->SetPosition(sw / 2 - S(300) + (sel ? S(5) : 0), base.y_);
                 }
             }
         }
@@ -7388,10 +7549,13 @@ private:
         player_.headshots_ = 0;
         player_.shotsFired_ = 0;
         player_.shotsHit_ = 0;
-        player_.maxHealth_ = 100.0f;
+        float bonusHp  = (banyaBuffTier_ >= 2) ? 50.0f : (banyaBuffTier_ == 1 ? 25.0f : 0.0f);
+        float bonusArm = (banyaBuffTier_ >= 2) ? 50.0f : (banyaBuffTier_ == 1 ? 25.0f : 0.0f);
+        player_.maxHealth_ = 100.0f + bonusHp;
         player_.health_ = player_.maxHealth_;
-        player_.armor_ = 50.0f;
-        credits_ = 100;
+        player_.armor_ = Min(player_.maxArmor_, 50.0f + bonusArm);
+        credits_ = 100 + banyaBonusCredits_;
+        banyaBonusCredits_ = 0;
         perkHpLvl_ = 0;
         perkRofLvl_ = 0;
         perkDmgLvl_ = 0;
@@ -7402,7 +7566,7 @@ private:
         grenadeCooldown_ = 0.0f;
         turretCooldown_ = 0.0f;
         grappleCooldown_ = 0.0f;
-        orbitalCharge_ = 35.0f; // стартовый тактический заряд орбиты 35%
+        orbitalCharge_ = (banyaBuffTier_ >= 2) ? 70.0f : 35.0f; // Ковш Смотрящего даёт +35% заряда Орбиты!
         activeMutator_ = Cyber::MUT_STANDARD;
         multiKillCount_ = 0;
         multiKillTimer_ = 0.0f;
@@ -8337,6 +8501,1018 @@ private:
         // Рекорд обновляем в памяти; на диск пишем только в GAME OVER/настройках.
         // Раньше settings.ini перезаписывался на КАЖДОМ убийстве (I/O в игровом цикле).
         if (player_.score_ > highScore_) highScore_ = player_.score_;
+    }
+
+    // =========================================================================
+    // СИМУЛЯТОР ПАРНОЙ «КОЧЕТ В БАНЬКЕ» (14 концовок, 57 загадок, баффы Арены)
+    // =========================================================================
+
+    void ResetBanyaUIPointers() {
+        banyaParticles_.Clear();
+        banyaPanel_ = nullptr; banyaSceneBox_ = nullptr;
+        banyaRiddleBox_ = nullptr; banyaEndBox_ = nullptr; banyaStatsBox_ = nullptr;
+        banyaHeatWash_ = nullptr; banyaAirWash_ = nullptr; banyaColdWash_ = nullptr; banyaEndTint_ = nullptr;
+        banyaStoveFire_ = nullptr; banyaStonesGlow_ = nullptr; banyaVenikVis_ = nullptr;
+        banyaRoosterBody_ = nullptr; banyaRoosterComb_ = nullptr; banyaRoosterCrown_ = nullptr;
+        banyaRoosterEyesText_ = nullptr;
+        banyaTempText_ = nullptr; banyaMoodText_ = nullptr; banyaClockText_ = nullptr;
+        banyaCaptionText_ = nullptr; banyaBadgeText_ = nullptr;
+        banyaBarSteam_ = nullptr; banyaBarFire_ = nullptr; banyaBarAir_ = nullptr;
+        banyaBarLife_ = nullptr; banyaBarTime_ = nullptr;
+        banyaRiddleQ_ = nullptr; banyaRiddleTime_ = nullptr; banyaRiddleFb_ = nullptr;
+        banyaRiddleTimerBar_ = nullptr;
+        for (int i = 0; i < 4; ++i) { banyaRiddleOptBg_[i] = nullptr; banyaRiddleOptTxt_[i] = nullptr; }
+        for (int i = 0; i < 5; ++i) { banyaActBtnBg_[i] = nullptr; }
+        banyaStatsBtnBg_ = nullptr;
+        banyaEndTitle_ = nullptr; banyaEndText_ = nullptr; banyaEndHint_ = nullptr; banyaEndStats_ = nullptr;
+        banyaEndBtnRestart_ = nullptr; banyaEndBtnStats_ = nullptr; banyaEndBtnBack_ = nullptr;
+        banyaStatsRunText_ = nullptr; banyaStatsAllText_ = nullptr; banyaStatsCloseBtn_ = nullptr;
+    }
+
+    static String FormatBanyaClock(float sec) {
+        int s = Max(0, (int)ceilf(sec));
+        int m = s / 60;
+        int r = s % 60;
+        return String(m) + ":" + (r < 10 ? "0" : "") + String(r);
+    }
+
+    void PlayBanyaSound(Sound* s, float gain = 0.85f) {
+        if (soundSource_ && s) {
+            soundSource_->SetGain(sfxVolume_ * gain);
+            soundSource_->Play(s);
+        }
+    }
+
+    void SetBanyaCaption(const String& txt, float holdSec = 4.0f) {
+        if (banyaCaptionText_) {
+            banyaCaptionText_->SetText(txt);
+            banyaCaptionText_->SetOpacity(1.0f);
+        }
+        banyaCaptionTimer_ = holdSec;
+        banyaLastWarnTime_ = timeAcc_;
+    }
+
+    void SpawnBanyaParticle(float nx, float ny, float vx, float vy, float ttl, float sz, int kind) {
+        if (!banyaSceneBox_) return;
+        if (banyaParticles_.Size() >= 96) {
+            if (banyaParticles_[0].el_) banyaParticles_[0].el_->Remove();
+            banyaParticles_.Erase(0);
+        }
+        BorderImage* p = banyaSceneBox_->CreateChild<BorderImage>();
+        int pxSz = Max(2, S(sz));
+        p->SetSize(pxSz, pxSz);
+        Color col(1.0f, 1.0f, 1.0f, 0.35f);
+        if (kind == 1)      col = Color(0.28f, 0.20f, 0.14f, 0.45f); // smoke
+        else if (kind == 2) col = Color(0.72f, 0.90f, 0.98f, 0.85f); // water drop
+        else if (kind == 3) col = Color(0.45f, 0.62f, 0.28f, 0.90f); // birch leaf
+        else if (kind == 4) col = Color(0.95f, 0.98f, 1.00f, 0.88f); // snow
+        else if (kind == 5) col = Color(1.00f, 0.62f, 0.18f, 0.95f); // ember
+        else if (kind == 6) col = Color(1.00f, 0.90f, 0.55f, 0.95f); // spark
+        p->SetColor(col);
+        p->SetPosition((int)(nx * banyaSceneBox_->GetWidth()), (int)(ny * banyaSceneBox_->GetHeight()));
+        BanyaUIParticle bp;
+        bp.el_ = SharedPtr<BorderImage>(p);
+        bp.x_ = nx; bp.y_ = ny; bp.vx_ = vx; bp.vy_ = vy;
+        bp.life_ = 0.0f; bp.ttl_ = ttl; bp.sz_ = sz; bp.kind_ = kind;
+        banyaParticles_.Push(bp);
+    }
+
+    void CreateBanyaPanel() {
+        if (banyaPanel_) return;
+        RefreshUIScale();
+        auto* ui = GetSubsystem<UI>();
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!ui || !gfx) return;
+        UIElement* root = ui->GetRoot();
+        int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+
+        banyaPanel_ = root->CreateChild<UIElement>("BanyaPanel");
+        banyaPanel_->SetSize(sw, sh);
+        banyaPanel_->SetPriority(700);
+
+        // Тёплый хвойно-древесный фон предбанника
+        BorderImage* outerBg = banyaPanel_->CreateChild<BorderImage>();
+        outerBg->SetSize(sw, sh);
+        outerBg->SetColor(Color(0.09f, 0.06f, 0.04f, 0.97f));
+
+        // Верхняя плашка интеграции CHIKENGUN 2.3
+        BorderImage* topStrip = banyaPanel_->CreateChild<BorderImage>();
+        topStrip->SetPosition(0, 0);
+        topStrip->SetSize(sw, S(40));
+        topStrip->SetColor(Color(0.14f, 0.08f, 0.04f, 0.95f));
+
+        banyaBadgeText_ = topStrip->CreateChild<Text>();
+        banyaBadgeText_->SetFont(font_, SF(14));
+        banyaBadgeText_->SetPosition(S(18), S(10));
+        banyaBadgeText_->SetColor(Color(1.0f, 0.86f, 0.62f, 1.0f));
+        StyleCrispText(banyaBadgeText_);
+
+        // Сцена парной (пропорции 1000x600 по центру экрана)
+        int scW = Min(sw - S(40), S(1120));
+        int scH = Min(sh - S(150), (int)(scW * 0.60f));
+        int scX = (sw - scW) / 2;
+        int scY = S(48);
+
+        banyaSceneBox_ = banyaPanel_->CreateChild<UIElement>("BanyaScene");
+        banyaSceneBox_->SetPosition(scX, scY);
+        banyaSceneBox_->SetSize(scW, scH);
+        banyaSceneBox_->SetClipChildren(true);
+
+        // Бревенчатая стена
+        BorderImage* wall = banyaSceneBox_->CreateChild<BorderImage>();
+        wall->SetSize(scW, scH);
+        wall->SetColor(Color(0.36f, 0.22f, 0.12f, 1.0f));
+        for (int i = 0; i < 12; ++i) {
+            BorderImage* plank = banyaSceneBox_->CreateChild<BorderImage>();
+            plank->SetPosition((scW * i) / 12, 0);
+            plank->SetSize(Max(2, S(2)), scH);
+            plank->SetColor(Color(0.16f, 0.09f, 0.04f, 0.52f));
+        }
+        // Потолочная балка и пол
+        BorderImage* ceil = banyaSceneBox_->CreateChild<BorderImage>();
+        ceil->SetPosition(0, 0); ceil->SetSize(scW, (int)(scH * 0.11f));
+        ceil->SetColor(Color(0.22f, 0.13f, 0.07f, 1.0f));
+
+        BorderImage* floorPlank = banyaSceneBox_->CreateChild<BorderImage>();
+        floorPlank->SetPosition(0, (int)(scH * 0.81f));
+        floorPlank->SetSize(scW, scH - (int)(scH * 0.81f));
+        floorPlank->SetColor(Color(0.27f, 0.16f, 0.09f, 1.0f));
+
+        // Заснеженное окно справа
+        BorderImage* winFrame = banyaSceneBox_->CreateChild<BorderImage>();
+        winFrame->SetPosition((int)(scW * 0.76f), (int)(scH * 0.16f));
+        winFrame->SetSize((int)(scW * 0.19f), (int)(scH * 0.30f));
+        winFrame->SetColor(Color(0.18f, 0.10f, 0.05f, 1.0f));
+
+        BorderImage* winGlass = winFrame->CreateChild<BorderImage>();
+        winGlass->SetPosition(S(6), S(6));
+        winGlass->SetSize(winFrame->GetWidth() - S(12), winFrame->GetHeight() - S(12));
+        winGlass->SetColor(Color(0.72f, 0.86f, 0.94f, 1.0f));
+
+        // Каменная печь слева + труба + топка + камни
+        BorderImage* pipe = banyaSceneBox_->CreateChild<BorderImage>();
+        pipe->SetPosition((int)(scW * 0.15f), (int)(scH * 0.11f));
+        pipe->SetSize((int)(scW * 0.08f), (int)(scH * 0.34f));
+        pipe->SetColor(Color(0.36f, 0.34f, 0.31f, 1.0f));
+
+        BorderImage* stove = banyaSceneBox_->CreateChild<BorderImage>();
+        stove->SetPosition((int)(scW * 0.06f), (int)(scH * 0.44f));
+        stove->SetSize((int)(scW * 0.28f), (int)(scH * 0.42f));
+        stove->SetColor(Color(0.29f, 0.25f, 0.22f, 1.0f));
+
+        banyaStoveFire_ = stove->CreateChild<BorderImage>();
+        banyaStoveFire_->SetPosition((int)(stove->GetWidth() * 0.30f), (int)(stove->GetHeight() * 0.56f));
+        banyaStoveFire_->SetSize((int)(stove->GetWidth() * 0.40f), (int)(stove->GetHeight() * 0.38f));
+        banyaStoveFire_->SetColor(Color(1.0f, 0.58f, 0.16f, 0.95f));
+
+        banyaStonesGlow_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaStonesGlow_->SetPosition((int)(scW * 0.09f), (int)(scH * 0.40f));
+        banyaStonesGlow_->SetSize((int)(scW * 0.22f), (int)(scH * 0.06f));
+        banyaStonesGlow_->SetColor(Color(0.45f, 0.41f, 0.38f, 1.0f));
+
+        // Двухъярусный деревянный полок + шайка с водой
+        BorderImage* bench1 = banyaSceneBox_->CreateChild<BorderImage>();
+        bench1->SetPosition((int)(scW * 0.42f), (int)(scH * 0.54f));
+        bench1->SetSize((int)(scW * 0.55f), (int)(scH * 0.06f));
+        bench1->SetColor(Color(0.76f, 0.56f, 0.35f, 1.0f));
+
+        BorderImage* bench2 = banyaSceneBox_->CreateChild<BorderImage>();
+        bench2->SetPosition((int)(scW * 0.47f), (int)(scH * 0.71f));
+        bench2->SetSize((int)(scW * 0.46f), (int)(scH * 0.05f));
+        bench2->SetColor(Color(0.68f, 0.48f, 0.29f, 1.0f));
+
+        BorderImage* bucket = banyaSceneBox_->CreateChild<BorderImage>();
+        bucket->SetPosition((int)(scW * 0.74f), (int)(scH * 0.78f));
+        bucket->SetSize((int)(scW * 0.10f), (int)(scH * 0.13f));
+        bucket->SetColor(Color(0.54f, 0.35f, 0.19f, 1.0f));
+        BorderImage* bucketWater = bucket->CreateChild<BorderImage>();
+        bucketWater->SetPosition(S(4), S(3));
+        bucketWater->SetSize(bucket->GetWidth() - S(8), S(8));
+        bucketWater->SetColor(Color(0.32f, 0.62f, 0.72f, 0.95f));
+
+        // Берёзовый веник на гвоздике (анимируется к кочету при [2])
+        banyaVenikVis_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaVenikVis_->SetPosition((int)(scW * 0.41f), (int)(scH * 0.31f));
+        banyaVenikVis_->SetSize((int)(scW * 0.05f), (int)(scH * 0.14f));
+        banyaVenikVis_->SetColor(Color(0.38f, 0.56f, 0.26f, 1.0f));
+
+        // Кочет в полотенце на полке
+        banyaRoosterBody_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaRoosterBody_->SetPosition((int)(scW * 0.61f), (int)(scH * 0.36f));
+        banyaRoosterBody_->SetSize((int)(scW * 0.11f), (int)(scH * 0.18f));
+        banyaRoosterBody_->SetColor(Color(0.96f, 0.91f, 0.82f, 1.0f));
+
+        BorderImage* towel = banyaRoosterBody_->CreateChild<BorderImage>();
+        towel->SetPosition(0, (int)(banyaRoosterBody_->GetHeight() * 0.54f));
+        towel->SetSize(banyaRoosterBody_->GetWidth(), (int)(banyaRoosterBody_->GetHeight() * 0.42f));
+        towel->SetColor(Color(0.93f, 0.89f, 0.82f, 1.0f));
+        BorderImage* towelStripe = towel->CreateChild<BorderImage>();
+        towelStripe->SetPosition(0, towel->GetHeight() / 2);
+        towelStripe->SetSize(towel->GetWidth(), Max(2, S(4)));
+        towelStripe->SetColor(Color(0.76f, 0.29f, 0.21f, 0.9f));
+
+        banyaRoosterComb_ = banyaRoosterBody_->CreateChild<BorderImage>();
+        banyaRoosterComb_->SetPosition(S(8), -S(14));
+        banyaRoosterComb_->SetSize((int)(banyaRoosterBody_->GetWidth() * 0.42f), S(15));
+        banyaRoosterComb_->SetColor(Color(0.88f, 0.26f, 0.18f, 1.0f));
+
+        banyaRoosterCrown_ = banyaRoosterBody_->CreateChild<BorderImage>();
+        banyaRoosterCrown_->SetPosition(S(6), -S(24));
+        banyaRoosterCrown_->SetSize((int)(banyaRoosterBody_->GetWidth() * 0.50f), S(12));
+        banyaRoosterCrown_->SetColor(Color(1.0f, 0.84f, 0.26f, 1.0f));
+        banyaRoosterCrown_->SetVisible(false);
+
+        BorderImage* beak = banyaRoosterBody_->CreateChild<BorderImage>();
+        beak->SetPosition(-S(14), S(14));
+        beak->SetSize(S(15), S(10));
+        beak->SetColor(Color(0.98f, 0.72f, 0.22f, 1.0f));
+
+        banyaRoosterEyesText_ = banyaRoosterBody_->CreateChild<Text>();
+        banyaRoosterEyesText_->SetFont(font_, SF(15));
+        banyaRoosterEyesText_->SetPosition(S(10), S(8));
+        banyaRoosterEyesText_->SetColor(Color(0.14f, 0.08f, 0.04f, 1.0f));
+        banyaRoosterEyesText_->SetText("●");
+
+        // Атмосферные фильтры опасности / концовок
+        banyaColdWash_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaColdWash_->SetSize(scW, scH);
+        banyaColdWash_->SetColor(Color(0.66f, 0.85f, 0.94f, 0.0f));
+
+        banyaHeatWash_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaHeatWash_->SetSize(scW, scH);
+        banyaHeatWash_->SetColor(Color(1.0f, 0.28f, 0.08f, 0.0f));
+
+        banyaAirWash_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaAirWash_->SetSize(scW, scH);
+        banyaAirWash_->SetColor(Color(0.04f, 0.08f, 0.04f, 0.0f));
+
+        banyaEndTint_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaEndTint_->SetSize(scW, scH);
+        banyaEndTint_->SetColor(Color(0.0f, 0.0f, 0.0f, 0.0f));
+
+        // HUD термометра и 4 шкал слева сверху
+        BorderImage* hudCard = banyaSceneBox_->CreateChild<BorderImage>();
+        hudCard->SetPosition(S(16), S(16));
+        hudCard->SetSize(S(216), S(178));
+        hudCard->SetColor(Color(0.14f, 0.08f, 0.05f, 0.84f));
+
+        banyaTempText_ = hudCard->CreateChild<Text>();
+        banyaTempText_->SetFont(font_, SF(28));
+        banyaTempText_->SetPosition(S(14), S(8));
+        banyaTempText_->SetColor(Color(1.0f, 0.87f, 0.68f, 1.0f));
+        StyleCrispText(banyaTempText_, true);
+
+        banyaMoodText_ = hudCard->CreateChild<Text>();
+        banyaMoodText_->SetFont(font_, SF(13));
+        banyaMoodText_->SetPosition(S(14), S(46));
+        banyaMoodText_->SetColor(Color(0.96f, 0.90f, 0.80f, 0.90f));
+        StyleCrispText(banyaMoodText_);
+
+        const char* barNames[4] = { "ПАР", "ПЕЧЬ", "ВОЗДУХ", "КОЧЕТ" };
+        Color barCols[4] = {
+            Color(1.0f, 0.74f, 0.45f, 1.0f),
+            Color(1.0f, 0.38f, 0.16f, 1.0f),
+            Color(0.42f, 0.80f, 0.94f, 1.0f),
+            Color(0.45f, 0.82f, 0.42f, 1.0f)
+        };
+        SharedPtr<BorderImage>* barTargets[4] = { &banyaBarSteam_, &banyaBarFire_, &banyaBarAir_, &banyaBarLife_ };
+        for (int i = 0; i < 4; ++i) {
+            Text* lbl = hudCard->CreateChild<Text>();
+            lbl->SetFont(font_, SF(11));
+            lbl->SetText(barNames[i]);
+            lbl->SetPosition(S(14), S(74 + i * 24));
+            lbl->SetColor(Color(0.92f, 0.84f, 0.72f, 0.85f));
+            StyleCrispText(lbl);
+
+            BorderImage* trk = hudCard->CreateChild<BorderImage>();
+            trk->SetPosition(S(74), S(79 + i * 24));
+            trk->SetSize(S(126), S(8));
+            trk->SetColor(Color(1.0f, 1.0f, 1.0f, 0.15f));
+
+            BorderImage* fill = trk->CreateChild<BorderImage>();
+            fill->SetSize(S(60), S(8));
+            fill->SetColor(barCols[i]);
+            *(barTargets[i]) = SharedPtr<BorderImage>(fill);
+        }
+
+        // Таймер 3:00 и счётчик загадок по центру сверху
+        BorderImage* clockCard = banyaSceneBox_->CreateChild<BorderImage>();
+        clockCard->SetPosition(scW / 2 - S(95), S(16));
+        clockCard->SetSize(S(190), S(54));
+        clockCard->SetColor(Color(0.14f, 0.08f, 0.05f, 0.84f));
+
+        banyaClockText_ = clockCard->CreateChild<Text>();
+        banyaClockText_->SetFont(font_, SF(16));
+        banyaClockText_->SetTextAlignment(HA_CENTER);
+        banyaClockText_->SetPosition(S(8), S(7));
+        banyaClockText_->SetWidth(S(174));
+        banyaClockText_->SetColor(Color(1.0f, 0.91f, 0.78f, 1.0f));
+        StyleCrispText(banyaClockText_);
+
+        BorderImage* timeTrk = clockCard->CreateChild<BorderImage>();
+        timeTrk->SetPosition(S(18), S(36));
+        timeTrk->SetSize(S(154), S(7));
+        timeTrk->SetColor(Color(1.0f, 1.0f, 1.0f, 0.16f));
+        banyaBarTime_ = timeTrk->CreateChild<BorderImage>();
+        banyaBarTime_->SetSize(S(154), S(7));
+        banyaBarTime_->SetColor(Color(1.0f, 0.78f, 0.42f, 1.0f));
+
+        // Кнопка Статистика [6] справа сверху
+        banyaStatsBtnBg_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaStatsBtnBg_->SetPosition(scW - S(168), S(16));
+        banyaStatsBtnBg_->SetSize(S(152), S(38));
+        banyaStatsBtnBg_->SetColor(Color(0.22f, 0.13f, 0.07f, 0.90f));
+        Text* stLbl = banyaStatsBtnBg_->CreateChild<Text>();
+        stLbl->SetFont(font_, SF(13));
+        stLbl->SetText("[6] СТАТИСТИКА");
+        stLbl->SetTextAlignment(HA_CENTER);
+        stLbl->SetPosition(S(6), S(9));
+        stLbl->SetWidth(S(140));
+        stLbl->SetColor(Color(1.0f, 0.89f, 0.74f, 1.0f));
+        StyleCrispText(stLbl);
+
+        // Живая карточка загадки смотрящего (игра НЕ останавливается!)
+        int rW = Min(scW - S(32), S(650));
+        banyaRiddleBox_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaRiddleBox_->SetPosition((scW - rW) / 2, scH - S(238));
+        banyaRiddleBox_->SetSize(rW, S(196));
+        static_cast<BorderImage*>(banyaRiddleBox_.Get())->SetColor(Color(0.18f, 0.10f, 0.05f, 0.96f));
+        banyaRiddleBox_->SetVisible(false);
+
+        Text* rKick = banyaRiddleBox_->CreateChild<Text>();
+        rKick->SetFont(font_, SF(12));
+        rKick->SetText("ЗАГАДКА СМОТРЯЩЕГО (ответь мышью или Q / W / E / R)");
+        rKick->SetPosition(S(14), S(8));
+        rKick->SetColor(Color(0.96f, 0.82f, 0.62f, 0.85f));
+        StyleCrispText(rKick);
+
+        banyaRiddleTime_ = banyaRiddleBox_->CreateChild<Text>();
+        banyaRiddleTime_->SetFont(font_, SF(13));
+        banyaRiddleTime_->SetPosition(rW - S(64), S(8));
+        banyaRiddleTime_->SetColor(Color(1.0f, 0.85f, 0.55f, 1.0f));
+        StyleCrispText(banyaRiddleTime_);
+
+        banyaRiddleQ_ = banyaRiddleBox_->CreateChild<Text>();
+        banyaRiddleQ_->SetFont(font_, SF(15));
+        banyaRiddleQ_->SetPosition(S(14), S(29));
+        banyaRiddleQ_->SetWidth(rW - S(28));
+        banyaRiddleQ_->SetWordwrap(true);
+        banyaRiddleQ_->SetColor(Color(1.0f, 0.95f, 0.87f, 1.0f));
+        StyleCrispText(banyaRiddleQ_);
+
+        static const char* optKeys[4] = { "[Q] ", "[W] ", "[E] ", "[R] " };
+        int optW = (rW - S(36)) / 2;
+        for (int i = 0; i < 4; ++i) {
+            BorderImage* ob = banyaRiddleBox_->CreateChild<BorderImage>();
+            ob->SetPosition(S(14) + (i % 2) * (optW + S(8)), S(76) + (i / 2) * S(38));
+            ob->SetSize(optW, S(33));
+            ob->SetColor(Color(0.30f, 0.19f, 0.10f, 0.90f));
+            banyaRiddleOptBg_[i] = SharedPtr<BorderImage>(ob);
+
+            Text* ot = ob->CreateChild<Text>();
+            ot->SetFont(font_, SF(13));
+            ot->SetPosition(S(8), S(7));
+            ot->SetWidth(optW - S(16));
+            ot->SetText(optKeys[i]);
+            ot->SetColor(Color(1.0f, 0.92f, 0.80f, 1.0f));
+            StyleCrispText(ot);
+            banyaRiddleOptTxt_[i] = SharedPtr<Text>(ot);
+        }
+
+        BorderImage* rTrk = banyaRiddleBox_->CreateChild<BorderImage>();
+        rTrk->SetPosition(S(14), S(156));
+        rTrk->SetSize(rW - S(28), S(5));
+        rTrk->SetColor(Color(1.0f, 1.0f, 1.0f, 0.16f));
+        banyaRiddleTimerBar_ = rTrk->CreateChild<BorderImage>();
+        banyaRiddleTimerBar_->SetSize(rW - S(28), S(5));
+        banyaRiddleTimerBar_->SetColor(Color(1.0f, 0.72f, 0.32f, 1.0f));
+
+        banyaRiddleFb_ = banyaRiddleBox_->CreateChild<Text>();
+        banyaRiddleFb_->SetFont(font_, SF(12));
+        banyaRiddleFb_->SetPosition(S(14), S(165));
+        banyaRiddleFb_->SetWidth(rW - S(28));
+        banyaRiddleFb_->SetColor(Color(0.85f, 0.95f, 0.78f, 1.0f));
+        StyleCrispText(banyaRiddleFb_);
+
+        // Строка реплик и 5 кнопок действий под сценой
+        banyaCaptionText_ = banyaSceneBox_->CreateChild<Text>();
+        banyaCaptionText_->SetFont(font_, SF(15));
+        banyaCaptionText_->SetTextAlignment(HA_CENTER);
+        banyaCaptionText_->SetPosition(S(40), scH - S(34));
+        banyaCaptionText_->SetWidth(scW - S(80));
+        banyaCaptionText_->SetColor(Color(1.0f, 0.94f, 0.84f, 0.96f));
+        StyleCrispText(banyaCaptionText_, true);
+
+        const char* actLabels[5] = {
+            "[1] Поддать пару",
+            "[2] Веником",
+            "[3] Окатить",
+            "[4] Проветрить",
+            "[5] Загадка"
+        };
+        int btnW = S(186), btnGap = S(10);
+        int totalBtnsW = btnW * 5 + btnGap * 4;
+        int btnStartX = (sw - totalBtnsW) / 2;
+        int btnY = scY + scH + S(12);
+        for (int i = 0; i < 5; ++i) {
+            BorderImage* b = banyaPanel_->CreateChild<BorderImage>();
+            b->SetPosition(btnStartX + i * (btnW + btnGap), btnY);
+            b->SetSize(btnW, S(42));
+            b->SetColor(Color(0.27f, 0.16f, 0.09f, 0.95f));
+            banyaActBtnBg_[i] = SharedPtr<BorderImage>(b);
+
+            Text* bt = b->CreateChild<Text>();
+            bt->SetFont(font_, SF(14));
+            bt->SetText(actLabels[i]);
+            bt->SetTextAlignment(HA_CENTER);
+            bt->SetPosition(S(6), S(11));
+            bt->SetWidth(btnW - S(12));
+            bt->SetColor(Color(1.0f, 0.91f, 0.78f, 1.0f));
+            StyleCrispText(bt);
+        }
+
+        Text* foot = banyaPanel_->CreateChild<Text>();
+        foot->SetFont(font_, SF(12));
+        foot->SetTextAlignment(HA_CENTER);
+        foot->SetPosition(S(20), btnY + S(50));
+        foot->SetWidth(sw - S(40));
+        foot->SetColor(Color(0.84f, 0.76f, 0.64f, 0.72f));
+        foot->SetText("Цель: 3 минуты и минимум 3 загадки смотрящего (6 — на Ковш Смотрящего). [1..5] действия, [Q/W/E/R] ответы, [6] статистика, [ESC] выход.");
+        StyleCrispText(foot);
+
+        // Оверлей концовки (14 концовок)
+        banyaEndBox_ = banyaPanel_->CreateChild<BorderImage>();
+        int eW = S(580), eH = S(360);
+        banyaEndBox_->SetPosition((sw - eW) / 2, (sh - eH) / 2);
+        banyaEndBox_->SetSize(eW, eH);
+        static_cast<BorderImage*>(banyaEndBox_.Get())->SetColor(Color(0.18f, 0.11f, 0.06f, 0.98f));
+        banyaEndBox_->SetVisible(false);
+
+        banyaEndTitle_ = banyaEndBox_->CreateChild<Text>();
+        banyaEndTitle_->SetFont(font_, SF(28));
+        banyaEndTitle_->SetTextAlignment(HA_CENTER);
+        banyaEndTitle_->SetPosition(S(20), S(18));
+        banyaEndTitle_->SetWidth(eW - S(40));
+        banyaEndTitle_->SetColor(Color(1.0f, 0.85f, 0.55f, 1.0f));
+        StyleCrispText(banyaEndTitle_, true);
+
+        banyaEndText_ = banyaEndBox_->CreateChild<Text>();
+        banyaEndText_->SetFont(font_, SF(15));
+        banyaEndText_->SetPosition(S(24), S(66));
+        banyaEndText_->SetWidth(eW - S(48));
+        banyaEndText_->SetWordwrap(true);
+        banyaEndText_->SetColor(Color(0.94f, 0.87f, 0.78f, 1.0f));
+        StyleCrispText(banyaEndText_);
+
+        banyaEndHint_ = banyaEndBox_->CreateChild<Text>();
+        banyaEndHint_->SetFont(font_, SF(13));
+        banyaEndHint_->SetPosition(S(24), S(148));
+        banyaEndHint_->SetWidth(eW - S(48));
+        banyaEndHint_->SetWordwrap(true);
+        banyaEndHint_->SetColor(Color(0.86f, 0.78f, 0.66f, 0.92f));
+        StyleCrispText(banyaEndHint_);
+
+        banyaEndStats_ = banyaEndBox_->CreateChild<Text>();
+        banyaEndStats_->SetFont(font_, SF(14));
+        banyaEndStats_->SetTextAlignment(HA_CENTER);
+        banyaEndStats_->SetPosition(S(20), S(208));
+        banyaEndStats_->SetWidth(eW - S(40));
+        banyaEndStats_->SetColor(Color(1.0f, 0.88f, 0.58f, 1.0f));
+        StyleCrispText(banyaEndStats_);
+
+        auto mkEndBtn = [&](int bx, const char* lbl, const Color& bgCol) -> SharedPtr<BorderImage> {
+            BorderImage* bb = banyaEndBox_->CreateChild<BorderImage>();
+            bb->SetPosition(bx, eH - S(58));
+            bb->SetSize(S(168), S(40));
+            bb->SetColor(bgCol);
+            Text* tt = bb->CreateChild<Text>();
+            tt->SetFont(font_, SF(14));
+            tt->SetText(lbl);
+            tt->SetTextAlignment(HA_CENTER);
+            tt->SetPosition(S(6), S(10));
+            tt->SetWidth(S(156));
+            tt->SetColor(Color(1.0f, 0.94f, 0.84f, 1.0f));
+            StyleCrispText(tt);
+            return SharedPtr<BorderImage>(bb);
+        };
+        banyaEndBtnRestart_ = mkEndBtn(S(26),  "[ENTER] Ещё раз",  Color(0.36f, 0.21f, 0.10f, 0.98f));
+        banyaEndBtnStats_   = mkEndBtn(S(206), "[6] Статистика",   Color(0.24f, 0.15f, 0.08f, 0.95f));
+        banyaEndBtnBack_    = mkEndBtn(S(386), "[ESC] В Чикенган", Color(0.14f, 0.34f, 0.24f, 0.98f));
+
+        // Двухколоночная панель статистики [6] (ставит симуляцию и таймер загадки на паузу!)
+        banyaStatsBox_ = banyaPanel_->CreateChild<BorderImage>();
+        int sW = S(640), sH = S(420);
+        banyaStatsBox_->SetPosition((sw - sW) / 2, (sh - sH) / 2);
+        banyaStatsBox_->SetSize(sW, sH);
+        static_cast<BorderImage*>(banyaStatsBox_.Get())->SetColor(Color(0.16f, 0.10f, 0.05f, 0.98f));
+        banyaStatsBox_->SetVisible(false);
+
+        Text* stHead = banyaStatsBox_->CreateChild<Text>();
+        stHead->SetFont(font_, SF(22));
+        stHead->SetText("СТАТИСТИКА ПАРНОЙ (пауза)");
+        stHead->SetPosition(S(22), S(16));
+        stHead->SetColor(Color(1.0f, 0.86f, 0.56f, 1.0f));
+        StyleCrispText(stHead, true);
+
+        banyaStatsCloseBtn_ = banyaStatsBox_->CreateChild<BorderImage>();
+        banyaStatsCloseBtn_->SetPosition(sW - S(128), S(14));
+        banyaStatsCloseBtn_->SetSize(S(106), S(32));
+        banyaStatsCloseBtn_->SetColor(Color(0.32f, 0.19f, 0.10f, 0.95f));
+        Text* clTxt = banyaStatsCloseBtn_->CreateChild<Text>();
+        clTxt->SetFont(font_, SF(13));
+        clTxt->SetText("[6/ESC] Закр.");
+        clTxt->SetTextAlignment(HA_CENTER);
+        clTxt->SetPosition(S(4), S(7));
+        clTxt->SetWidth(S(98));
+        clTxt->SetColor(Color(1.0f, 0.92f, 0.80f, 1.0f));
+        StyleCrispText(clTxt);
+
+        banyaStatsRunText_ = banyaStatsBox_->CreateChild<Text>();
+        banyaStatsRunText_->SetFont(font_, SF(13));
+        banyaStatsRunText_->SetPosition(S(22), S(62));
+        banyaStatsRunText_->SetWidth(sW / 2 - S(30));
+        banyaStatsRunText_->SetColor(Color(0.95f, 0.89f, 0.80f, 1.0f));
+        StyleCrispText(banyaStatsRunText_);
+
+        banyaStatsAllText_ = banyaStatsBox_->CreateChild<Text>();
+        banyaStatsAllText_->SetFont(font_, SF(13));
+        banyaStatsAllText_->SetPosition(sW / 2 + S(12), S(62));
+        banyaStatsAllText_->SetWidth(sW / 2 - S(30));
+        banyaStatsAllText_->SetColor(Color(0.95f, 0.89f, 0.80f, 1.0f));
+        StyleCrispText(banyaStatsAllText_);
+    }
+
+    void OpenBanyaSimulator(bool fromMenu) {
+        banyaFromMenu_ = fromMenu;
+        banyaOpen_ = true;
+        banyaRewardApplied_ = false;
+        banyaSim_.Seed((uint32_t)(timeAcc_ * 1000.0f) ^ (uint32_t)rand() ^ 0xC0C4E7u);
+        banyaSim_.Reset();
+        banyaVenikAnim_ = 0.0f;
+
+        if (!banyaPanel_) CreateBanyaPanel();
+        if (banyaPanel_) banyaPanel_->SetVisible(true);
+        if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
+        SetGameHudVisible(false);
+
+        auto* input = GetSubsystem<Input>();
+        if (input) {
+            input->SetMouseVisible(true);
+            isMouseVisible_ = true;
+        }
+        SetBanyaCaption("Банька натоплена. Три минуты, три загадки смотрящего — и выйдешь с зачётом.", 6.0f);
+        SyncBanyaVisuals(0.0f);
+    }
+
+    void CloseBanyaSimulator() {
+        banyaOpen_ = false;
+        banyaSim_.SetPaused(false);
+        if (banyaPanel_) banyaPanel_->SetVisible(false);
+        if (banyaStatsBox_) banyaStatsBox_->SetVisible(false);
+
+        auto* input = GetSubsystem<Input>();
+        if (banyaFromMenu_) {
+            ShowMainMenu(true);
+        } else {
+            SetGameHudVisible(!photoMode_);
+            if (input) {
+                input->SetMouseVisible(false);
+                isMouseVisible_ = false;
+            }
+            UpdateHealthDisplay();
+            UpdateScoreDisplay();
+            UpdateDashAndBuffHUD();
+        }
+    }
+
+    void ApplyBanyaEndingRewards() {
+        if (banyaRewardApplied_ || banyaSim_.phase != Banya::PHASE_OVER) return;
+        banyaRewardApplied_ = true;
+
+        int pts = banyaSim_.CurrentScore();
+        int cr  = Banya::ComputeCreditsReward(pts, banyaSim_.ending);
+        int tier = Banya::BuffTierForEnding(banyaSim_.ending);
+
+        if (banyaFromMenu_) banyaBonusCredits_ += cr;
+        else                credits_ += cr;
+
+        player_.score_ += pts;
+        if (player_.score_ > highScore_) highScore_ = player_.score_;
+
+        if (tier > banyaBuffTier_) banyaBuffTier_ = tier;
+        if (!banyaFromMenu_ && tier > 0) {
+            float addHp  = (tier >= 2) ? 50.0f : 25.0f;
+            float addArm = (tier >= 2) ? 50.0f : 25.0f;
+            player_.maxHealth_ = Max(player_.maxHealth_, 100.0f + addHp + 25.0f * (float)perkHpLvl_);
+            player_.health_    = Min(player_.maxHealth_, player_.health_ + 60.0f);
+            player_.armor_     = Min(player_.maxArmor_,  player_.armor_ + addArm);
+            if (tier >= 2) orbitalCharge_ = Min(100.0f, orbitalCharge_ + 35.0f);
+        }
+
+        if (banyaSim_.ending == Banya::END_WIN || banyaSim_.ending == Banya::END_STEWARD)
+            UnlockAchievement(12, "С ЛЁГКИМ ПАРОМ! (ЗАЧЁТ В БАНЬКЕ)");
+        if (banyaSim_.ending == Banya::END_STEWARD)
+            UnlockAchievement(13, "СМОТРЯЩИЙ ЗА БАНЕЙ (КОВШ И 6+ ЗАГАДОК)");
+
+        SaveSettingsFile();
+    }
+
+    void RefreshBanyaStatsTexts() {
+        if (!banyaStatsRunText_ || !banyaStatsAllText_) return;
+        const auto& R = banyaSim_.run;
+        const auto& L = banyaSim_.lifetime;
+        int runTot = R.correct + R.wrong + R.missed;
+        String runAcc = runTot > 0 ? (String((R.correct * 100) / runTot) + "%") : String("—");
+        int allTot = L.correct + L.wrong;
+        String allAcc = allTot > 0 ? (String((L.correct * 100) / allTot) + "%") : String("—");
+
+        String sRun = "ЭТОТ ЗАХОД\n\n"
+            "Время в бане:  " + FormatBanyaClock(Min(banyaSim_.elapsed, Banya::DURATION)) + " / 3:00\n"
+            "Диапазон жара: " + String((int)lroundf(R.minTemp)) + "–" + String((int)lroundf(R.maxTemp)) + " °C\n"
+            "В середине:    " + FormatBanyaClock(R.secComfort) + "\n"
+            "Красная зона:  " + FormatBanyaClock(R.secHot) + "\n"
+            "На холоде:     " + FormatBanyaClock(R.secCold) + "\n"
+            "Поддач пару:   " + String(R.pours) + "\n"
+            "Веником:       " + String(R.veniks) + "\n"
+            "Окатился:      " + String(R.rinses) + "\n"
+            "Проветрил:     " + String(R.vents) + "\n"
+            "Загадок:       " + String(R.asked) + " (верно " + String(R.correct) + ")\n"
+            "Точность:      " + runAcc + " (серия " + String(R.bestStreak) + ")\n"
+            "Мин. воздух:   " + String((int)lroundf(R.minAir)) + "%\n"
+            "Очков:         " + String(banyaSim_.CurrentScore());
+
+        String sAll = "ЗА ВСЁ ВРЕМЯ\n\n"
+            "Заходов:       " + String(L.runs) + "\n"
+            "Побед:         " + String(L.wins) + "\n"
+            "Лучший счёт:   " + String(L.bestScore) + "\n"
+            "Верных загадок:" + String(L.correct) + "\n"
+            "Промахов:      " + String(L.wrong) + "\n"
+            "Точность:      " + allAcc + "\n"
+            "Лучшая серия:  " + String(L.bestStreak) + "\n"
+            "Всего в парной:" + FormatBanyaClock((float)L.totalSeconds) + "\n"
+            "Рекорд загадок:" + String(L.bestRiddles) + "\n"
+            "Открыто конц.: " + String(Banya::CountSeenEndings(L.seenEndingsMask)) + " из 14\n"
+            "Бафф Арены:    " + String(banyaBuffTier_ >= 2 ? "Ковш Смотрящего" : (banyaBuffTier_ == 1 ? "Банный закал" : "нет"));
+
+        banyaStatsRunText_->SetText(sRun);
+        banyaStatsAllText_->SetText(sAll);
+    }
+
+    void ToggleBanyaStats() {
+        if (!banyaStatsBox_) return;
+        bool open = !banyaStatsBox_->IsVisible();
+        banyaStatsBox_->SetVisible(open);
+        banyaSim_.SetPaused(open);
+        if (open) RefreshBanyaStatsTexts();
+        PlayUISound();
+    }
+
+    void TriggerBanyaAction(int actIdx) {
+        if (banyaSim_.paused) return;
+        if (actIdx == 4) {
+            if (banyaSim_.OpenRiddle(false)) {
+                PlayUISound();
+                SetBanyaCaption("Смотрящий прищурился из пара и задал вопрос вне очереди.", 3.4f);
+            }
+            return;
+        }
+        if (banyaSim_.phase != Banya::PHASE_PLAY) return;
+
+        if (actIdx == 0) {
+            if (banyaSim_.ActSteam()) {
+                PlayBanyaSound(banyaSteamSound_ ? banyaSteamSound_ : barrelBoomSound_, 0.85f);
+                for (int i = 0; i < 16; ++i)
+                    SpawnBanyaParticle(0.18f + (rand() % 100) * 0.0012f, 0.42f, ((rand() % 100) - 50) * 0.001f, -0.14f - (rand() % 100) * 0.001f, 1.8f, 12.0f, 0);
+                if (banyaSim_.phase == Banya::PHASE_PLAY)
+                    SetBanyaCaption("Пшшш… пар пошёл под потолок, камни довольны.");
+            }
+        } else if (actIdx == 1) {
+            if (banyaSim_.ActVenik()) {
+                banyaVenikAnim_ = 1.6f;
+                PlayBanyaSound(banyaVenikSound_ ? banyaVenikSound_ : wingSlapSound_, 0.88f);
+                for (int i = 0; i < 14; ++i)
+                    SpawnBanyaParticle(0.62f + (rand() % 100) * 0.001f, 0.38f, ((rand() % 100) - 50) * 0.002f, 0.10f + (rand() % 100) * 0.001f, 1.6f, 6.0f, 3);
+                if (banyaSim_.phase == Banya::PHASE_PLAY)
+                    SetBanyaCaption("Берёзовый дух… косточки размякли, кочет тает.");
+            }
+        } else if (actIdx == 2) {
+            bool wasCold = false;
+            if (banyaSim_.ActWater(&wasCold)) {
+                PlayBanyaSound(banyaSplashSound_ ? banyaSplashSound_ : armorPickupSound_, 0.85f);
+                for (int i = 0; i < 16; ++i)
+                    SpawnBanyaParticle(0.76f + (rand() % 100) * 0.0008f, 0.76f, ((rand() % 100) - 65) * 0.002f, -0.18f + (rand() % 100) * 0.002f, 1.1f, 5.0f, 2);
+                if (banyaSim_.phase == Banya::PHASE_PLAY)
+                    SetBanyaCaption(wasCold ? "Ледяная вода по остывшему кочету — брр, квохчет от холода!" : "Ух! Прохладная водица из шайки — голова ясная.");
+            }
+        } else if (actIdx == 3) {
+            bool wasCold = false;
+            if (banyaSim_.ActVent(&wasCold)) {
+                PlayBanyaSound(banyaDoorSound_ ? banyaDoorSound_ : dashSound_, 0.80f);
+                for (int i = 0; i < 20; ++i)
+                    SpawnBanyaParticle(0.78f + (rand() % 100) * 0.0014f, 0.22f + (rand() % 100) * 0.0018f, -0.10f - (rand() % 100) * 0.001f, 0.08f, 1.9f, 4.5f, 4);
+                if (banyaSim_.phase == Banya::PHASE_PLAY)
+                    SetBanyaCaption(wasCold ? "И без того прохладно, а ты дверь настежь — кочет дрожит!" : "Дверь скрипнула, морозный воздух — дышать легче.");
+            }
+        }
+    }
+
+    void AnswerBanyaRiddleUI(int optIdx) {
+        if (!banyaSim_.riddle.active || banyaSim_.riddle.settled) return;
+        if (banyaSim_.AnswerRiddle(optIdx)) {
+            bool ok = (optIdx == banyaSim_.riddle.correctIdx);
+            PlayBanyaSound(ok ? comboSound_ : emptyClickSound_, 0.85f);
+            for (int i = 0; i < 12; ++i)
+                SpawnBanyaParticle(0.65f, 0.36f, ((rand() % 100) - 50) * 0.0025f, -0.12f, 1.2f, 5.0f, ok ? 6 : 1);
+        }
+    }
+
+    void HandleBanyaKey(int key) {
+        if (key == KEY_6) { ToggleBanyaStats(); return; }
+        if (key == KEY_ESCAPE) {
+            if (banyaStatsBox_ && banyaStatsBox_->IsVisible()) { ToggleBanyaStats(); return; }
+            PlayUISound();
+            CloseBanyaSimulator();
+            return;
+        }
+        if (banyaSim_.paused) return;
+
+        if (banyaSim_.phase == Banya::PHASE_OVER) {
+            if (key == KEY_RETURN || key == KEY_SPACE || key == KEY_R) {
+                PlayUISound();
+                banyaRewardApplied_ = false;
+                banyaSim_.Reset();
+                if (banyaEndBox_) banyaEndBox_->SetVisible(false);
+                SetBanyaCaption("Новый заход! Три минуты и три загадки смотрящего.", 5.0f);
+                SyncBanyaVisuals(0.0f);
+            }
+            return;
+        }
+
+        if (key >= KEY_1 && key <= KEY_5) { TriggerBanyaAction(key - KEY_1); return; }
+        if (banyaSim_.riddle.active && !banyaSim_.riddle.settled) {
+            if (key == KEY_Q) { AnswerBanyaRiddleUI(0); return; }
+            if (key == KEY_W) { AnswerBanyaRiddleUI(1); return; }
+            if (key == KEY_E) { AnswerBanyaRiddleUI(2); return; }
+            if (key == KEY_R) { AnswerBanyaRiddleUI(3); return; }
+        }
+    }
+
+    static bool HitUIElement(UIElement* el, const IntVector2& mp) {
+        if (!el || !el->IsVisible()) return false;
+        IntVector2 p = el->GetScreenPosition();
+        IntVector2 s = el->GetSize();
+        return mp.x_ >= p.x_ && mp.x_ <= p.x_ + s.x_ && mp.y_ >= p.y_ && mp.y_ <= p.y_ + s.y_;
+    }
+
+    void HandleBanyaClick() {
+        auto* input = GetSubsystem<Input>();
+        if (!input) return;
+        IntVector2 mp = input->GetMousePosition();
+
+        if (banyaStatsBox_ && banyaStatsBox_->IsVisible()) {
+            if (HitUIElement(banyaStatsCloseBtn_.Get(), mp) || !HitUIElement(banyaStatsBox_.Get(), mp))
+                ToggleBanyaStats();
+            return;
+        }
+        if (HitUIElement(banyaStatsBtnBg_.Get(), mp)) { ToggleBanyaStats(); return; }
+
+        if (banyaSim_.phase == Banya::PHASE_OVER && banyaEndBox_ && banyaEndBox_->IsVisible()) {
+            if (HitUIElement(banyaEndBtnRestart_.Get(), mp)) {
+                PlayUISound();
+                banyaRewardApplied_ = false;
+                banyaSim_.Reset();
+                banyaEndBox_->SetVisible(false);
+                SetBanyaCaption("Новый заход! Три минуты и три загадки смотрящего.", 5.0f);
+                SyncBanyaVisuals(0.0f);
+            } else if (HitUIElement(banyaEndBtnStats_.Get(), mp)) {
+                ToggleBanyaStats();
+            } else if (HitUIElement(banyaEndBtnBack_.Get(), mp)) {
+                PlayUISound();
+                CloseBanyaSimulator();
+            }
+            return;
+        }
+
+        if (banyaSim_.riddle.active && !banyaSim_.riddle.settled) {
+            for (int i = 0; i < 4; ++i) {
+                if (HitUIElement(banyaRiddleOptBg_[i].Get(), mp)) {
+                    AnswerBanyaRiddleUI(i);
+                    return;
+                }
+            }
+        }
+        for (int i = 0; i < 5; ++i) {
+            if (HitUIElement(banyaActBtnBg_[i].Get(), mp)) {
+                TriggerBanyaAction(i);
+                return;
+            }
+        }
+    }
+
+    void SyncBanyaVisuals(float dt) {
+        if (!banyaPanel_ || !banyaSceneBox_) return;
+        int scW = banyaSceneBox_->GetWidth(), scH = banyaSceneBox_->GetHeight();
+
+        int wallet = banyaFromMenu_ ? (100 + banyaBonusCredits_) : credits_;
+        String buffStr = (banyaBuffTier_ >= 2) ? "👑 КОВШ СМОТРЯЩЕГО (+50HP/+15%УР)"
+                       : (banyaBuffTier_ == 1) ? "♨ БАННЫЙ ЗАКАЛ (+25HP/+25БР)"
+                                               : "нет баффа";
+        if (banyaBadgeText_) {
+            banyaBadgeText_->SetText("🐔 CHIKENGUN 2.3  •  КОШЕЛЁК: " + String(wallet) + "₵  •  БАФФ АРЕНЫ: " + buffStr +
+                                     "  •  ОТКРЫТО КОНЦОВОК: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + "/14");
+        }
+
+        if (banyaTempText_) {
+            banyaTempText_->SetText(String((int)lroundf(banyaSim_.temp)) + " °C");
+            banyaTempText_->SetColor(banyaSim_.temp > 100.0f ? Color(1.0f, 0.52f, 0.36f, 1.0f) : Color(1.0f, 0.87f, 0.68f, 1.0f));
+        }
+        if (banyaMoodText_)  banyaMoodText_->SetText(banyaSim_.CurrentMood());
+        if (banyaClockText_) banyaClockText_->SetText(FormatBanyaClock(banyaSim_.left) + "   |   ✓ " + String(banyaSim_.riddles) + "/3");
+
+        auto setBar = [&](BorderImage* b, float ratio, int fullW) {
+            if (b) b->SetSize(Clamp((int)(fullW * Clamp(ratio, 0.0f, 1.0f)), 0, fullW), b->GetHeight());
+        };
+        setBar(banyaBarSteam_.Get(), banyaSim_.steam, S(126));
+        setBar(banyaBarFire_.Get(),  banyaSim_.fire / 100.0f, S(126));
+        setBar(banyaBarAir_.Get(),   banyaSim_.air  / 100.0f, S(126));
+        setBar(banyaBarLife_.Get(),  banyaSim_.life / 100.0f, S(126));
+        setBar(banyaBarTime_.Get(),  banyaSim_.left / Banya::DURATION, S(154));
+
+        // Свечение печи и камней от температуры
+        if (banyaStonesGlow_) {
+            float hot = Clamp((banyaSim_.temp - 80.0f) / 32.0f, 0.0f, 1.0f);
+            banyaStonesGlow_->SetColor(Color(0.45f + 0.55f * hot, 0.41f - 0.12f * hot, 0.38f - 0.25f * hot, 1.0f));
+        }
+        if (banyaStoveFire_) {
+            float f = Clamp(0.35f + banyaSim_.fire / 110.0f, 0.2f, 1.0f);
+            banyaStoveFire_->SetColor(Color(1.0f, 0.42f + 0.32f * f, 0.12f, f));
+        }
+
+        // Анимация веника и мимики Кочета
+        if (banyaVenikVis_) {
+            if (banyaVenikAnim_ > 0.0f) {
+                float u = 1.0f - banyaVenikAnim_ / 1.6f;
+                int vx = (int)(scW * (0.41f + 0.20f * sinf(u * 3.14159f)));
+                int vy = (int)(scH * (0.31f + 0.05f * sinf(u * 12.56f)));
+                banyaVenikVis_->SetPosition(vx, vy);
+            } else {
+                banyaVenikVis_->SetPosition((int)(scW * 0.41f), (int)(scH * 0.31f));
+            }
+        }
+        if (banyaRoosterBody_ && banyaRoosterEyesText_) {
+            int baseX = (int)(scW * 0.61f), baseY = (int)(scH * 0.36f);
+            if (banyaSim_.phase == Banya::PHASE_OVER) {
+                banyaRoosterEyesText_->SetText((banyaSim_.ending == Banya::END_WIN || banyaSim_.ending == Banya::END_STEWARD) ? "◠" : "✕");
+                banyaRoosterCrown_->SetVisible(banyaSim_.ending == Banya::END_STEWARD);
+                if (banyaSim_.ending == Banya::END_FROZEN)      banyaRoosterBody_->SetColor(Color(0.68f, 0.88f, 0.98f, 1.0f));
+                else if (banyaSim_.ending == Banya::END_BURNED || banyaSim_.ending == Banya::END_FIRE || banyaSim_.ending == Banya::END_BLAST)
+                    banyaRoosterBody_->SetColor(Color(0.38f, 0.24f, 0.18f, 1.0f));
+                else if (banyaSim_.ending == Banya::END_VAPOR || banyaSim_.ending == Banya::END_ESCAPE)
+                    banyaRoosterBody_->SetColor(Color(0.95f, 0.95f, 0.95f, 0.12f));
+                else banyaRoosterBody_->SetColor(Color(0.96f, 0.91f, 0.82f, 1.0f));
+            } else {
+                banyaRoosterCrown_->SetVisible(false);
+                int sway = (banyaSim_.blissRemaining > 0.0f) ? (int)(sinf(timeAcc_ * 3.0f) * S(4.0f))
+                         : (banyaSim_.ventRemaining  > 0.0f) ? (int)(sinf(timeAcc_ * 22.0f) * S(2.0f)) : 0;
+                banyaRoosterBody_->SetPosition(baseX + sway, baseY);
+                banyaRoosterEyesText_->SetText(banyaSim_.blissRemaining > 0.0f ? "◡" : "●");
+                Color bodyC = (banyaSim_.temp > 100.0f) ? Color(1.0f, 0.72f, 0.64f, 1.0f)
+                            : (banyaSim_.temp < 60.0f)  ? Color(0.84f, 0.91f, 0.98f, 1.0f)
+                                                        : Color(0.96f, 0.91f, 0.82f, 1.0f);
+                banyaRoosterBody_->SetColor(bodyC);
+            }
+        }
+
+        // Опасные виньетки
+        if (banyaHeatWash_) {
+            float ha = banyaSim_.temp > 100.0f ? Clamp((banyaSim_.temp - 100.0f) / 18.0f, 0.0f, 0.42f) : 0.0f;
+            banyaHeatWash_->SetColor(Color(1.0f, 0.25f, 0.06f, ha));
+        }
+        if (banyaAirWash_) {
+            float aa = banyaSim_.air < 30.0f ? Clamp((30.0f - banyaSim_.air) / 30.0f, 0.0f, 0.55f) : 0.0f;
+            banyaAirWash_->SetColor(Color(0.03f, 0.06f, 0.03f, aa));
+        }
+        if (banyaColdWash_) {
+            float ca = banyaSim_.ventRemaining > 0.0f ? 0.16f : 0.0f;
+            banyaColdWash_->SetColor(Color(0.66f, 0.86f, 0.95f, ca));
+        }
+
+        // Карточка загадки
+        if (banyaRiddleBox_) {
+            bool showR = banyaSim_.riddle.active && banyaSim_.phase == Banya::PHASE_PLAY;
+            banyaRiddleBox_->SetVisible(showR);
+            if (showR) {
+                const auto& rd = banyaSim_.riddle;
+                banyaRiddleQ_->SetText(rd.q);
+                banyaRiddleTime_->SetText(String(rd.timeLeft, 1) + "с");
+                int rBarFull = banyaRiddleBox_->GetWidth() - S(28);
+                setBar(banyaRiddleTimerBar_.Get(), rd.timeLeft / 15.0f, rBarFull);
+                static const char* kPref[4] = { "[Q] ", "[W] ", "[E] ", "[R] " };
+                for (int i = 0; i < 4; ++i) {
+                    banyaRiddleOptTxt_[i]->SetText(String(kPref[i]) + rd.opts[i]);
+                    if (!rd.settled) {
+                        banyaRiddleOptBg_[i]->SetColor(Color(0.30f, 0.19f, 0.10f, 0.92f));
+                    } else if (i == rd.correctIdx) {
+                        banyaRiddleOptBg_[i]->SetColor(Color(0.20f, 0.52f, 0.22f, 0.95f));
+                    } else if (i == rd.chosenIdx) {
+                        banyaRiddleOptBg_[i]->SetColor(Color(0.58f, 0.18f, 0.14f, 0.95f));
+                    } else {
+                        banyaRiddleOptBg_[i]->SetColor(Color(0.22f, 0.14f, 0.08f, 0.70f));
+                    }
+                }
+                if (rd.settled) {
+                    bool ok = (rd.chosenIdx == rd.correctIdx);
+                    String fb = ok ? (String("Верно! ") + rd.explanation)
+                                   : (String(rd.chosenIdx < 0 ? "Молчание! " : "Мимо! ") + "Правильно: «" + rd.opts[rd.correctIdx] + "». " + rd.explanation);
+                    banyaRiddleFb_->SetText(fb);
+                    banyaRiddleFb_->SetColor(ok ? Color(0.75f, 0.95f, 0.68f, 1.0f) : Color(1.0f, 0.74f, 0.66f, 1.0f));
+                } else {
+                    banyaRiddleFb_->SetText("");
+                }
+            }
+        }
+
+        // Карточка концовки
+        if (banyaEndBox_) {
+            bool over = (banyaSim_.phase == Banya::PHASE_OVER);
+            banyaEndBox_->SetVisible(over);
+            if (over) {
+                ApplyBanyaEndingRewards();
+                const auto& ei = Banya::GetEndingInfo(banyaSim_.ending);
+                int pts = banyaSim_.CurrentScore();
+                int cr  = Banya::ComputeCreditsReward(pts, banyaSim_.ending);
+                int tier = Banya::BuffTierForEnding(banyaSim_.ending);
+                banyaEndTint_->SetColor(Color(ei.tintR, ei.tintG, ei.tintB, ei.tintA));
+                banyaEndTitle_->SetText(ei.title);
+                banyaEndText_->SetText(ei.text);
+                banyaEndHint_->SetText(String("Совет: ") + ei.hint);
+                String rewardLine = "Награда Чикенган: +" + String(cr) + "₵";
+                if (tier >= 2)      rewardLine += "  •  👑 БАФФ «КОВШ СМОТРЯЩЕГО» (+50 HP/Брони, +15% Урона, +35% Орбиты)!";
+                else if (tier == 1) rewardLine += "  •  ♨ БАФФ «БАННЫЙ ЗАКАЛ» (+25 HP/Брони)!";
+                banyaEndStats_->SetText(
+                    "Продержался " + FormatBanyaClock(Min(banyaSim_.elapsed, Banya::DURATION)) + " из 3:00  •  загадок " +
+                    String(banyaSim_.riddles) + "  •  очков " + String(pts) + "\n" +
+                    "Открыто концовок: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + " из 14\n" +
+                    rewardLine);
+            } else {
+                banyaEndTint_->SetColor(Color(0.0f, 0.0f, 0.0f, 0.0f));
+            }
+        }
+
+        // Фоновые частицы пара
+        if (dt > 0.0f) {
+            if (banyaSim_.phase == Banya::PHASE_PLAY && !banyaSim_.paused) {
+                banyaSteamAcc_ += dt * (2.5f + banyaSim_.steam * 10.0f);
+                while (banyaSteamAcc_ >= 1.0f) {
+                    banyaSteamAcc_ -= 1.0f;
+                    SpawnBanyaParticle(0.14f + (rand() % 100) * 0.0016f, 0.42f,
+                                       ((rand() % 100) - 50) * 0.0006f, -0.09f - (rand() % 100) * 0.0006f,
+                                       2.2f, 10.0f + banyaSim_.steam * 10.0f, 0);
+                }
+            }
+            for (unsigned i = banyaParticles_.Size(); i-- > 0;) {
+                BanyaUIParticle& p = banyaParticles_[i];
+                p.life_ += dt;
+                if (p.life_ >= p.ttl_ || !p.el_) {
+                    if (p.el_) p.el_->Remove();
+                    banyaParticles_.Erase(i);
+                    continue;
+                }
+                if (p.kind_ == 2) p.vy_ += 0.45f * dt;
+                p.x_ += p.vx_ * dt;
+                p.y_ += p.vy_ * dt;
+                p.el_->SetPosition((int)(p.x_ * scW), (int)(p.y_ * scH));
+                p.el_->SetOpacity(Clamp(1.0f - p.life_ / p.ttl_, 0.0f, 1.0f) * (p.kind_ == 0 ? 0.35f : 0.85f));
+            }
+        }
+    }
+
+    void UpdateBanyaSimulator(float dt) {
+        if (banyaVenikAnim_ > 0.0f) banyaVenikAnim_ = Max(0.0f, banyaVenikAnim_ - dt);
+        if (banyaCaptionTimer_ > 0.0f) {
+            banyaCaptionTimer_ -= dt;
+            if (banyaCaptionTimer_ <= 0.0f && banyaCaptionText_)
+                banyaCaptionText_->SetOpacity(0.0f);
+        }
+
+        bool wasRiddle = banyaSim_.riddle.active;
+        banyaSim_.Step(dt);
+        if (!wasRiddle && banyaSim_.riddle.active) {
+            PlayUISound();
+            SetBanyaCaption("Смотрящий из пара загадывает загадку. Не ответишь — кочету худо.", 3.5f);
+        }
+
+        // Предупреждения состояния парной
+        if (banyaSim_.phase == Banya::PHASE_PLAY && !banyaSim_.paused && (timeAcc_ - banyaLastWarnTime_) > 7.0f) {
+            if (banyaSim_.fire > 82.0f)       SetBanyaCaption("Печь раскалилась — того и гляди займётся! Дай ей остыть.");
+            else if (banyaSim_.air < 26.0f)   SetBanyaCaption("Душно! Проветри [4], пока кочет не угорел.");
+            else if (banyaSim_.temp > 103.0f) SetBanyaCaption("Кочет красный, как гребешок. Окати [3] или проветри [4]!");
+            else if (banyaSim_.temp < 60.0f)  SetBanyaCaption("Холодно! Поддай пару [1], не то кочет замёрзнет.");
+            else if (banyaSim_.steamMax > 10.0f) SetBanyaCaption("Пар на максимуме — ещё немного, и кочет растворится в облаке!");
+            else if (banyaSim_.life < 32.0f)  SetBanyaCaption("Силы на исходе. Верный ответ на загадку [5] их вернёт.");
+        }
+
+        SyncBanyaVisuals(dt);
     }
 };
 

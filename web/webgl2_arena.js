@@ -521,6 +521,17 @@
       addProp("box", null, tx, 18.2, tz, 4.2, 1.1, 1.4, [1,1], false, [1,0.95,0.85,1], [3.6, 3.3, 2.8], 0.15, 0.9);
     });
 
+    // 3D Wooden Steamhouse «Банька Смотрящего» at (-18, 0, -34) — enter with [P]!
+    const BANYA_DOOR = { x: -18, z: -30.6 };
+    addProp("box", MATS.crate, -18, 1.9, -34, 6.4, 3.8, 5.6, [3, 2], true, [0.96, 0.78, 0.56, 1], [0,0,0], 0.72, 0.05);
+    addProp("box", MATS.crate, -18, 4.05, -34, 7.3, 0.55, 6.5, [3, 2], false, [0.54, 0.34, 0.20, 1], [0,0,0], 0.78, 0.05);
+    addProp("box", MATS.crate, -18, 4.55, -34, 5.4, 0.45, 3.8, [2, 1], false, [0.46, 0.28, 0.16, 1], [0,0,0], 0.80, 0.05);
+    addProp("cyl", MATS.stone, -19.8, 5.4, -35.2, 0.95, 3.2, 0.95, [1, 2], false);
+    addProp("cyl", null, -19.8, 7.05, -35.2, 1.08, 0.22, 1.08, [1,1], false, [1,0.55,0.2,1], [2.8, 1.15, 0.25], 0.2, 0.8);
+    addProp("box", null, -18, 1.35, -31.16, 1.55, 2.55, 0.14, [1,1], false, [1,0.74,0.36,1], [2.3, 1.35, 0.42], 0.25, 0.4);
+    addProp("box", null, -18, 3.22, -31.12, 3.9, 0.42, 0.16, [1,1], false, [1,0.86,0.45,1], [2.8, 1.95, 0.62], 0.2, 0.8);
+    addProp("box", null, -14.76, 2.15, -34, 0.14, 1.1, 1.5, [1,1], false, [0.85,0.95,1,1], [1.2, 1.9, 2.4], 0.15, 0.6);
+
     // ---------- 6. Weapons,Skins, Atmospheres & Mutators ----------
     const WEAPONS = [
       { name: "PISTOL",   dmg: 34,  rof: 0.21, mag: 12,  reload: 1.1, spread: 0.010, color: [0.65,0.72,0.85], sfx: "Shot_Pistol.wav",  len: 0.42 },
@@ -559,22 +570,33 @@
     ];
 
     // ---------- 7. Game State ----------
-    let savedAch = 0, savedHi = 0;
+    let savedAch = 0, savedHi = 0, savedCred = 100, savedBuff = 0, savedSens = 1.0;
     try {
-      savedAch = parseInt(localStorage.getItem("cg23_ach") || "0", 10) || 0;
-      savedHi  = parseInt(localStorage.getItem("cg23_hi")  || "0", 10) || 0;
+      savedAch  = parseInt(localStorage.getItem("cg23_ach") || "0", 10) || 0;
+      savedHi   = parseInt(localStorage.getItem("cg23_hi")  || "0", 10) || 0;
+      const sc  = parseInt(localStorage.getItem("cg23_credits") || "100", 10);
+      savedCred = Number.isFinite(sc) ? Math.max(0, sc) : 100;
+      const sb  = parseInt(localStorage.getItem("cg23_banya_buff") || "0", 10);
+      savedBuff = (sb === 1 || sb === 2) ? sb : 0;
+      const ss  = parseFloat(localStorage.getItem("cg23_sens") || "1.0");
+      if (Number.isFinite(ss) && ss >= 0.2 && ss <= 3.0) savedSens = ss;
     } catch (_) {}
+
+    const initBonusHp  = savedBuff >= 2 ? 50 : (savedBuff === 1 ? 25 : 0);
+    const initBonusArm = savedBuff >= 2 ? 50 : (savedBuff === 1 ? 25 : 0);
 
     const S = {
       x: 0, y: 1.75, z: -26, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0.04,
-      onGround: true, fromPad: false, crouch: false,
-      hp: 100, maxHp: 100, armor: 50, score: 0, highScore: savedHi, credits: 100,
+      onGround: true, fromPad: false, crouch: false, sensMul: savedSens,
+      hp: 100 + initBonusHp, maxHp: 100 + initBonusHp, armor: Math.min(100, 50 + initBonusArm),
+      score: 0, highScore: savedHi, credits: savedCred, banyaBuff: savedBuff, banyaDoorPos: BANYA_DOOR,
+      banyaHintCd: 0, banyaSteamCd: 0,
       kills: 0, headshots: 0, wave: 1, mutator: 0, atmIdx: 0,
       wep: 2, skin: 0, ammo: WEAPONS.map(w => w.mag), reloadT: 0, fireCd: 0, recoil: 0,
       bobPhase: 0, inspectT: 0, aiming: false, laserOn: true,
       dashCd: 0, dashT: 0, dashDir: [0,0],
       grappleOn: false, grappleCd: 0, grappleT: 0, grapplePos: [0,0,0],
-      orbitalPct: 40, orbitalStrikes: [],
+      orbitalPct: savedBuff >= 2 ? 75 : 40, orbitalStrikes: [],
       grenCd: 0, turretCd: 0, meleeCd: 0, meleeT: 0, overdriveT: 0, slowMo: 0, shake: 0,
       perks: [0, 0, 0, 0], achiev: savedAch,
       multiKill: 0, multiT: 0,
@@ -614,10 +636,15 @@
       return hit ? best : -1;
     }
 
+    function saveCredits() {
+      try { localStorage.setItem("cg23_credits", String(Math.max(0, Math.round(S.credits)))); } catch (_) {}
+    }
+
     function unlockAch(bit, title) {
       if (S.achiev & (1 << bit)) return;
       S.achiev |= (1 << bit);
       S.score += 250; S.credits += 50;
+      saveCredits();
       try { localStorage.setItem("cg23_ach", String(S.achiev)); } catch (_) {}
       opts.playSfx("Achievement.wav", 0.88);
       opts.showToast(`🏆 ДОСТИЖЕНИЕ ОТКРЫТО: ${title} (+250 ОЧК / +50₵)`);
@@ -642,7 +669,7 @@
     function spawnWave(num) {
       S.wave = num;
       S.mutator = num <= 1 ? 0 : (num % 5 === 0 ? 3 : ((num * 3) % 5));
-      if (num > 1) { S.credits += 45; opts.pushFeed(`+45₵ БОНУС ЗА ВОЛНУ ${num}!`); }
+      if (num > 1) { S.credits += 45; saveCredits(); opts.pushFeed(`+45₵ БОНУС ЗА ВОЛНУ ${num}!`); }
       if (num >= 5) unlockAch(4, "ШТУРМОВИК 5-Й ВОЛНЫ");
       if (num >= 10) unlockAch(9, "ЛЕГЕНДА КУРЯТНИКА (10 ВОЛН)");
       opts.playSfx("WaveStart.wav", 0.72);
@@ -736,7 +763,7 @@
         const mut = MUTATORS[S.mutator];
         const pts = c.type === "boss" ? 950 : c.type === "drone" ? 260 : 165;
         const cr  = Math.round((c.type === "boss" ? 120 : 28) * mut.cred);
-        S.score += pts; S.credits += cr;
+        S.score += pts; S.credits += cr; saveCredits();
         if (S.score > S.highScore) {
           S.highScore = S.score;
           try { localStorage.setItem("cg23_hi", String(S.highScore)); } catch (_) {}
@@ -791,7 +818,8 @@
       const [fx, fy, fz] = getAimDir(0);
       addFlashLight(S.x + fx * 1.1, S.y - 0.1 + fy * 1.1, S.z + fz * 1.1, w.color[0]*3, w.color[1]*3, w.color[2]*3, 9, 0.06);
 
-      const dmgMul = (1 + 0.15 * S.perks[2]) * (S.overdriveT > 0 ? 2.0 : 1.0);
+      const banyaDmgMul = S.banyaBuff >= 2 ? 1.15 : 1.0;
+      const dmgMul = (1 + 0.15 * S.perks[2]) * banyaDmgMul * (S.overdriveT > 0 ? 2.0 : 1.0);
       if (w.plasma) {
         S.orbs.push({ x: S.x + fx*0.9, y: S.y - 0.12 + fy*0.9, z: S.z + fz*0.9, vx: fx*42, vy: fy*42, vz: fz*42, dmg: w.dmg * dmgMul, ttl: 2.2, bounces: 2 });
         return;
@@ -867,7 +895,7 @@
     function triggerOrbitalStrike() {
       if (S.orbitalPct < 99.9) {
         if (S.credits >= 150) {
-          S.credits -= 150;
+          S.credits -= 150; saveCredits();
           opts.pushFeed("🛰 СРОЧНЫЙ ОРБИТАЛЬНЫЙ ЗАЛП ЗА 150₵!");
         } else {
           opts.playSfx("EmptyClick.wav", 0.6);
@@ -907,34 +935,138 @@
       opts.showBanner("☢ ОРБИТАЛЬНЫЙ УДАР «ЯЙЦЕГЕДДОН»!");
     }
 
-    // ---------- 8. Input Hooks ----------
+    // ---------- 8. Input Hooks (Touchpad-Tamed + Raw PointerLock + Unlocked Fallback) ----------
     const keys = {};
     let mouseDown = false;
+    let lockAcquiredAt = 0, skipFirstLockDelta = false;
+    let lastTapAt = 0, rmbDownAt = 0, rmbWasAiming = false;
+    let smoothDx = 0, smoothDy = 0;
+    let lastPtrX = null, lastPtrY = null;
+    let wheelAcc = 0, lastWheelStepAt = 0, lastWheelEventAt = 0;
 
-    window.addEventListener("mousemove", e => {
+    function requestLockSmart() {
+      if (!canvas || !canvas.requestPointerLock) return;
+      try {
+        const res = canvas.requestPointerLock({ unadjustedMovement: true });
+        if (res && typeof res.catch === "function") {
+          res.catch(() => { try { canvas.requestPointerLock(); } catch (_) {} });
+        }
+      } catch (_) {
+        try { canvas.requestPointerLock(); } catch (__) {}
+      }
+    }
+
+    function setSensitivity(mul, announce = false) {
+      S.sensMul = Math.max(0.25, Math.min(2.5, Math.round(mul * 20) / 20));
+      try { localStorage.setItem("cg23_sens", String(S.sensMul)); } catch (_) {}
+      if (announce) opts.pushFeed(`🎯 Чувствительность камеры: ${Math.round(S.sensMul * 100)}% (клавиши - / +)`);
+      opts.onSensChange?.(S.sensMul);
+    }
+
+    function applyLookDelta(rawDx, rawDy, now) {
+      // Reject Chromium/macOS trackpad PointerLock jump spikes
+      if (!Number.isFinite(rawDx) || !Number.isFinite(rawDy)) return;
+      if (Math.abs(rawDx) > 190 || Math.abs(rawDy) > 190) return;
+
+      // Damp cursor micro-jerk during trackpad tap-to-click
+      const tapDamp = (now - lastTapAt < 45) ? 0.25 : 1.0;
+      const compress = d => Math.sign(d) * Math.min(54, Math.abs(d) / (1 + Math.abs(d) * 0.015));
+      const tx = compress(rawDx * tapDamp);
+      const ty = compress(rawDy * tapDamp);
+
+      smoothDx = smoothDx * 0.30 + tx * 0.70;
+      smoothDy = smoothDy * 0.30 + ty * 0.70;
+
+      const baseSens = (S.aiming ? 0.00082 : 0.00148) * S.sensMul;
+      S.yaw  += smoothDx * baseSens;
+      S.pitch = Math.max(-1.42, Math.min(1.42, S.pitch - smoothDy * baseSens));
+    }
+
+    document.addEventListener("pointerlockchange", () => {
       if (document.pointerLockElement === canvas) {
-        const sens = S.aiming ? 0.0012 : 0.0023;
-        S.yaw   += e.movementX * sens;
-        S.pitch  = Math.max(-1.42, Math.min(1.42, S.pitch - e.movementY * sens));
+        lockAcquiredAt = performance.now();
+        skipFirstLockDelta = true;
+        smoothDx = 0; smoothDy = 0;
+      } else {
+        mouseDown = false;
+        lastPtrX = null; lastPtrY = null;
       }
     });
+
+    window.addEventListener("mousemove", e => {
+      const now = performance.now();
+      if (document.pointerLockElement === canvas) {
+        if (skipFirstLockDelta || (now - lockAcquiredAt < 45)) {
+          skipFirstLockDelta = false;
+          return;
+        }
+        applyLookDelta(e.movementX || 0, e.movementY || 0, now);
+      } else if (opts.isPlaying() && !opts.isPerkModalOpen() && !(opts.isBanyaOpen && opts.isBanyaOpen())) {
+        // Fallback look if browser/iframe blocks PointerLock
+        if (lastPtrX !== null && lastPtrY !== null) {
+          applyLookDelta((e.clientX - lastPtrX) * 1.15, (e.clientY - lastPtrY) * 1.15, now);
+        }
+        lastPtrX = e.clientX; lastPtrY = e.clientY;
+      }
+    });
+    canvas.addEventListener("mouseleave", () => { lastPtrX = null; lastPtrY = null; });
+
     window.addEventListener("mousedown", e => {
-      if (document.pointerLockElement !== canvas) return;
-      if (e.button === 0) { mouseDown = true; fireWeapon(); }
-      if (e.button === 2) S.aiming = true;
+      const activePlay = opts.isPlaying() && !opts.isPerkModalOpen() && !(opts.isBanyaOpen && opts.isBanyaOpen());
+      if (!activePlay) return;
+      if (document.pointerLockElement !== canvas && e.target !== canvas) return;
+      if (document.pointerLockElement !== canvas) requestLockSmart();
+
+      const now = performance.now();
+      lastTapAt = now;
+      // On macOS trackpads, Ctrl+Click (while crouching with Ctrl) reports button===2 + ctrlKey
+      if (e.button === 0 || (e.button === 2 && e.ctrlKey)) {
+        mouseDown = true;
+        fireWeapon();
+      } else if (e.button === 2) {
+        rmbDownAt = now;
+        rmbWasAiming = S.aiming;
+        S.aiming = !rmbWasAiming;
+      }
     });
     window.addEventListener("mouseup", e => {
-      if (e.button === 0) mouseDown = false;
-      if (e.button === 2) S.aiming = false;
+      if (e.button === 0 || (e.button === 2 && e.ctrlKey)) mouseDown = false;
+      else if (e.button === 2) {
+        // Quick 2-finger touchpad tap (<240ms) toggles ADS; long physical RMB hold releases ADS on mouseup
+        const heldMs = performance.now() - rmbDownAt;
+        if (heldMs >= 240 && !rmbWasAiming) S.aiming = false;
+      }
     });
-    window.addEventListener("contextmenu", e => { if (document.pointerLockElement === canvas) e.preventDefault(); });
+    window.addEventListener("contextmenu", e => {
+      if (document.pointerLockElement === canvas || opts.isPlaying()) e.preventDefault();
+    });
     window.addEventListener("wheel", e => {
-      if (document.pointerLockElement !== canvas) return;
-      S.wep = (S.wep + (e.deltaY > 0 ? 1 : WEAPONS.length - 1)) % WEAPONS.length;
-    }, { passive: true });
+      const activePlay = opts.isPlaying() && !opts.isPerkModalOpen() && !(opts.isBanyaOpen && opts.isBanyaOpen());
+      if (!activePlay) return;
+      e.preventDefault();
+
+      const now = performance.now();
+      if (now - lastWheelEventAt > 140) wheelAcc = 0;
+      lastWheelEventAt = now;
+
+      // Ignore touchpad palm/two-finger micro-jitter and horizontal-dominant swipes
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY) * 1.2) return;
+      if (e.deltaMode === 0 && Math.abs(e.deltaY) < 5) return;
+
+      const stepThreshold = (e.deltaMode === 1) ? 1 : 135;
+      wheelAcc += e.deltaY;
+      if (Math.abs(wheelAcc) >= stepThreshold && (now - lastWheelStepAt) > 250) {
+        const dir = wheelAcc > 0 ? 1 : WEAPONS.length - 1;
+        S.wep = (S.wep + dir) % WEAPONS.length;
+        S.reloadT = 0;
+        wheelAcc = 0;
+        lastWheelStepAt = now;
+      }
+    }, { passive: false });
 
     window.addEventListener("keydown", e => {
       keys[e.code] = true;
+      if (opts.isBanyaOpen && opts.isBanyaOpen()) return;
       if (opts.isPerkModalOpen()) {
         if (e.code >= "Digit1" && e.code <= "Digit4") opts.buyPerk(Number(e.code.slice(5)) - 1);
         if (e.code === "KeyB" || e.code === "Escape") opts.togglePerkModal();
@@ -943,9 +1075,22 @@
       if (e.code === "F8") { e.preventDefault(); S.atmIdx = (S.atmIdx + 1) % ATMOSPHERES.length; opts.pushFeed(`🌅 Атмосфера: ${ATMOSPHERES[S.atmIdx].name}`); return; }
       if (e.code === "F3") { e.preventDefault(); S.showFps = !S.showFps; return; }
       if (e.code === "KeyM") { opts.cycleMusic(); return; }
+      if (e.code === "Minus" || e.code === "BracketLeft") { setSensitivity(S.sensMul - 0.15, true); return; }
+      if (e.code === "Equal" || e.code === "BracketRight") { setSensitivity(S.sensMul + 0.15, true); return; }
+      if (e.code === "KeyP") {
+        e.preventDefault();
+        opts.openBanya?.();
+        return;
+      }
       if (!opts.isPlaying()) return;
+      if (e.code === "Escape" && document.pointerLockElement !== canvas) {
+        opts.exitArenaToMenu?.();
+        return;
+      }
 
       if (e.code >= "Digit1" && e.code <= "Digit9") { S.wep = Number(e.code.slice(5)) - 1; S.reloadT = 0; }
+      if (e.code === "KeyF") S.aiming = !S.aiming;
+      if (e.code === "KeyK" || e.code === "Enter") fireWeapon();
       if (e.code === "KeyQ") S.skin = (S.skin + 1) % SKINS.length;
       if (e.code === "KeyE") S.skin = (S.skin + SKINS.length - 1) % SKINS.length;
       if (e.code === "KeyI") S.inspectT = 2.0;
@@ -978,7 +1123,7 @@
         opts.playSfx("WingSlap.wav", 0.7);
       }
       if (e.code === "KeyT" && S.turretCd <= 0 && S.credits >= 100) {
-        S.credits -= 100; S.turretCd = 14;
+        S.credits -= 100; saveCredits(); S.turretCd = 14;
         S.turrets.push({ x: S.x + Math.sin(S.yaw)*2.6, z: S.z + Math.cos(S.yaw)*2.6, yaw: S.yaw, ttl: 24, cd: 0.2 });
         opts.playSfx("TurretDeploy.wav", 0.85);
         unlockAch(8, "ИНЖЕНЕР ПТИЦЕФАБРИКИ (ТУРЕЛЬ [T])");
@@ -1045,7 +1190,14 @@
           S.reloadT -= dt;
           if (S.reloadT <= 0) S.ammo[S.wep] = WEAPONS[S.wep].mag;
         }
-        if (mouseDown && !WEAPONS[S.wep].semi) fireWeapon();
+        if ((mouseDown || keys["KeyK"] || keys["Enter"]) && !WEAPONS[S.wep].semi) fireWeapon();
+
+        // Optional smooth keyboard arrow-key look (helpful on laptops when OS palm-guard blocks touchpad during WASD)
+        const keyTurnSpd = (S.aiming ? 1.35 : 2.35) * S.sensMul;
+        if (keys["ArrowLeft"])  S.yaw -= keyTurnSpd * rawDt;
+        if (keys["ArrowRight"]) S.yaw += keyTurnSpd * rawDt;
+        if (keys["ArrowUp"])    S.pitch = Math.min(1.42,  S.pitch + keyTurnSpd * 0.75 * rawDt);
+        if (keys["ArrowDown"])  S.pitch = Math.max(-1.42, S.pitch - keyTurnSpd * 0.75 * rawDt);
 
         S.crouch = !!(keys["ControlLeft"] || keys["KeyC"]);
         const eyeH = S.crouch ? 1.05 : 1.75;
@@ -1135,6 +1287,22 @@
 
         // Barrels respawn
         S.barrels.forEach(b => { if (!b.alive) { b.resp -= dt; if (b.resp <= 0) { b.alive = true; b.hp = 45; } } });
+
+        // 3D Steamhouse «Банька Смотрящего» chimney steam & doorway [P] prompt
+        S.banyaSteamCd -= dt;
+        if (S.banyaSteamCd <= 0) {
+          S.banyaSteamCd = 0.22;
+          S.particles.push({
+            x: -19.8 + (Math.random() - 0.5) * 0.45, y: 7.25, z: -35.2 + (Math.random() - 0.5) * 0.45,
+            vx: (Math.random() - 0.5) * 0.9, vy: 2.1 + Math.random() * 1.4, vz: (Math.random() - 0.5) * 0.9,
+            col: [1.55, 1.48, 1.38], sz: 0.34, ttl: 1.45
+          });
+        }
+        if (S.banyaHintCd > 0) S.banyaHintCd -= dt;
+        if (Math.hypot(S.x - BANYA_DOOR.x, S.z - BANYA_DOOR.z) < 5.4 && S.banyaHintCd <= 0) {
+          S.banyaHintCd = 7.5;
+          opts.pushFeed("♨ БАНЬКА СМОТРЯЩЕГО — нажмите [P], чтобы попариться (бафф + ₵)!");
+        }
 
         // Plasma bolts
         S.orbs = S.orbs.filter(o => {
@@ -1530,7 +1698,41 @@
     requestAnimationFrame(tick);
     return {
       state: S,
-      cycleAtmosphere() { S.atmIdx = (S.atmIdx + 1) % ATMOSPHERES.length; }
+      saveCredits,
+      requestLockSmart,
+      setSensitivity,
+      cycleAtmosphere() { S.atmIdx = (S.atmIdx + 1) % ATMOSPHERES.length; },
+      applyBanyaReward(data) {
+        if (!data) return;
+        if (typeof data.totalCredits === "number" && Number.isFinite(data.totalCredits)) {
+          S.credits = data.totalCredits;
+        } else if (typeof data.creditsEarned === "number") {
+          S.credits += data.creditsEarned;
+          saveCredits();
+        }
+        if (typeof data.pts === "number" && data.pts > 0) {
+          S.score += data.pts;
+          if (S.score > S.highScore) {
+            S.highScore = S.score;
+            try { localStorage.setItem("cg23_hi", String(S.highScore)); } catch (_) {}
+          }
+        }
+        if (typeof data.achMask === "number") {
+          S.achiev |= data.achMask;
+          try { localStorage.setItem("cg23_ach", String(S.achiev)); } catch (_) {}
+        }
+        const tier = Math.max(S.banyaBuff || 0, data.bestBuffTier || 0, data.buffTier || 0);
+        if (tier > S.banyaBuff) S.banyaBuff = tier;
+        if ((data.buffTier || 0) > 0) {
+          const bonusHp  = tier >= 2 ? 50 : 25;
+          const bonusArm = tier >= 2 ? 50 : 25;
+          S.maxHp = Math.max(S.maxHp, 100 + bonusHp + 25 * S.perks[0]);
+          S.hp    = Math.min(S.maxHp, S.hp + 60);
+          S.armor = Math.min(100, S.armor + bonusArm);
+          if (tier >= 2) S.orbitalPct = Math.min(100, S.orbitalPct + 35);
+          opts.playSfx("Achievement.wav", 0.85);
+        }
+      }
     };
   };
 })();

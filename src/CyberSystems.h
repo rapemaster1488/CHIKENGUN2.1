@@ -62,9 +62,9 @@ inline float AddOrbitalCharge(float currentPct, bool isBoss, bool isHeadshot) {
     return std::min(100.0f, std::max(0.0f, currentPct + gain));
 }
 
-// --- 3. Экономика кибер-перков [B] и подсчёт достижений (12 шт., биты 0..11) ---
-constexpr int TOTAL_ACHIEVEMENTS = 12;
-constexpr int ALL_ACHIEVEMENTS_MASK = (1 << TOTAL_ACHIEVEMENTS) - 1; // 4095
+// --- 3. Экономика кибер-перков [B] и подсчёт достижений (14 шт., биты 0..13, вкл. 2 банных) ---
+constexpr int TOTAL_ACHIEVEMENTS = 14;
+constexpr int ALL_ACHIEVEMENTS_MASK = (1 << TOTAL_ACHIEVEMENTS) - 1; // 16383
 
 inline int PerkUpgradeCost(int currentLevel) {
     int lvl = std::max(0, currentLevel);

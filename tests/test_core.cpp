@@ -20,6 +20,7 @@
 
 #include "../src/LitePhysics.h"
 #include "../src/CyberSystems.h"
+#include "../src/BanyaSim.h"
 
 namespace fs = std::filesystem;
 
@@ -66,7 +67,7 @@ static void CheckPngFile(const fs::path& p, uint32_t expectW, uint32_t expectH) 
 }
 
 int main(int argc, char** argv) {
-    std::cout << "[test_core] 1/7 Проверка Lite::RayBoxT и HitNormalBoxT (src/LitePhysics.h)..." << std::endl;
+    std::cout << "[test_core] 1/8 Проверка Lite::RayBoxT и HitNormalBoxT (src/LitePhysics.h)..." << std::endl;
     {
         float t = Lite::RayBoxT<TestVec3>({0, 1, -5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1});
         assert(std::fabs(t - 4.0f) < 1e-4f);
@@ -77,7 +78,7 @@ int main(int argc, char** argv) {
         assert(Lite::RayBoxT<TestVec3>({0, 1,  5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
     }
 
-    std::cout << "[test_core] 2/7 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
+    std::cout << "[test_core] 2/8 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
     {
         float t1 = Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {0, 1, 10}, 1.0f);
         float t2 = Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {0, 1, 22}, 1.0f);
@@ -87,7 +88,7 @@ int main(int argc, char** argv) {
         assert(Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {5, 1, 10}, 1.0f) < 0.0f);
     }
 
-    std::cout << "[test_core] 3/7 Проверка кинематики Грэппл-крюка [Z] и FNV-1a кэша материалов..." << std::endl;
+    std::cout << "[test_core] 3/8 Проверка кинематики Грэппл-крюка [Z] и FNV-1a кэша материалов..." << std::endl;
     {
         bool rel = false;
         TestVec3 pull = Lite::ComputeGrapplePullT<TestVec3>({0, 2, 0}, {0, 2, 20}, 28.0f, 2.0f, rel);
@@ -105,7 +106,7 @@ int main(int argc, char** argv) {
         assert(h1 == h2 && h1 != h3);
     }
 
-    std::cout << "[test_core] 4/7 Проверка систем CyberSystems.h (мутаторы, Орбита [X], перки, 12 достижений)..." << std::endl;
+    std::cout << "[test_core] 4/8 Проверка систем CyberSystems.h (мутаторы, Орбита [X], перки, 14 достижений)..." << std::endl;
     {
         assert(Cyber::PickWaveMutator(1, 42) == Cyber::MUT_STANDARD);
         assert(Cyber::PickWaveMutator(5, 17) == Cyber::MUT_GOLDRUSH);
@@ -122,10 +123,10 @@ int main(int argc, char** argv) {
         assert(Cyber::PerkUpgradeCost(0) == 75);
         assert(Cyber::PerkUpgradeCost(2) == 205);
         assert(Cyber::CountUnlockedAchievements(0b101001000101) == 5);
-        assert(Cyber::CountUnlockedAchievements(Cyber::ALL_ACHIEVEMENTS_MASK) == 12);
+        assert(Cyber::CountUnlockedAchievements(Cyber::ALL_ACHIEVEMENTS_MASK) == 14);
     }
 
-    std::cout << "[test_core] 5/7 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
+    std::cout << "[test_core] 5/8 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
     {
         TestVec3 orig(0, 2, 0);
         TestVec3 dir = TestVec3(0, -1, 1).Normalized();
@@ -146,7 +147,7 @@ int main(int argc, char** argv) {
         assert(remap[0] == 0 && remap[1] == -1 && remap[2] == 1 && remap[4] == 2);
     }
 
-    std::cout << "[test_core] 6/7 Проверка XML-парсера и наличия 23 WAV-эффектов..." << std::endl;
+    std::cout << "[test_core] 6/8 Проверка XML-парсера и наличия 27 WAV-эффектов (вкл. баню)..." << std::endl;
     {
         assert(ParseXmlIntAttr("true", 0) == 1);
         assert(ParseXmlIntAttr("ON", 0) == 1);
@@ -158,10 +159,127 @@ int main(int argc, char** argv) {
             assert(fs::exists("Data/Sounds/OrbitalStrike.wav") && fs::file_size("Data/Sounds/OrbitalStrike.wav") > 1000);
             assert(fs::exists("Data/Sounds/Shot_Railgun.wav"));
             assert(fs::exists("Data/Sounds/Shot_Plasma.wav"));
+            assert(fs::exists("Data/Sounds/BanyaSteam.wav") && fs::file_size("Data/Sounds/BanyaSteam.wav") > 1000);
+            assert(fs::exists("Data/Sounds/BanyaVenik.wav") && fs::file_size("Data/Sounds/BanyaVenik.wav") > 1000);
+            assert(fs::exists("Data/Sounds/BanyaSplash.wav") && fs::file_size("Data/Sounds/BanyaSplash.wav") > 1000);
+            assert(fs::exists("Data/Sounds/BanyaDoor.wav") && fs::file_size("Data/Sounds/BanyaDoor.wav") > 1000);
         }
     }
 
-    std::cout << "[test_core] 7/7 Проверка базовых PBR текстур и генератора..." << std::endl;
+    std::cout << "[test_core] 7/8 Проверка симулятора «Кочет в баньке» (src/BanyaSim.h: 14 концовок + 57 загадок)..." << std::endl;
+    {
+        // 57 уникальных загадок без повторов внутри пула и с перемешиванием вариантов
+        Banya::Simulator sim(12345u);
+        std::vector<bool> seenRiddle(Banya::TOTAL_RIDDLES, false);
+        bool sawNonZeroAnswer = false;
+        for (int i = 0; i < Banya::TOTAL_RIDDLES; ++i) {
+            auto r = sim.TakeShuffledRiddle();
+            assert(r.sourceIdx >= 0 && r.sourceIdx < Banya::TOTAL_RIDDLES);
+            assert(!seenRiddle[r.sourceIdx] && "Повтор загадки внутри одного перемешанного пула!");
+            seenRiddle[r.sourceIdx] = true;
+            const auto& base = Banya::GetAllRiddles()[r.sourceIdx];
+            assert(std::strcmp(r.opts[r.correctIdx], base.o[base.a]) == 0 && "Неверное перемешивание верного ответа!");
+            if (r.correctIdx != 0) sawNonZeroAnswer = true;
+        }
+        assert(sawNonZeroAnswer && "Варианты ответов должны перемешиваться");
+
+        // Проверка паузы: замораживает симуляцию и дедлайн загадки
+        sim.Reset();
+        assert(sim.OpenRiddle(true));
+        float dl0 = sim.riddle.timeLeft;
+        sim.SetPaused(true);
+        sim.Step(10.0f);
+        assert(std::fabs(sim.elapsed) < 1e-6f && std::fabs(sim.riddle.timeLeft - dl0) < 1e-6f);
+        sim.SetPaused(false);
+
+        // Проверка ВСЕХ 14 концовок:
+        // 1) END_FIRE: 4 быстрых поддачи подряд с 18 печи -> 18 + 88 = 100
+        sim.Reset();
+        for (int i = 0; i < 4; ++i) sim.ActSteam();
+        assert(sim.phase == Banya::PHASE_OVER && sim.ending == Banya::END_FIRE);
+
+        // 2) END_BLAST: поддача при temp >= 108
+        sim.Reset(); sim.temp = 109.0f; sim.ActSteam();
+        assert(sim.ending == Banya::END_BLAST);
+
+        // 3) END_DROWN: 4 оката подряд за 6 с
+        sim.Reset();
+        for (int i = 0; i < 4; ++i) { sim.ActWater(); sim.Step(0.5f); }
+        assert(sim.ending == Banya::END_DROWN);
+
+        // 4) END_ESCAPE: 3 проветривания подряд за 8 с
+        sim.Reset();
+        for (int i = 0; i < 3; ++i) { sim.ActVent(); sim.Step(0.5f); }
+        assert(sim.ending == Banya::END_ESCAPE);
+
+        // 5) END_RAGE: 4 веника подряд за 6 с
+        sim.Reset();
+        for (int i = 0; i < 4; ++i) { sim.ActVenik(); sim.Step(0.5f); }
+        assert(sim.ending == Banya::END_RAGE);
+
+        // 6) END_SENTRY: 3 неверных ответа подряд
+        sim.Reset();
+        for (int i = 0; i < 3; ++i) {
+            sim.riddleCooldown = 0.0f;
+            assert(sim.OpenRiddle(true));
+            sim.AnswerRiddle((sim.riddle.correctIdx + 1) % 4);
+            sim.FlushSettledRiddle();
+        }
+        assert(sim.ending == Banya::END_SENTRY);
+
+        // 7) END_VAPOR: steam > 0.9 более 20 с
+        sim.Reset(); sim.temp = 106.0f; sim.steam = 0.98f; sim.air = 100.0f; sim.life = 100.0f;
+        for (int i = 0; i < 220 && sim.phase == Banya::PHASE_PLAY; ++i) {
+            sim.temp = 105.0f; sim.steam = 0.96f; sim.air = 100.0f; sim.life = 100.0f;
+            sim.Step(0.1f);
+        }
+        assert(sim.ending == Banya::END_VAPOR);
+
+        // 8) END_CHOKE: air <= 0
+        sim.Reset(); sim.air = 0.2f; sim.Step(0.5f);
+        assert(sim.ending == Banya::END_CHOKE);
+
+        // 9) END_BURNED: life <= 0 при temp >= 96
+        sim.Reset(); sim.temp = 112.0f; sim.life = 1.0f; sim.air = 100.0f; sim.Step(0.5f);
+        assert(sim.ending == Banya::END_BURNED);
+
+        // 10) END_FROZEN: life <= 0 при temp <= 66
+        sim.Reset(); sim.temp = 45.0f; sim.life = 1.0f; sim.air = 100.0f; sim.Step(0.5f);
+        assert(sim.ending == Banya::END_FROZEN);
+
+        // 11) END_EXHAUSTED: life <= 0 при 66 < temp < 96 (через штраф загадки при комфортной темп. ~65 -> дотягиваем в 72)
+        sim.Reset(); sim.temp = 72.0f; sim.life = 10.0f;
+        assert(sim.OpenRiddle(true));
+        sim.AnswerRiddle((sim.riddle.correctIdx + 1) % 4);
+        sim.FlushSettledRiddle();
+        assert(sim.ending == Banya::END_EXHAUSTED);
+
+        // 12..14) END_NO_CREDIT, END_WIN (+60), END_STEWARD (+120)
+        auto runToEndWithRiddles = [&](int targetCorrect) {
+            sim.Reset();
+            for (int k = 0; k < targetCorrect; ++k) {
+                sim.riddleCooldown = 0.0f;
+                sim.OpenRiddle(true);
+                sim.AnswerRiddle(sim.riddle.correctIdx);
+                sim.FlushSettledRiddle();
+            }
+            sim.nextRiddle = 9999.0f;
+            for (int step = 0; step < 190 && sim.phase == Banya::PHASE_PLAY; ++step) {
+                sim.temp = 80.0f; sim.air = 90.0f; sim.life = 95.0f; sim.steam = 0.5f;
+                sim.Step(1.0f);
+            }
+        };
+        runToEndWithRiddles(2);
+        assert(sim.ending == Banya::END_NO_CREDIT && Banya::BuffTierForEnding(sim.ending) == 0);
+        runToEndWithRiddles(4);
+        assert(sim.ending == Banya::END_WIN && sim.CurrentScore() == 180 + 4 * 15 + 60 && Banya::BuffTierForEnding(sim.ending) == 1);
+        runToEndWithRiddles(6);
+        assert(sim.ending == Banya::END_STEWARD && sim.CurrentScore() == 180 + 6 * 15 + 120 && Banya::BuffTierForEnding(sim.ending) == 2);
+        assert(Banya::CountSeenEndings(sim.lifetime.seenEndingsMask) == 14 && "Все 14 концовок открыты в тесте!");
+        assert(Banya::ComputeCreditsReward(sim.CurrentScore(), Banya::END_STEWARD) > 200);
+    }
+
+    std::cout << "[test_core] 8/8 Проверка базовых PBR текстур и генератора..." << std::endl;
     if (fs::exists("Data/Textures/Skybox4K.xml")) {
         CheckPngFile("Data/Textures/StoneHDDiffuse.png", 512, 512);
         CheckPngFile("Data/Textures/Sky4K_PosZ.png", 1024, 1024);
@@ -179,6 +297,6 @@ int main(int argc, char** argv) {
         fs::remove_all(tmpOut);
     }
 
-    std::cout << "[test_core] ВСЕ 7 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
+    std::cout << "[test_core] ВСЕ 8 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
     return 0;
 }
