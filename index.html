@@ -232,6 +232,39 @@
     margin-top: 10px; border: 1px solid rgba(46, 242, 255, 0.25); cursor: pointer;
   }
   .perk-item:hover { border-color: var(--gold); }
+
+  /* ===== BANYA SIMULATOR INTEGRATION ===== */
+  .banya-cta {
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    width: 100%; margin-top: 9px; padding: 12px 18px; font-size: 15px; font-weight: 800;
+    background: linear-gradient(90deg, #5c3318, #8c4d20, #5c3318);
+    color: #ffe8c2; border: 1px solid rgba(255, 200, 120, 0.58);
+    border-radius: 10px; cursor: pointer; letter-spacing: 0.03em;
+    box-shadow: 0 6px 22px rgba(180, 95, 25, 0.36); transition: transform 0.12s, border-color 0.15s;
+  }
+  .banya-cta:hover { transform: translateY(-2px); border-color: var(--gold); color: #fff6e5; }
+  .tab-btn.banya-tab {
+    border-color: rgba(255, 194, 112, 0.55);
+    background: rgba(68, 36, 16, 0.78);
+    color: #ffe5ba;
+  }
+  .tab-btn.banya-tab.active, .tab-btn.banya-tab:hover {
+    border-color: var(--gold);
+    background: rgba(108, 56, 22, 0.92);
+    color: #fff5e0;
+  }
+  #banyaView {
+    padding: 0; overflow: hidden;
+    background: #120b06;
+  }
+  #banyaFrame {
+    width: 100%; height: 100%; border: none; display: block; background: #120b06;
+  }
+  .banya-status-strip {
+    margin-top: 9px; padding: 8px 12px; border-radius: 8px;
+    background: rgba(48, 26, 12, 0.58); border: 1px solid rgba(255, 198, 120, 0.32);
+    font-size: 12px; color: #f6dec0; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 6px;
+  }
 </style>
 </head>
 <body>
@@ -259,9 +292,10 @@
   <div class="brand">🐔 CHIKENGUN 2.3 <span>WEBGL2 4K PBR</span></div>
   <div class="tabs">
     <button class="tab-btn active" data-tab="arenaView">▶ 3D АРЕНА (WebGL2)</button>
-    <button class="tab-btn" data-tab="achView">🏆 ДОСТИЖЕНИЯ (12)</button>
+    <button class="tab-btn banya-tab" data-tab="banyaView" id="banyaNavBtn">🧖 КОЧЕТ В БАНЬКЕ (14)</button>
+    <button class="tab-btn" data-tab="achView">🏆 ДОСТИЖЕНИЯ (14)</button>
     <button class="tab-btn" data-tab="pbrView">🎨 4K PBR КАРТЫ</button>
-    <button class="tab-btn" data-tab="sfxView">🔊 АУДИО-СТЕНД (23 WAV)</button>
+    <button class="tab-btn" data-tab="sfxView">🔊 АУДИО-СТЕНД (27 WAV)</button>
     <a class="tab-btn ext" href="minigames.html">🕹 PIXEL ARCADE</a>
     <a class="tab-btn ext" href="casino.html">🎰 РУЛЕТКА</a>
   </div>
@@ -310,7 +344,7 @@
     <div class="ammo-card" style="text-align:right">
       <div id="weaponTitle" style="color:var(--gold);font-weight:900;font-size:14.5px">3. RIFLE &nbsp;•&nbsp; CYBER NEON</div>
       <div id="ammoLabel" style="font-size:22px;font-weight:900;margin-top:2px">30 / ∞</div>
-      <div style="font-size:11px;color:#9cc3e8;margin-top:2px">[Q/E] Скин &nbsp;•&nbsp; [I] Осмотр &nbsp;•&nbsp; [ПКМ] Прицел</div>
+      <div style="font-size:11px;color:#9cc3e8;margin-top:2px">[F / ПКМ] Прицел &nbsp;•&nbsp; [Клик / K] Огонь &nbsp;•&nbsp; [-/+] Чувств.</div>
     </div>
   </div>
 </div>
@@ -343,36 +377,50 @@
     <div class="hero-grid">
       <div>
         <button class="play-cta" id="startArenaBtn">▶ ВЫСАДИТЬСЯ НА 3D КИБЕР-АРЕНУ</button>
+        <button class="banya-cta" id="openBanyaMenuBtn">🧖 КОЧЕТ В БАНЬКЕ [P] — СИМУЛЯТОР ПАРНОЙ (БАФФ + ₵)</button>
+        <div class="banya-status-strip" id="banyaMenuStatus">
+          <span>♨ Бафф парной: <b style="color:var(--gold)">нет</b></span>
+          <span>Концовок открыто: <b>0 / 14</b></span>
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px">
           <button class="tab-btn" id="atmMenuBtn">🌅 Погода [F8]</button>
           <button class="tab-btn" id="musicMenuBtn">🎵 Саундтрек [M]</button>
           <button class="tab-btn" id="perkMenuBtn">⚡ Перки [B]</button>
         </div>
-        <div class="key-list" style="margin-top:12px">
+        <div style="margin-top:10px;padding:8px 12px;border-radius:9px;background:rgba(4,12,26,0.72);border:1px solid rgba(46,242,255,0.24);display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <span style="font-size:12.5px;color:#cbe4ff">🎯 Чувств. тачпада / мыши (<span class="kbd">-</span> / <span class="kbd">+</span>): <b id="sensValLabel" style="color:var(--gold)">100%</b></span>
+          <input id="sensSlider" type="range" min="25" max="220" step="5" value="100" style="width:155px;accent-color:#ffd447;cursor:pointer">
+        </div>
+        <div class="key-list" style="margin-top:10px">
           <div><span class="kbd">WASD</span> Бег &nbsp; <span class="kbd">SPACE</span> Прыжок &nbsp; <span class="kbd">ALT</span> Рывок &nbsp; <span class="kbd">Z</span> <b>Грэппл-крюк</b></div>
-          <div><span class="kbd">ЛКМ / ПКМ</span> Огонь / Прицел &nbsp; <span class="kbd">1..9</span> 9 стволов (<b>RAILGUN</b>, <b>PLASMA</b>)</div>
-          <div><span class="kbd">X</span> <b>Орбитальный удар «ЯЙЦЕГЕДДОН»</b> &nbsp; <span class="kbd">G</span> Граната &nbsp; <span class="kbd">T</span> Турель</div>
-          <div><span class="kbd">Q / E</span> PBR-скин &nbsp; <span class="kbd">I</span> Осмотр &nbsp; <span class="kbd">B</span> Перки &nbsp; <span class="kbd">F3</span> FPS &nbsp; <span class="kbd">M</span> Музыка</div>
+          <div><span class="kbd">ЛКМ / K</span> Огонь &nbsp; <span class="kbd">F / 2 пальца</span> Прицел &nbsp; <span class="kbd">1..9</span> 9 стволов</div>
+          <div><span class="kbd">X</span> <b>Орбита «ЯЙЦЕГЕДДОН»</b> &nbsp; <span class="kbd">P</span> <b>Банька Смотрящего</b> &nbsp; <span class="kbd">G / T</span> Граната / Турель</div>
+          <div><span class="kbd">Q / E</span> PBR-скин &nbsp; <span class="kbd">← → ↑ ↓</span> Доворот камеры &nbsp; <span class="kbd">B</span> Перки &nbsp; <span class="kbd">M</span> Музыка</div>
         </div>
       </div>
 
       <div class="key-list">
-        <div style="color:var(--gold);font-weight:800;margin-bottom:5px">ЭВОЛЮЦИЯ 2.3 (C++17 + WebGL2):</div>
+        <div style="color:var(--gold);font-weight:800;margin-bottom:5px">ЭВОЛЮЦИЯ 2.3 + «КОЧЕТ В БАНЬКЕ»:</div>
+        • <b>Симулятор парной «Кочет в баньке» [P]</b>: сруб прямо на 3D-арене, <b>14 концовок</b>, <b>57 загадок Смотрящего</b>, баффы Арены (<i>Банный закал</i> / <i>Ковш Смотрящего</i>) и награды в ₵!<br>
         • <b>Аппаратный WebGL2 3D PBR</b>: реальные карты <code>Diffuse + Normal + RoughMetal</code>, 6 граней <code>Sky4K</code> IBL и ACES HDR.<br>
-        • <b>[Z] Энергетический Грэппл-Крюк</b> — взлетайте на бункеры, колонны и ящики с аэро-бонусом.<br>
-        • <b>[X] Орбитальный Лазер «ЯЙЦЕГЕДДОН»</b> — 60-метровый ионный столб с небес (заряд от фрагов или 150₵).<br>
+        • <b>[Z] Грэппл-Крюк</b> и <b>[X] Орбитальный Лазер «ЯЙЦЕГЕДДОН»</b> — 60-метровый ионный столб с небес.<br>
         • <b>Мутаторы волн</b> (<i>Лунная гравитация, Турбо-стая, Золотая лихорадка x2₵, Пиро-шторм</i>) + <b>Фаза Ярости Босса</b>.<br>
-        • Модульные C++17 заголовки <code>src/LitePhysics.h</code> и <code>src/CyberSystems.h</code> + O(1) кэш материалов без утечек.
+        • Модульные C++17 заголовки <code>src/LitePhysics.h</code>, <code>src/CyberSystems.h</code> и <code>src/BanyaSim.h</code>.
       </div>
     </div>
   </div>
 </section>
 
-<!-- 5. 12 ACHIEVEMENTS PANEL -->
+<!-- 4B. EMBEDDED BANYA SIMULATOR («КОЧЕТ В БАНЬКЕ») -->
+<section class="view-panel" id="banyaView">
+  <iframe id="banyaFrame" data-src="banya.html?embed=1&v=2.3.2" title="Кочет в баньке — Симулятор парной"></iframe>
+</section>
+
+<!-- 5. 14 ACHIEVEMENTS PANEL -->
 <section class="view-panel" id="achView">
   <div style="max-width:980px;margin:0 auto">
-    <h2 style="color:var(--gold);font-size:26px">🏆 Зал славы Кибер-Курятника (12 Достижений)</h2>
-    <p style="color:#9fc2e6;margin-top:4px;font-size:14px">Каждое достижение даёт +250 очков и +50₵ и сохраняется автоматически:</p>
+    <h2 style="color:var(--gold);font-size:26px">🏆 Зал славы Кибер-Курятника (14 Достижений)</h2>
+    <p style="color:#9fc2e6;margin-top:4px;font-size:14px">Каждое достижение даёт +250 очков и +50₵ и сохраняется автоматически (включая зачёт и ковш Смотрящего в баньке):</p>
     <div class="sfx-grid" id="achGrid" style="grid-template-columns:repeat(auto-fill,minmax(280px,1fr))"></div>
   </div>
 </section>
@@ -386,26 +434,26 @@
   </div>
 </section>
 
-<!-- 7. 23-WAV SOUNDBOARD -->
+<!-- 7. 27-WAV SOUNDBOARD -->
 <section class="view-panel" id="sfxView">
   <div style="max-width:1120px;margin:0 auto">
-    <h2 style="color:var(--gold);font-size:26px">🔊 Процедурный аудио-стенд (23 WAV + 2 OGG Саундтрека)</h2>
+    <h2 style="color:var(--gold);font-size:26px">🔊 Процедурный аудио-стенд (27 WAV + 2 OGG Саундтрека)</h2>
     <canvas id="waveVis" width="900" height="80" style="width:100%;max-width:900px;height:80px;background:rgba(4,12,26,0.85);border:1px solid rgba(46,242,255,0.35);border-radius:8px;margin-top:12px;display:block"></canvas>
     <div class="sfx-grid" id="sfxGrid"></div>
   </div>
 </section>
 
-<script src="web/webgl2_arena.js"></script>
+<script src="web/webgl2_arena.js?v=2.3.2"></script>
 <script>
 (() => {
   // ===== 1. BOOT CHECKLIST =====
   const bootStages = [
     "Компиляция шейдеров WebGL2 (#version 300 es, GGX PBR + ACES HDR)",
     "Загрузка триад PBR-текстур (Diffuse + Tangent Normal + RoughMetal)",
-    "Сборка 6-гранной кубической карты Sky4K IBL",
+    "Сборка 6-гранной кубической карты Sky4K IBL и 3D «Баньки Смотрящего» [P]",
     "Генерация 3D-архитектуры арены, бункеров, джамп-падов и бочек C4",
-    "Инициализация Грэппл-крюка [Z], Орбиты [X], турелей и 6 пород 3D-кур",
-    "Подключение 23 WAV-эффектов и кибер-саундтреков OGG"
+    "Инициализация Грэппл-крюка [Z], Орбиты [X], турелей и 14 концовок Баньки",
+    "Подключение 27 WAV-эффектов и кибер-саундтреков OGG"
   ];
   let bIdx = 0;
   const bList = document.getElementById("bootList"), bFill = document.getElementById("bootFill"),
@@ -470,7 +518,9 @@
     "9. ИНЖЕНЕР ПТИЦЕФАБРИКИ — Развернуть авто-турель [T]",
     "10. ЛЕГЕНДА КУРЯТНИКА — Выжить до 10-й волны",
     "11. НЕБЕСНЫЙ АБОРДАЖ — Использовать грэппл-крюк [Z]",
-    "12. ЯЙЦЕГЕДДОН С ОРБИТЫ — 3+ фрага одним орбитальным ударом [X]"
+    "12. ЯЙЦЕГЕДДОН С ОРБИТЫ — 3+ фрага одним орбитальным ударом [X]",
+    "13. С ЛЁГКИМ ПАРОМ! — Выйти из баньки с зачётом (3 мин + 3 загадки)",
+    "14. СМОТРЯЩИЙ ЗА БАНЕЙ — Получить ковш Смотрящего (6+ загадок)"
   ];
   function renderAchievements(mask) {
     const g = document.getElementById("achGrid");
@@ -522,7 +572,11 @@
     ["Headshot.wav",      "Критический хэдшот ★"],
     ["BarrelBoom.wav",    "Взрыв бочки HazardMetal"],
     ["Overdrive.wav",     "Кибер-Овердрайв 2X"],
-    ["RoosterBoss.wav",   "Рёв Мега-Индюка Босса"]
+    ["RoosterBoss.wav",   "Рёв Мега-Индюка Босса"],
+    ["BanyaSteam.wav",    "Банька: Поддать пару на камни [1]"],
+    ["BanyaVenik.wav",    "Банька: Хлестание берёзовым веником [2]"],
+    ["BanyaSplash.wav",   "Банька: Окатиться из шайки [3]"],
+    ["BanyaDoor.wav",     "Банька: Скрип двери и сквозняк [4]"]
   ].forEach(([f, lbl]) => {
     const b = document.createElement("button"); b.className = "sfx-btn";
     b.innerHTML = `▶ ${lbl}<small>${f}</small>`;
@@ -595,9 +649,70 @@
     const S = engine.state, lvl = S.perks[i], cost = 75 + lvl * 65;
     if (lvl >= 5 || S.credits < cost) { playSfx("EmptyClick.wav", 0.6); return; }
     S.credits -= cost; S.perks[i]++;
+    engine.saveCredits?.();
+    try { document.getElementById("banyaFrame")?.contentWindow?.postMessage({ type: "cg-sync" }, "*"); } catch (_) {}
     if (i === 0) { S.maxHp += 25; S.hp = Math.min(S.maxHp, S.hp + 40); }
+    const totalPerks = S.perks.reduce((a, b) => a + b, 0);
+    if (totalPerks >= 5 && !(S.achiev & (1 << 7))) {
+      S.achiev |= (1 << 7);
+      try { localStorage.setItem("cg23_ach", String(S.achiev)); } catch (_) {}
+      showToast("🏆 ДОСТИЖЕНИЕ ОТКРЫТО: КИБЕР-МУТАНТ (5 УРОВНЕЙ ПЕРКОВ)");
+    }
     playSfx("PerkBuy.wav", 0.85);
     refreshPerks();
+  }
+
+  function switchTab(tabId) {
+    const prevBanya = document.getElementById("banyaView").classList.contains("active");
+    document.querySelectorAll(".tab-btn[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === tabId));
+    document.querySelectorAll(".view-panel").forEach(p => p.classList.toggle("active", p.id === tabId));
+    if (tabId === "achView" && engine) renderAchievements(engine.state.achiev);
+    const bf = document.getElementById("banyaFrame");
+    if (tabId === "banyaView") {
+      if (bf) {
+        if (!bf.getAttribute("src")) {
+          bf.setAttribute("src", bf.dataset.src || "banya.html?embed=1");
+          bf.addEventListener("load", () => {
+            try {
+              bf.contentWindow?.postMessage({ type: "cg-banya-open" }, "*");
+              bf.focus();
+            } catch (_) {}
+          }, { once: true });
+        } else {
+          try {
+            bf.contentWindow?.postMessage({ type: "cg-banya-open" }, "*");
+            bf.focus();
+          } catch (_) {}
+        }
+      }
+    } else if (prevBanya && bf && bf.getAttribute("src")) {
+      try { bf.contentWindow?.postMessage({ type: "cg-banya-hide" }, "*"); } catch (_) {}
+    }
+  }
+
+  function openBanyaView() {
+    if (document.pointerLockElement) document.exitPointerLock();
+    playing = false;
+    document.body.classList.remove("playing");
+    document.getElementById("perkModal").classList.remove("open");
+    playSfx("BanyaDoor.wav", 0.72);
+    switchTab("banyaView");
+  }
+
+  function refreshBanyaMenuStatus() {
+    const el = document.getElementById("banyaMenuStatus");
+    if (!el) return;
+    let tier = engine ? (engine.state.banyaBuff || 0) : 0;
+    let seen = 0;
+    try {
+      tier = Math.max(tier, parseInt(localStorage.getItem("cg23_banya_buff") || "0", 10) || 0);
+      const seenArr = JSON.parse(localStorage.getItem("kochet_seen") || "[]");
+      seen = Array.isArray(seenArr) ? seenArr.length : (parseInt(localStorage.getItem("cg23_banya_seen") || "0", 10) || 0);
+    } catch (_) {}
+    const buffLabel = tier >= 2 ? "👑 Ковш Смотрящего (+50HP/+50БР/+15%УР)" : (tier === 1 ? "♨ Банный закал (+25HP/+25БР)" : "нет (попарься на зачёт!)");
+    el.innerHTML = `<span>♨ Бафф парной: <b style="color:var(--gold)">${buffLabel}</b></span><span>Концовок открыто: <b style="color:var(--cyan)">${seen} / 14</b></span>`;
+    const navBtn = document.getElementById("banyaNavBtn");
+    if (navBtn) navBtn.textContent = `🧖 КОЧЕТ В БАНЬКЕ (${seen}/14)`;
   }
   function togglePerkModal() {
     const m = document.getElementById("perkModal");
@@ -607,10 +722,27 @@
     } else m.classList.remove("open");
   }
 
+  const sensSlider = document.getElementById("sensSlider");
+  const sensValLabel = document.getElementById("sensValLabel");
+  function syncSensUI(mul) {
+    const pct = Math.round(mul * 100);
+    if (sensSlider) sensSlider.value = String(pct);
+    if (sensValLabel) sensValLabel.textContent = pct + "%";
+  }
+
   engine = window.StartChikenGunWebGL2({
     playSfx, pushFeed, showBanner, showToast, cycleMusic,
     isPlaying: () => playing,
     isPerkModalOpen: () => document.getElementById("perkModal").classList.contains("open"),
+    isBanyaOpen: () => document.getElementById("banyaView").classList.contains("active"),
+    openBanya: openBanyaView,
+    exitArenaToMenu: () => {
+      playing = false;
+      document.body.classList.remove("playing");
+      renderAchievements(engine.state.achiev);
+      refreshBanyaMenuStatus();
+    },
+    onSensChange: syncSensUI,
     togglePerkModal, buyPerk,
     flashHit(head, kill) {
       const hm = document.getElementById("hitMarker");
@@ -650,14 +782,15 @@
       document.getElementById("weaponTitle").textContent = `${S.wep + 1}. ${wep.name}  •  ${skin.name}`;
       document.getElementById("ammoLabel").textContent = S.reloadT > 0 ? "ПЕРЕЗАРЯДКА..." : `${S.ammo[S.wep]} / ∞`;
 
-      let achCnt = 0; for (let i = 0; i < 12; i++) if (S.achiev & (1 << i)) achCnt++;
+      let achCnt = 0; for (let i = 0; i < 14; i++) if (S.achiev & (1 << i)) achCnt++;
+      const buffTag = S.banyaBuff >= 2 ? " &nbsp;|&nbsp; 👑 КОВШ СМОТРЯЩЕГО" : (S.banyaBuff === 1 ? " &nbsp;|&nbsp; ♨ БАННЫЙ ЗАКАЛ" : "");
       document.getElementById("hudScore").innerHTML = `СЧЁТ: ${S.score} &nbsp;|&nbsp; ₵${S.credits} &nbsp;|&nbsp; ВОЛНА ${S.wave}`;
-      document.getElementById("hudSub").innerHTML = `РЕКОРД: ${S.highScore} &nbsp;|&nbsp; 🏆 ${achCnt}/12 &nbsp;|&nbsp; ${mut.name}`;
+      document.getElementById("hudSub").innerHTML = `РЕКОРД: ${S.highScore} &nbsp;|&nbsp; 🏆 ${achCnt}/14 &nbsp;|&nbsp; ${mut.name}${buffTag}`;
       document.getElementById("abilityLine").innerHTML =
         `[Z] ${S.grappleCd <= 0 ? "КРЮК" : S.grappleCd.toFixed(1)+"с"} &nbsp;•&nbsp; ` +
         `[X] ${S.orbitalPct >= 99.9 ? "☢ ЯЙЦЕГЕДДОН!" : "ОРБИТА " + Math.floor(S.orbitalPct) + "%"} &nbsp;•&nbsp; ` +
         `[G] ${S.grenCd <= 0 ? "ГРАНАТА" : S.grenCd.toFixed(1)+"с"} &nbsp;•&nbsp; ` +
-        `[T] ${S.turretCd <= 0 ? "ТУРЕЛЬ (100₵)" : Math.ceil(S.turretCd)+"с"} &nbsp;•&nbsp; [B] ПЕРКИ`;
+        `[T] ${S.turretCd <= 0 ? "ТУРЕЛЬ (100₵)" : Math.ceil(S.turretCd)+"с"} &nbsp;•&nbsp; [B] ПЕРКИ &nbsp;•&nbsp; [P] БАНЯ`;
 
       const tel = document.getElementById("telemetryHud");
       if (S.showFps) {
@@ -685,6 +818,12 @@
       radarCtx.beginPath(); radarCtx.arc(72, 72, 58, 0, 6.28); radarCtx.stroke();
       radarCtx.fillStyle = "#fff"; radarCtx.fillRect(70, 70, 4, 4);
       const cy = Math.cos(S.yaw), sy = Math.sin(S.yaw);
+      if (S.banyaDoorPos) {
+        const bdx = (S.banyaDoorPos.x - S.x) * 1.35, bdz = (S.banyaDoorPos.z - S.z) * 1.35;
+        const brx = bdx * cy - bdz * sy, brz = bdx * sy + bdz * cy;
+        radarCtx.fillStyle = "#ff9f43";
+        radarCtx.fillRect(72 + Math.max(-62, Math.min(62, brx)) - 3, 72 - Math.max(-62, Math.min(62, brz)) - 3, 7, 7);
+      }
       S.chickens.forEach(c => {
         const dx = (c.x - S.x) * 1.35, dz = (c.z - S.z) * 1.35;
         const rx = dx * cy - dz * sy, rz = dx * sy + dz * cy;
@@ -695,26 +834,62 @@
   });
 
   renderAchievements(engine.state.achiev);
+  refreshBanyaMenuStatus();
 
   document.querySelectorAll(".tab-btn[data-tab]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".tab-btn[data-tab]").forEach(b => b.classList.remove("active"));
-      document.querySelectorAll(".view-panel").forEach(p => p.classList.remove("active"));
-      btn.classList.add("active");
-      document.getElementById(btn.dataset.tab).classList.add("active");
-      if (btn.dataset.tab === "achView") renderAchievements(engine.state.achiev);
-    });
+    btn.addEventListener("click", () => switchTab(btn.dataset.tab));
+  });
+
+  window.addEventListener("message", ev => {
+    const d = ev.data;
+    if (!d || typeof d !== "object") return;
+    if (d.type === "cg-banya-reward") {
+      engine.applyBanyaReward(d);
+      renderAchievements(engine.state.achiev);
+      refreshBanyaMenuStatus();
+      const buffNote = d.buffTier === 2 ? " + 👑 КОВШ СМОТРЯЩЕГО" : (d.buffTier === 1 ? " + ♨ БАННЫЙ ЗАКАЛ" : "");
+      showToast(`♨ ПАРНАЯ «${d.title}»: +${d.creditsEarned}₵${buffNote}!`);
+      pushFeed(`♨ Банька: +${d.creditsEarned}₵ (${d.seenCount}/14 концовок)`);
+    } else if (d.type === "cg-banya-close") {
+      switchTab("arenaView");
+      refreshBanyaMenuStatus();
+    }
   });
 
   const glCanvas = document.getElementById("glCanvas");
+  syncSensUI(engine.state.sensMul || 1.0);
+  if (sensSlider) {
+    sensSlider.addEventListener("input", () => {
+      engine.setSensitivity(Number(sensSlider.value) / 100, false);
+    });
+  }
+
+  // Forward Banya hotkeys from parent window when Banya tab is active
+  window.addEventListener("keydown", e => {
+    if (!document.getElementById("banyaView").classList.contains("active")) return;
+    if (e.key === "Escape") {
+      switchTab("arenaView");
+      refreshBanyaMenuStatus();
+      return;
+    }
+    const bf = document.getElementById("banyaFrame");
+    if (bf && bf.contentWindow) {
+      if (/^[1-6qwerQWERйцукЙЦУКыЫ ]$/.test(e.key) || e.key === "Enter") {
+        e.preventDefault();
+        try { bf.contentWindow.postMessage({ type: "cg-banya-key", key: e.key }, "*"); } catch (_) {}
+      }
+    }
+  });
+
   document.getElementById("startArenaBtn").onclick = () => {
-    glCanvas.requestPointerLock?.();
     playing = true; document.body.classList.add("playing");
+    engine.requestLockSmart();
     if (musicIdx === -1) cycleMusic();
   };
+  document.getElementById("openBanyaMenuBtn").onclick = openBanyaView;
   glCanvas.addEventListener("click", () => {
     if (playing && !document.pointerLockElement && !document.getElementById("perkModal").classList.contains("open"))
-      glCanvas.requestPointerLock?.();
+      engine.requestLockSmart();
   });
   document.addEventListener("pointerlockchange", () => {
     if (!document.pointerLockElement && !document.getElementById("perkModal").classList.contains("open")) {

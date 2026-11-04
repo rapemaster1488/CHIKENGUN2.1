@@ -440,6 +440,88 @@ def gen_orbital_strike():
     return out
 
 
+def gen_banya_steam():
+    """Поддача на камни [1]: шипящий залп пара + потрескивание раскалённых камней."""
+    dur = 0.95
+    n = int(SR * dur)
+    rng = random.Random(7701)
+    out = [0.0] * n
+    bp = 0.0
+    hp_prev = 0.0
+    for i in range(n):
+        t = i / SR
+        noise = rng.random() * 2.0 - 1.0
+        hp = noise - hp_prev * 0.72
+        hp_prev = noise
+        bp = bp * 0.58 + hp * 0.42
+        env = env_ad(t, dur, 0.035, 1.45)
+        crackle = 0.55 * noise if rng.random() < 0.008 * math.exp(-t * 2.2) else 0.0
+        sizzle = (0.72 * bp + 0.28 * hp) * env + crackle
+        out[i] = math.tanh(sizzle * 1.55)
+    return out
+
+
+def gen_banya_venik():
+    """Парение берёзовым веником [2]: двойной шелестящий взмах листьев."""
+    dur = 0.58
+    n = int(SR * dur)
+    rng = random.Random(7702)
+    out = [0.0] * n
+    lp = 0.0
+    for i in range(n):
+        t = i / SR
+        noise = rng.random() * 2.0 - 1.0
+        lp = lp * 0.42 + noise * 0.58
+        rustle = noise - lp * 0.68
+        w1 = env_ad(t, 0.27, 0.018, 2.1)
+        w2 = env_ad(t - 0.24, 0.30, 0.018, 2.2) if t >= 0.24 else 0.0
+        thump = 0.28 * math.sin(2 * math.pi * 145.0 * t) * math.exp(-t * 24.0)
+        if t >= 0.24:
+            thump += 0.24 * math.sin(2 * math.pi * 132.0 * (t - 0.24)) * math.exp(-(t - 0.24) * 24.0)
+        out[i] = math.tanh((rustle * (w1 + 0.85 * w2) * 0.95 + thump) * 1.45)
+    return out
+
+
+def gen_banya_splash():
+    """Окатиться из шайки [3]: плеск прохладной воды и звон капель."""
+    dur = 0.52
+    n = int(SR * dur)
+    rng = random.Random(7703)
+    out = [0.0] * n
+    lp = 0.0
+    ph = 0.0
+    for i in range(n):
+        t = i / SR
+        noise = rng.random() * 2.0 - 1.0
+        alpha = max(0.12, 0.65 - 0.45 * (t / dur))
+        lp = lp * (1.0 - alpha) + noise * alpha
+        f = 240.0 * math.exp(-t * 4.5) + 95.0
+        ph += 2 * math.pi * f / SR
+        drop = 0.22 * math.sin(2 * math.pi * 1180.0 * max(0.0, t - 0.16)) * math.exp(-max(0.0, t - 0.16) * 28.0) if t > 0.16 else 0.0
+        out[i] = math.tanh((lp * env_ad(t, dur, 0.012, 1.8) * 1.15 + 0.32 * math.sin(ph) * math.exp(-t * 9.0) + drop) * 1.4)
+    return out
+
+
+def gen_banya_door():
+    """Проветривание [4]: скрип деревянной двери и порыв морозного воздуха."""
+    dur = 0.62
+    n = int(SR * dur)
+    rng = random.Random(7704)
+    out = [0.0] * n
+    ph = 0.0
+    lp = 0.0
+    for i in range(n):
+        t = i / SR
+        creak_f = 165.0 + 48.0 * math.sin(2 * math.pi * 6.5 * t)
+        ph += 2 * math.pi * creak_f / SR
+        creak = (0.38 * math.sin(ph) + 0.18 * math.sin(3 * ph)) * env_ad(t, 0.28, 0.02, 1.8)
+        noise = rng.random() * 2.0 - 1.0
+        lp = lp * 0.84 + noise * 0.16
+        wind = lp * 1.35 * env_ad(max(0.0, t - 0.06), dur - 0.06, 0.06, 1.4)
+        out[i] = math.tanh((creak + wind) * 1.45)
+    return out
+
+
 def main():
     targets = ["Data/Sounds", "bin/Data/Sounds"]
     sounds = {
@@ -466,6 +548,10 @@ def main():
         "KamikazeBeep.wav":  gen_kamikaze_beep(),
         "Grapple.wav":       gen_grapple(),
         "OrbitalStrike.wav": gen_orbital_strike(),
+        "BanyaSteam.wav":    gen_banya_steam(),
+        "BanyaVenik.wav":    gen_banya_venik(),
+        "BanyaSplash.wav":   gen_banya_splash(),
+        "BanyaDoor.wav":     gen_banya_door(),
     }
     for d in targets:
         if os.path.isdir(os.path.dirname(d)) or d == "Data/Sounds":
