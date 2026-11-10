@@ -253,12 +253,12 @@
     background: rgba(108, 56, 22, 0.92);
     color: #fff5e0;
   }
-  #banyaView {
+  #banyaView, #arcadeView, #casinoView {
     padding: 0; overflow: hidden;
     background: #120b06;
   }
-  #banyaFrame {
-    width: 100%; height: 100%; border: none; display: block; background: #120b06;
+  #banyaFrame, #arcadeFrame, #casinoFrame {
+    width: 100%; height: 100%; border: none; display: block; background: #070b14;
   }
   .banya-status-strip {
     margin-top: 9px; padding: 8px 12px; border-radius: 8px;
@@ -293,11 +293,11 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="arenaView">▶ 3D АРЕНА (WebGL2)</button>
     <button class="tab-btn banya-tab" data-tab="banyaView" id="banyaNavBtn">🧖 КОЧЕТ В БАНЬКЕ (14)</button>
+    <button class="tab-btn" data-tab="arcadeView" id="arcadeNavBtn">🕹 PIXEL ARCADE (6)</button>
+    <button class="tab-btn" data-tab="casinoView" id="casinoNavBtn">🎰 РУЛЕТКА</button>
     <button class="tab-btn" data-tab="achView">🏆 ДОСТИЖЕНИЯ (14)</button>
     <button class="tab-btn" data-tab="pbrView">🎨 4K PBR КАРТЫ</button>
     <button class="tab-btn" data-tab="sfxView">🔊 АУДИО-СТЕНД (27 WAV)</button>
-    <a class="tab-btn ext" href="minigames.html">🕹 PIXEL ARCADE</a>
-    <a class="tab-btn ext" href="casino.html">🎰 РУЛЕТКА</a>
   </div>
 </nav>
 
@@ -317,7 +317,8 @@
   <div id="waveBanner"></div>
   <div id="scoreBox">
     <div id="hudScore">СЧЁТ: 0 &nbsp;|&nbsp; ₵100 &nbsp;|&nbsp; ВОЛНА 1</div>
-    <div id="hudSub" style="font-size:12px;color:var(--cyan)">РЕКОРД: 0 &nbsp;|&nbsp; 🏆 0/12</div>
+    <div id="hudSub" style="font-size:12px;color:var(--cyan)">РЕКОРД: 0 &nbsp;|&nbsp; 🏆 0/14</div>
+    <button id="exitHudBtn" type="button" style="pointer-events:auto;margin-top:6px;padding:4px 10px;border-radius:7px;border:1px solid rgba(46,242,255,0.45);background:rgba(4,12,26,0.78);color:#cbe4ff;font-size:11.5px;font-weight:700;cursor:pointer">✕ МЕНЮ [ESC]</button>
   </div>
   <div id="dmgLayer"></div>
   <div class="crosshair">
@@ -367,7 +368,7 @@
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
       <div>
         <h1 style="font-size:30px;color:var(--gold);font-weight:900">CHIKENGUN 2.3 — WEBGL2 4K PBR ARENA</h1>
-        <p style="color:#a8ccf0;margin-top:3px;font-size:13.5px">Настоящий аппаратный 3D-движок WebGL2 с картами нормалей, Skybox4K IBL и ACES HDR + нативная сборка Urho3D (<code style="color:var(--cyan)">./run.sh</code>)</p>
+        <p style="color:#a8ccf0;margin-top:3px;font-size:13.5px">Нулевые зависимости: запустите <code style="color:var(--cyan)">./play.sh</code> / <code style="color:var(--cyan)">play.bat</code> (или откройте <code style="color:var(--cyan)">index.html</code>) — аппаратный WebGL2 3D PBR + опциональная сборка Urho3D (<code style="color:var(--cyan)">./build.sh</code>)</p>
       </div>
       <div style="text-align:right;font-size:12.5px;color:var(--emerald);font-weight:800">
         ГРЭППЛ-КРЮК [Z] &nbsp;•&nbsp; ОРБИТА [X] &nbsp;•&nbsp; МУТАТОРЫ ВОЛН
@@ -378,6 +379,10 @@
       <div>
         <button class="play-cta" id="startArenaBtn">▶ ВЫСАДИТЬСЯ НА 3D КИБЕР-АРЕНУ</button>
         <button class="banya-cta" id="openBanyaMenuBtn">🧖 КОЧЕТ В БАНЬКЕ [P] — СИМУЛЯТОР ПАРНОЙ (БАФФ + ₵)</button>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px">
+          <button class="tab-btn" id="openArcadeMenuBtn" style="border-color:rgba(255,62,165,0.5);color:#ffd6ec">🕹 PIXEL ARCADE (6 ИГР)</button>
+          <button class="tab-btn" id="openCasinoMenuBtn" style="border-color:rgba(255,212,71,0.5);color:#ffe9a8">🎰 ЗОЛОТАЯ РУЛЕТКА</button>
+        </div>
         <div class="banya-status-strip" id="banyaMenuStatus">
           <span>♨ Бафф парной: <b style="color:var(--gold)">нет</b></span>
           <span>Концовок открыто: <b>0 / 14</b></span>
@@ -414,6 +419,16 @@
 <!-- 4B. EMBEDDED BANYA SIMULATOR («КОЧЕТ В БАНЬКЕ») -->
 <section class="view-panel" id="banyaView">
   <iframe id="banyaFrame" data-src="banya.html?embed=1&v=2.3.2" title="Кочет в баньке — Симулятор парной"></iframe>
+</section>
+
+<!-- 4C. EMBEDDED PIXEL ARCADE (6 МИНИ-ИГР ОФЛАЙН) -->
+<section class="view-panel" id="arcadeView">
+  <iframe id="arcadeFrame" data-src="minigames.html?embed=1&v=2.3.2" title="Pixel Arcade — 6 мини-игр"></iframe>
+</section>
+
+<!-- 4D. EMBEDDED GOLDEN ROULETTE («КАЗИК» ОФЛАЙН) -->
+<section class="view-panel" id="casinoView">
+  <iframe id="casinoFrame" data-src="casino.html?embed=1&v=2.3.2" title="Золотая Рулетка — симулятор"></iframe>
 </section>
 
 <!-- 5. 14 ACHIEVEMENTS PANEL -->
@@ -470,7 +485,27 @@
 
   // ===== 2. AUDIO & OGG MUSIC ENGINE =====
   let audioCtx = null, analyser = null;
+  function playSynthFallback(file, vol) {
+    try {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+      const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+      const f = String(file);
+      const isBoom = /Boom|Orbital|Grenade|Explosion/i.test(f);
+      const isHit  = /Hit|Rooster|Boss|Kill|Achievement/i.test(f);
+      osc.type = isBoom ? "sawtooth" : isHit ? "triangle" : "square";
+      const t0 = audioCtx.currentTime;
+      osc.frequency.setValueAtTime(isBoom ? 140 : isHit ? 580 : 320, t0);
+      osc.frequency.exponentialRampToValueAtTime(isBoom ? 38 : isHit ? 820 : 110, t0 + (isBoom ? 0.25 : 0.1));
+      gain.gain.setValueAtTime(Math.max(0.02, Math.min(0.28, vol * 0.25)), t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + (isBoom ? 0.26 : 0.11));
+      osc.connect(gain); gain.connect(analyser || audioCtx.destination);
+      osc.start(t0); osc.stop(t0 + (isBoom ? 0.27 : 0.12));
+    } catch (_) {}
+  }
   function playSfx(file, vol = 0.7) {
+    const a = new Audio("Data/Sounds/" + file);
+    a.volume = Math.max(0, Math.min(1, vol));
     try {
       if (!audioCtx) {
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -478,12 +513,12 @@
         analyser.connect(audioCtx.destination);
       }
       if (audioCtx.state === "suspended") audioCtx.resume();
-      const a = new Audio("Data/Sounds/" + file);
-      a.volume = Math.max(0, Math.min(1, vol));
-      audioCtx.createMediaElementSource(a).connect(analyser);
-      a.play().catch(() => {});
+      if (location.protocol !== "file:") {
+        audioCtx.createMediaElementSource(a).connect(analyser);
+      }
+      a.play().catch(() => playSynthFallback(file, vol));
     } catch (_) {
-      const a = new Audio("Data/Sounds/" + file); a.volume = vol; a.play().catch(() => {});
+      a.play().catch(() => playSynthFallback(file, vol));
     }
   }
 
@@ -688,6 +723,16 @@
     } else if (prevBanya && bf && bf.getAttribute("src")) {
       try { bf.contentWindow?.postMessage({ type: "cg-banya-hide" }, "*"); } catch (_) {}
     }
+    const af = document.getElementById("arcadeFrame");
+    if (tabId === "arcadeView" && af) {
+      if (!af.getAttribute("src")) af.setAttribute("src", af.dataset.src || "minigames.html?embed=1");
+      try { af.focus(); } catch (_) {}
+    }
+    const cf = document.getElementById("casinoFrame");
+    if (tabId === "casinoView" && cf) {
+      if (!cf.getAttribute("src")) cf.setAttribute("src", cf.dataset.src || "casino.html?embed=1");
+      try { cf.focus(); } catch (_) {}
+    }
   }
 
   function openBanyaView() {
@@ -853,6 +898,20 @@
     } else if (d.type === "cg-banya-close") {
       switchTab("arenaView");
       refreshBanyaMenuStatus();
+    } else if (d.type === "cg-arcade-reward") {
+      if (typeof d.totalCredits === "number" && Number.isFinite(d.totalCredits)) {
+        engine.state.credits = d.totalCredits;
+        engine.saveCredits?.();
+      }
+      showToast(`🕹 ARCADE: +${d.creditsEarned || 5}₵!`);
+    } else if (d.type === "cg-casino-reward") {
+      if (typeof d.totalCredits === "number" && Number.isFinite(d.totalCredits)) {
+        engine.state.credits = d.totalCredits;
+        engine.saveCredits?.();
+      }
+      showToast(`🎰 РУЛЕТКА: +${d.creditsEarned || 5}₵ к кибер-кредитам!`);
+    } else if (d.type === "cg-arcade-close" || d.type === "cg-casino-close") {
+      switchTab("arenaView");
     }
   });
 
@@ -866,6 +925,10 @@
 
   // Forward Banya hotkeys from parent window when Banya tab is active
   window.addEventListener("keydown", e => {
+    if (e.key === "Escape" && playing && !document.getElementById("perkModal").classList.contains("open") && !document.getElementById("banyaView").classList.contains("active")) {
+      exitArenaToMenu();
+      return;
+    }
     if (!document.getElementById("banyaView").classList.contains("active")) return;
     if (e.key === "Escape") {
       switchTab("arenaView");
@@ -881,13 +944,26 @@
     }
   });
 
+  function exitArenaToMenu() {
+    playing = false;
+    document.body.classList.remove("playing");
+    if (document.pointerLockElement && document.exitPointerLock) {
+      try { document.exitPointerLock(); } catch (_) {}
+    }
+    if (engine) renderAchievements(engine.state.achiev);
+  }
+  document.getElementById("exitHudBtn").onclick = exitArenaToMenu;
   document.getElementById("startArenaBtn").onclick = () => {
     playing = true; document.body.classList.add("playing");
+    window.focus();
     engine.requestLockSmart();
     if (musicIdx === -1) cycleMusic();
   };
   document.getElementById("openBanyaMenuBtn").onclick = openBanyaView;
+  document.getElementById("openArcadeMenuBtn").onclick = () => switchTab("arcadeView");
+  document.getElementById("openCasinoMenuBtn").onclick = () => switchTab("casinoView");
   glCanvas.addEventListener("click", () => {
+    window.focus();
     if (playing && !document.pointerLockElement && !document.getElementById("perkModal").classList.contains("open"))
       engine.requestLockSmart();
   });

@@ -34,13 +34,16 @@ jobs:
           cmake --build build_ci -j
           ctest --test-dir build_ci --output-on-failure
 
-      - name: Validate XML materials, postprocess & procedural WAV generator
+      - name: Validate XML materials, particle effects, postprocess, launchers & web assets
         run: |
+          bash -n build.sh run.sh play.sh play.command tools/syntax_check.sh
+          python3 -m py_compile tools/serve.py
+          node --check web/webgl2_arena.js
           python3 tools/gen_sounds.py
           python3 -c '
           import glob, xml.etree.ElementTree as ET
-          files = set(glob.glob("Data/**/*.xml", recursive=True) + glob.glob("CoreData/**/*.xml", recursive=True) + ["bin/settings.ini"])
+          files = set(glob.glob("Data/**/*.xml", recursive=True) + glob.glob("Data/**/*.pfx", recursive=True) + glob.glob("CoreData/**/*.xml", recursive=True) + ["bin/settings.ini"])
           for f in sorted(files):
               ET.parse(f)
-          print(f"Validated {len(files)} XML files")
+          print(f"Validated {len(files)} XML/PFX files")
           '

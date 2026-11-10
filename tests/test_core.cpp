@@ -21,6 +21,7 @@
 #include "../src/LitePhysics.h"
 #include "../src/CyberSystems.h"
 #include "../src/BanyaSim.h"
+#include "../src/ArcadeGames.h"
 
 namespace fs = std::filesystem;
 
@@ -297,6 +298,50 @@ int main(int argc, char** argv) {
         fs::remove_all(tmpOut);
     }
 
-    std::cout << "[test_core] ВСЕ 8 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
+    std::cout << "[test_core] 9/10 Проверка Золотой Рулетки (src/ArcadeGames.h)..." << std::endl;
+    {
+        Arcade::RouletteSim r;
+        int wallet = 200;
+        assert(r.PlaceBet(Arcade::BET_RED, 0, 50, wallet) && wallet == 150);
+        // idx 1 в ROULETTE_ORDER = 32 (красное, чётное, 19..36, 3-я 12)
+        assert(Arcade::ROULETTE_ORDER[1] == 32 && Arcade::IsRouletteRed(32));
+        assert(r.PlaceBet(Arcade::BET_STRAIGHT, 32, 10, wallet) && wallet == 140);
+        assert(r.StartSpin(1));
+        bool done = false;
+        for (int i = 0; i < 60 && !done; ++i) done = r.Step(0.05f, wallet);
+        assert(done && r.lastNumber == 32);
+        // Выплата: 50*2 (red) + 10*36 (straight) = 100 + 360 = 460; wallet = 140 + 460 = 600
+        assert(r.lastPayout == 460 && wallet == 600 && r.spins == 1);
+        assert(r.Rebet(wallet) && r.CurrentWager() == 60 && wallet == 540);
+        assert(r.UndoBet(wallet) && wallet == 550);
+        r.ClearBets(wallet);
+        assert(wallet == 600 && r.CurrentWager() == 0);
+    }
+
+    std::cout << "[test_core] 10/10 Проверка Pixel Arcade (src/ArcadeGames.h: Змейка, Арканоид, Дино, Pong)..." << std::endl;
+    {
+        Arcade::PixelArcadeSim sim;
+        sim.Reset(Arcade::GAME_SNAKE);
+        sim.snakeFood = {11, 8};
+        for (int s = 0; s < 3; ++s) sim.Step(0.05f, 1, 0, false);
+        assert(sim.score == 15 && sim.snakeBody.size() == 4);
+        // Защита от мгновенного разворота на 180 градусов
+        sim.SetSnakeDir(-1, 0);
+        assert(sim.snakeNextX == 1);
+
+        sim.Reset(Arcade::GAME_DINO);
+        sim.Step(0.016f, 0, 0, true);
+        assert(!sim.dinoOnGround && sim.dinoY < 240.0f);
+
+        sim.Reset(Arcade::GAME_BREAKOUT);
+        assert(sim.bricks.size() == 32);
+        sim.Step(0.05f, 1, 0, false);
+        assert(sim.padX > 198.0f && !sim.BuildDrawRects().empty());
+
+        sim.Reset(Arcade::GAME_PONG);
+        assert(Arcade::PixelArcadeSim::ComputeCreditsReward(100, true) == 20);
+    }
+
+    std::cout << "[test_core] ВСЕ 10 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
     return 0;
 }

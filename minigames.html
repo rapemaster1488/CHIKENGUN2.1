@@ -4,11 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PIXEL ARCADE — Мини-игры</title>
-<link href="https://cdn.jsdelivr.net/fontsource/fonts/press-start-2p@latest/cyrillic-400-normal.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/fontsource/fonts/press-start-2p@latest/latin-400-normal.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/cyrillic-400-normal.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/fontsource/fonts/inter@latest/cyrillic-600-normal.css" rel="stylesheet">
-<script src="https://cdn.tailwindcss.com"></script>
 <style>
   :root{
     --bg:#05051a;
@@ -20,7 +15,26 @@
     --orange:#ff7e3e;
   }
   *{ -webkit-font-smoothing:none; box-sizing:border-box; }
-  .font-pixel{ font-family:'Press Start 2P', monospace; image-rendering:pixelated; }
+  .font-pixel{ font-family:'Press Start 2P', 'Courier New', ui-monospace, monospace; image-rendering:pixelated; }
+  .font-sans{ font-family:'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  .relative{ position:relative; }
+  .flex{ display:flex; }
+  .flex-wrap{ flex-wrap:wrap; }
+  .items-center{ align-items:center; }
+  .justify-between{ justify-content:space-between; }
+  .gap-2{ gap:0.5rem; }
+  .gap-3{ gap:0.75rem; }
+  .gap-4{ gap:1rem; }
+  .mt-3{ margin-top:0.75rem; }
+  .mb-3{ margin-bottom:0.75rem; }
+  .-mt-1{ margin-top:-0.25rem; }
+  .text-xs{ font-size:0.75rem; line-height:1rem; }
+  .text-sm{ font-size:0.875rem; line-height:1.25rem; }
+  .text-\[9px\]{ font-size:9px; line-height:1.35; }
+  .text-pink-300{ color:#f9a8d4; }
+  .text-cyan-300{ color:#67e8f9; }
+  .text-yellow-300{ color:#fde047; }
+  .text-gray-400{ color:#9ca3af; }
   html,body{ background:var(--bg); color:#fff; overflow-x:hidden; margin:0; padding:0; }
   body{
     background:
@@ -29,7 +43,7 @@
       radial-gradient(ellipse 70% 50% at 10% 90%, rgba(155,62,255,.18), transparent 60%),
       linear-gradient(180deg,#05051a 0%, #07072a 100%);
     min-height:100vh;
-    font-family:'Inter', sans-serif;
+    font-family:'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
   }
   #starfield{ position:fixed; inset:0; z-index:0; pointer-events:none; }
 
@@ -383,6 +397,7 @@
       </div>
     </div>
     <div class="nav-games" id="navGames"></div>
+    <button class="nav-game-btn" id="cgBackBtn" style="--color:#ffe93e" type="button">← В 3D АРЕНУ</button>
   </div>
 </nav>
 
@@ -718,6 +733,27 @@ function updateStats(){
 }
 updateStats();
 
+function awardArenaCredits(gameId, score){
+  if(!score || score < 10) return;
+  const cr = Math.min(40, Math.max(5, Math.floor(score / 25)));
+  const cur = parseInt(store.get('cg23_credits') || '100', 10);
+  const next = (Number.isFinite(cur) ? cur : 100) + cr;
+  store.set('cg23_credits', next);
+  try{
+    if(window.parent && window.parent !== window){
+      window.parent.postMessage({ type:'cg-arcade-reward', gameId, score, creditsEarned:cr, totalCredits:next }, '*');
+    }
+  }catch(_){}
+  showToast('🕹 ' + gameId.toUpperCase() + ': +' + cr + '₵ для 3D Арены!');
+}
+document.getElementById('cgBackBtn').onclick = () => {
+  if(window.parent && window.parent !== window){
+    try{ window.parent.postMessage({ type:'cg-arcade-close' }, '*'); }catch(_){}
+  }else{
+    location.href = 'index.html';
+  }
+};
+
 /* ---------- ввод ---------- */
 const keys = {};
 window.addEventListener('keydown', e=>{
@@ -758,7 +794,7 @@ function makeGame(def){
       loop();
     },
     addScore(n){ this.score+=n; updateScore(this.score); },
-    die(){ if(this.over) return; this.over=true; checkHi(def.id, this.score); },
+    die(){ if(this.over) return; this.over=true; checkHi(def.id, this.score); awardArenaCredits(def.id, this.score); },
     cleanup(){},
   }, def);
 }

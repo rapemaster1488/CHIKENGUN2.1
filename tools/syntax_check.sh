@@ -50,16 +50,16 @@ fi
 SDL_CFLAGS=""
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists sdl2; then
     for f in $(pkg-config --cflags-only-I sdl2 | tr ' ' '\n' | sed 's/^-I//'); do
-        [ -n "$f" ] && SDL_CFLAGS="$SDL_CFLAGS -I$f"
+        [ -n "$f" ] && SDL_CFLAGS="$SDL_CFLAGS -isystem $f"
     done
 fi
 for d in "$FOUND_INC/Urho3D/ThirdParty" /usr/include /usr/local/include "$HOME/urho3d/build/include"; do
-    [ -d "$d/SDL" ] && SDL_CFLAGS="$SDL_CFLAGS -I$d"
+    [ -d "$d/SDL" ] && SDL_CFLAGS="$SDL_CFLAGS -isystem $d"
 done
 if ! echo "$SDL_CFLAGS" | grep -q "." && [ -d /usr/include/SDL2 ]; then
     mkdir -p /tmp/chikengun_sdl_shim
     ln -sfn /usr/include/SDL2 /tmp/chikengun_sdl_shim/SDL
-    SDL_CFLAGS="-I/tmp/chikengun_sdl_shim"
+    SDL_CFLAGS="-isystem /tmp/chikengun_sdl_shim"
 fi
 
 EXTRA=""
@@ -70,14 +70,14 @@ for d in \
     "$HOME/urho3d/ThirdParty/Bullet/src"
 do
     if [ -f "$d/Bullet/LinearMath/btIDebugDraw.h" ] || [ -f "$d/LinearMath/btIDebugDraw.h" ]; then
-        EXTRA="-I$d"; break
+        EXTRA="-isystem $d"; break
     fi
 done
 
 echo "[syntax] Проверка src/MyApp.cpp против заголовков Urho3D ($FOUND_INC)..."
-"$CXX" -std=c++17 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare -fsyntax-only \
-    -I"$FOUND_INC" \
-    -I"$FOUND_INC/Urho3D/ThirdParty" \
+"$CXX" -std=c++17 -Wall -Wextra -Werror -fsyntax-only \
+    -isystem "$FOUND_INC" \
+    -isystem "$FOUND_INC/Urho3D/ThirdParty" \
     $SDL_CFLAGS $EXTRA \
     "$ROOT/src/MyApp.cpp"
-echo "[syntax] OK: src/MyApp.cpp (полная проверка типов Urho3D пройдена!)"
+echo "[syntax] OK: src/MyApp.cpp (полная проверка типов Urho3D пройдена без предупреждений!)"

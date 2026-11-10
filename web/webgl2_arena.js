@@ -344,8 +344,20 @@
     const canvas = document.getElementById("glCanvas");
     const gl = canvas.getContext("webgl2", { antialias: true, powerPreference: "high-performance" });
     if (!gl) {
-      alert("WebGL2 не поддерживается этим браузером!");
-      return;
+      if (opts && opts.showToast) opts.showToast("⚠ WebGL2 недоступен — откройте «Кочет в баньке» [P] или соберите нативный Urho3D.");
+      return {
+        state: {
+          credits: 100, achiev: 0, perks: [0,0,0,0], banyaBuff: 0, sensMul: 1.0,
+          score: 0, highScore: 0, wave: 1, hp: 100, maxHp: 100, armor: 50,
+          orbitalPct: 40, wep: 2, skin: 0, atmIdx: 0, mutator: 0,
+          ammo: [18,12,30,10,5,120,6,3,8], reloadT: 0, grappleCd: 0, grenCd: 0, turretCd: 0
+        },
+        saveCredits() {},
+        requestLockSmart() {},
+        setSensitivity() {},
+        cycleAtmosphere() {},
+        applyBanyaReward() {}
+      };
     }
 
     const extAniso = gl.getExtension("EXT_texture_filter_anisotropic");
@@ -392,7 +404,68 @@
       sph:  buildSphereMesh(gl, 12, 16)
     };
 
-    // Load 2D PBR Texture Trios + Sky4K Cubemap
+    // Load 2D PBR Texture Trios + Sky4K Cubemap (with instant procedural Canvas2D fallback for file:// / offline boots)
+    const isFileProto = location.protocol === "file:";
+    function uploadCanvasTex(tex, cnv) {
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cnv);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      if (extAniso) gl.texParameterf(gl.TEXTURE_2D, extAniso.TEXTURE_MAX_ANISOTROPY_EXT, maxAniso);
+    }
+
+    function makeProcCanvas(kind, channel) {
+      const c = document.createElement("canvas");
+      c.width = c.height = 128;
+      const g = c.getContext("2d");
+      if (channel === "norm") {
+        g.fillStyle = "rgb(128,128,255)";
+        g.fillRect(0, 0, 128, 128);
+        g.strokeStyle = "rgb(150,150,255)";
+        g.lineWidth = 3;
+        g.strokeRect(4, 4, 120, 120);
+        return c;
+      }
+      if (channel === "rm") {
+        g.fillStyle = (kind === "BrushedMetal" || kind === "MetalPanel") ? "rgb(255,85,205)"
+                    : (kind === "HazardMetal") ? "rgb(255,110,145)" : "rgb(255,175,20)";
+        g.fillRect(0, 0, 128, 128);
+        return c;
+      }
+      if (kind === "FloorTile") {
+        g.fillStyle = "#16243d"; g.fillRect(0, 0, 128, 128);
+        g.strokeStyle = "#274f7d"; g.lineWidth = 4; g.strokeRect(2, 2, 124, 124);
+        g.strokeStyle = "rgba(46,242,255,0.22)"; g.lineWidth = 1.5;
+        g.beginPath(); g.moveTo(64, 0); g.lineTo(64, 128); g.moveTo(0, 64); g.lineTo(128, 64); g.stroke();
+      } else if (kind === "HazardMetal") {
+        g.fillStyle = "#22262e"; g.fillRect(0, 0, 128, 128);
+        g.fillStyle = "#f2b718";
+        for (let i = -128; i < 256; i += 32) {
+          g.beginPath(); g.moveTo(i, 0); g.lineTo(i + 16, 0); g.lineTo(i - 48, 128); g.lineTo(i - 64, 128); g.fill();
+        }
+      } else if (kind === "CrateWood") {
+        g.fillStyle = "#7a522e"; g.fillRect(0, 0, 128, 128);
+        g.strokeStyle = "#4d3118"; g.lineWidth = 6; g.strokeRect(3, 3, 122, 122);
+        g.beginPath(); g.moveTo(6, 6); g.lineTo(122, 122); g.stroke();
+      } else if (kind === "FeatherPBR") {
+        g.fillStyle = "#f3eee4"; g.fillRect(0, 0, 128, 128);
+        g.strokeStyle = "#dcd3c3"; g.lineWidth = 2;
+        for (let y = 8; y < 128; y += 16) { g.beginPath(); g.moveTo(0, y); g.lineTo(128, y + 6); g.stroke(); }
+      } else if (kind === "StoneHD") {
+        g.fillStyle = "#455166"; g.fillRect(0, 0, 128, 128);
+        g.strokeStyle = "#2c3544"; g.lineWidth = 3;
+        g.strokeRect(0, 0, 64, 64); g.strokeRect(64, 64, 64, 64);
+      } else {
+        g.fillStyle = "#5c6c84"; g.fillRect(0, 0, 128, 128);
+        g.strokeStyle = "#8aa0be"; g.lineWidth = 2;
+        for (let y = 0; y < 128; y += 16) { g.beginPath(); g.moveTo(0, y); g.lineTo(128, y); g.stroke(); }
+      }
+      return c;
+    }
+
     function makeFallbackTex(r, g, b) {
       const t = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D, t);
@@ -403,21 +476,22 @@
     const flatNorm = makeFallbackTex(128, 128, 255);
     const defRM    = makeFallbackTex(255, 140, 20);
 
-    function loadTex2D(url, fallback) {
+    function loadTex2D(url, fallback, procKind, procChannel) {
       const tex = gl.createTexture();
-      gl.bindTexture(gl.TEXTURE_2D, tex);
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE,
-                    fallback === flatNorm ? new Uint8Array([128,128,255,255]) : new Uint8Array([200,200,200,255]));
+      uploadCanvasTex(tex, makeProcCanvas(procKind, procChannel));
+      if (isFileProto) return tex;
       const img = new Image();
       img.onload = () => {
-        gl.bindTexture(gl.TEXTURE_2D, tex);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
-        gl.generateMipmap(gl.TEXTURE_2D);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        if (extAniso) gl.texParameterf(gl.TEXTURE_2D, extAniso.TEXTURE_MAX_ANISOTROPY_EXT, maxAniso);
+        try {
+          gl.bindTexture(gl.TEXTURE_2D, tex);
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+          gl.generateMipmap(gl.TEXTURE_2D);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+          gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+          if (extAniso) gl.texParameterf(gl.TEXTURE_2D, extAniso.TEXTURE_MAX_ANISOTROPY_EXT, maxAniso);
+        } catch (_) {}
       };
       img.src = url;
       return tex;
@@ -425,9 +499,9 @@
 
     function loadMaterialSet(prefix) {
       return {
-        diff: loadTex2D(`Data/Textures/${prefix}Diffuse.png`, whiteTex),
-        norm: loadTex2D(`Data/Textures/${prefix}Normal.png`, flatNorm),
-        rm:   loadTex2D(`Data/Textures/${prefix}RoughMetal.png`, defRM)
+        diff: loadTex2D(`Data/Textures/${prefix}Diffuse.png`, whiteTex, prefix, "diff"),
+        norm: loadTex2D(`Data/Textures/${prefix}Normal.png`, flatNorm, prefix, "norm"),
+        rm:   loadTex2D(`Data/Textures/${prefix}RoughMetal.png`, defRM, prefix, "rm")
       };
     }
 
@@ -441,6 +515,28 @@
       hazard:  loadMaterialSet("HazardMetal")
     };
 
+    function makeSkyFaceCanvas(target) {
+      const c = document.createElement("canvas");
+      c.width = c.height = 128;
+      const g = c.getContext("2d");
+      if (target === gl.TEXTURE_CUBE_MAP_POSITIVE_Y) {
+        g.fillStyle = "#0e1d3b"; g.fillRect(0, 0, 128, 128);
+      } else if (target === gl.TEXTURE_CUBE_MAP_NEGATIVE_Y) {
+        g.fillStyle = "#162033"; g.fillRect(0, 0, 128, 128);
+      } else {
+        const grd = g.createLinearGradient(0, 0, 0, 128);
+        grd.addColorStop(0, "#0d1a38");
+        grd.addColorStop(0.65, "#1d3b6b");
+        grd.addColorStop(1, "#355e8f");
+        g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+      }
+      g.fillStyle = "rgba(255,245,210,0.75)";
+      for (let i = 0; i < 18; i++) {
+        g.fillRect(((i * 53 + target) % 120) + 4, ((i * 37) % 72) + 4, 2, 2);
+      }
+      return c;
+    }
+
     const envCube = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_CUBE_MAP, envCube);
     const cubeFaces = [
@@ -452,15 +548,20 @@
       [gl.TEXTURE_CUBE_MAP_NEGATIVE_Z, "Data/Textures/Sky4K_NegZ.png"]
     ];
     let cubeLoaded = 0;
-    cubeFaces.forEach(([target, url]) => {
-      gl.texImage2D(target, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([28, 42, 76, 255]));
+    const cubeImgs = new Array(6);
+    cubeFaces.forEach(([target, url], idx) => {
+      gl.texImage2D(target, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, makeSkyFaceCanvas(target));
+      if (isFileProto) return;
       const im = new Image();
       im.onload = () => {
-        gl.bindTexture(gl.TEXTURE_CUBE_MAP, envCube);
-        gl.texImage2D(target, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, im);
+        cubeImgs[idx] = im;
         if (++cubeLoaded === 6) {
-          gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
-          gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+          try {
+            gl.bindTexture(gl.TEXTURE_CUBE_MAP, envCube);
+            cubeFaces.forEach(([t], j) => gl.texImage2D(t, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cubeImgs[j]));
+            gl.generateMipmap(gl.TEXTURE_CUBE_MAP);
+            gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+          } catch (_) {}
         }
       };
       im.src = url;

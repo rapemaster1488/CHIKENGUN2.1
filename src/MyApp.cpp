@@ -79,7 +79,11 @@
 
 #include <Urho3D/Input/Input.h>
 #include <Urho3D/Input/InputEvents.h>
-#include <Urho3D/Input/InputConstants.h>
+#if defined(__has_include)
+#  if __has_include(<Urho3D/Input/InputConstants.h>)
+#    include <Urho3D/Input/InputConstants.h>
+#  endif
+#endif
 
 #include <Urho3D/UI/UI.h>
 #include <Urho3D/UI/UIElement.h>
@@ -95,6 +99,7 @@
 #include "LitePhysics.h"
 #include "CyberSystems.h"
 #include "BanyaSim.h"
+#include "ArcadeGames.h"
 
 #include <Urho3D/IO/Log.h>
 #include <Urho3D/IO/File.h>
@@ -113,6 +118,27 @@
 #include <Urho3D/UI/Button.h>
 
 using namespace Urho3D;
+
+// Совместимость Urho3D 1.7.1 / 1.8 (GetInt, без IsAdded) и 1.9+ / master (GetI32, IsAdded)
+namespace {
+template <typename V, typename = void>
+struct UrhoVariantIntGetter {
+    static int Get(const V& v) { return v.GetInt(); }
+};
+template <typename V>
+struct UrhoVariantIntGetter<V, std::void_t<decltype(std::declval<const V&>().GetI32())>> {
+    static int Get(const V& v) { return static_cast<int>(v.GetI32()); }
+};
+inline int VarToInt(const Variant& v) { return UrhoVariantIntGetter<Variant>::Get(v); }
+
+inline bool RenderPathHasTag(const RenderPath* rp, const String& tag) {
+    if (!rp) return false;
+    for (unsigned i = 0; i < (unsigned)rp->commands_.Size(); ++i) {
+        if (rp->commands_[i].tag_ == tag) return true;
+    }
+    return false;
+}
+} // namespace
 
 // ============================================================================
 // Константы и настройки игры
@@ -366,7 +392,7 @@ private:
         compacted.Reserve(colliders_.Size());
         Vector<int> remap;
         remap.Resize(colliders_.Size());
-        for (unsigned i = 0; i < colliders_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)colliders_.Size(); ++i) {
             if (colliders_[i].tag == 7) { remap[i] = -1; continue; }
             remap[i] = (int)compacted.Size();
             compacted.Push(colliders_[i]);
@@ -375,10 +401,10 @@ private:
             if (idx >= 0 && idx < (int)remap.Size()) idx = remap[(unsigned)idx];
             else idx = -1;
         };
-        for (unsigned i = 0; i < targets_.Size(); ++i) fix(targets_[i].colliderIdx_);
-        for (unsigned i = 0; i < enemies_.Size(); ++i) fix(enemies_[i].colliderIdx_);
-        for (unsigned i = 0; i < movingTargetsLite_.Size(); ++i) fix(movingTargetsLite_[i].colliderIdx_);
-        for (unsigned i = 0; i < barrels_.Size(); ++i) fix(barrels_[i].colliderIdx_);
+        for (unsigned i = 0; i < (unsigned)targets_.Size(); ++i) fix(targets_[i].colliderIdx_);
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) fix(enemies_[i].colliderIdx_);
+        for (unsigned i = 0; i < (unsigned)movingTargetsLite_.Size(); ++i) fix(movingTargetsLite_[i].colliderIdx_);
+        for (unsigned i = 0; i < (unsigned)barrels_.Size(); ++i) fix(barrels_[i].colliderIdx_);
         colliders_ = compacted;
         colliderGarbage_ = 0;
     }
@@ -410,7 +436,7 @@ private:
             }
         }
 
-        for (unsigned i = 0; i < colliders_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)colliders_.Size(); ++i) {
             const Lite::Collider& c = colliders_[i];
             if (c.tag == 7 || !(tagMask & (1 << c.tag))) continue; // 7 = удалён
             float t = c.sphere ? Lite::RaySphere(origin, dir, c.center, c.half.x_)
@@ -434,7 +460,7 @@ private:
     }
     // Свободна ли точка для спавна (пересечение с AABB/сферами статики)
     bool IsPointFree(const Vector3& p, float radius) const {
-        for (unsigned i = 0; i < colliders_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)colliders_.Size(); ++i) {
             const Lite::Collider& c = colliders_[i];
             if (c.tag != 0) continue; // только статика: стены, колонны, ящики, бочки, платформы
             float dx = p.x_ - c.center.x_, dy = p.y_ - c.center.y_, dz = p.z_ - c.center.z_;
@@ -550,6 +576,7 @@ private:
     bool gameOver_ = false;
     SharedPtr<UIElement> gameOverPanel_;
     SharedPtr<Text> gameOverStatsText_;
+    String lastGameOverStats_;
 
     // === Game feel: hitmarker, низкое HP, трейсеры, снаряды врагов ===
     float hitMarkerTimer_ = 0.0f;       // >0 — показывать крестик попадания
@@ -872,6 +899,22 @@ private:
     SharedPtr<BorderImage> banyaEndBtnRestart_, banyaEndBtnStats_, banyaEndBtnBack_;
     SharedPtr<Text>        banyaStatsRunText_, banyaStatsAllText_;
     SharedPtr<BorderImage> banyaStatsCloseBtn_;
+
+    // === 2.5 ЗОЛОТАЯ РУЛЕТКА [J] И PIXEL ARCADE [K] (src/ArcadeGames.h) ===
+    Arcade::RouletteSim    rouletteSim_;
+    bool                   rouletteOpen_ = false;
+    bool                   rouletteFromMenu_ = false;
+    SharedPtr<UIElement>   roulettePanel_;
+    SharedPtr<Text>        rouletteBalanceText_, rouletteWheelText_, rouletteResultText_, rouletteHistText_, rouletteBetsText_, rouletteChipText_;
+    Vector<SharedPtr<BorderImage>> rouletteBtns_;
+
+    Arcade::PixelArcadeSim arcadeSim_;
+    bool                   arcadeOpen_ = false;
+    bool                   arcadeFromMenu_ = false;
+    SharedPtr<UIElement>   arcadePanel_, arcadeCanvas_;
+    SharedPtr<Text>        arcadeTitleText_, arcadeScoreText_, arcadeHintText_, arcadeOverlayText_;
+    Vector<SharedPtr<BorderImage>> arcadeRectPool_;
+    Vector<SharedPtr<BorderImage>> arcadeGameTabs_;
     SharedPtr<Material> decalMat_;     // пулевые отверстия
     SharedPtr<Material> shockMat_;     // ударная волна взрыва
     SharedPtr<Material> shellMat_;     // латунные гильзы
@@ -1134,42 +1177,44 @@ public:
                 return !p.Empty() && stat(p.CString(), &st) == 0 && S_ISDIR(st.st_mode);
             };
 
-            // 1) Корректный абсолютный путь к Data/
+            // 1) Корректный абсолютный путь к Data/ (проверяем наличие Materials и Fonts,
+            // чтобы частичный build/Data с одними Textures от CMake не затенял корневую Data/).
+            auto dataDirOk = [&dirOk](const String& p) -> bool {
+                return dirOk(p) && dirOk(p + "/Materials") && dirOk(p + "/Fonts");
+            };
             String goodData;
-            if (dirOk(exeDir + "/Data"))               goodData = exeDir + "/Data";        // build/Data
-            else if (dirOk(exeDir + "/../Data"))       goodData = exeDir + "/../Data";     // ../Data от build/
-            else if (dirOk("./Data"))                  goodData = "./Data";               // запуск из корня
-            else if (dirOk("../Data"))                 goodData = "../Data";              // запуск из build/
+            if (dataDirOk(exeDir + "/Data"))               goodData = exeDir + "/Data";        // build/Data
+            else if (dataDirOk(exeDir + "/../Data"))       goodData = exeDir + "/../Data";     // ../Data от build/
+            else if (dataDirOk("./Data"))                  goodData = "./Data";               // запуск из корня
+            else if (dataDirOk("../Data"))                 goodData = "../Data";              // запуск из build/
 
             // 2) Ставим правильный Data ПЕРВЫМ префиксом.
             //    Методы Get/SetResourcePrefixPaths в этой сборке private —
             //    но AddResourceDir(path, priority=0) вставляет путь перед
-            //    стандартным PRIORITY_LAST-записями Application, т.е. выше битого Data/.
+            //    стандартными PRIORITY_LAST-записями Application, т.е. выше битого Data/.
             if (!goodData.Empty()) {
+                cache->RemoveResourceDir(goodData);
                 cache->AddResourceDir(goodData, 0);
                 URHO3D_LOGINFO("Папка ресурсов добавлена (priority 0): " + goodData);
-
-            // УДАЛЕНО: на старте игра рекурсивно удаляла через system("find ... -delete")
-            // все .pfx не только у себя, но и в установленном Urho3D (включая bin/Data движка).
-            // Это необратимо ломало чужую установку движка ради подавления строчки в логе;
-            // пустые/битые .pfx теперь просто игнорируются (см. CreateParticleEffects).
             } else {
-                URHO3D_LOGWARNING("Папка Data/ не найдена ни рядом с бинарником, ни в cwd! Скопируй: cp -r ~/urho3d/bin/Data ./Data");
+                URHO3D_LOGWARNING("Папка Data/ не найдена ни рядом с бинарником, ни в cwd!");
+            }
+            if (!exeDir.Empty() && dirOk(exeDir + "/Data/Textures") && exeDir + "/Data" != goodData) {
+                cache->RemoveResourceDir(exeDir + "/Data");
+                cache->AddResourceDir(exeDir + "/Data", 0);
             }
 
-            // 3) CoreData: ищем рядом с Data и добавляем отдельным префиксом
+            // 3) CoreData: ищем в корне, рядом с exe и в parent-каталогах
             Vector<String> coreCandidates;
-            if (!goodData.Empty())   coreCandidates.Push(goodData + "/CoreData");
             if (!exeDir.Empty()) {
                 coreCandidates.Push(exeDir + "/CoreData");
                 coreCandidates.Push(exeDir + "/../CoreData");
-                coreCandidates.Push(exeDir + "/../../bin/CoreData");
             }
-            coreCandidates.Push("./Data/CoreData");
-            coreCandidates.Push("../Data/CoreData");
+            if (!goodData.Empty())   coreCandidates.Push(goodData + "/CoreData");
             coreCandidates.Push("./CoreData");
+            coreCandidates.Push("../CoreData");
             bool coreAdded = false;
-            for (unsigned i = 0; i < coreCandidates.Size(); ++i) {
+            for (unsigned i = 0; i < (unsigned)coreCandidates.Size(); ++i) {
                 if (dirOk(coreCandidates[i])) {
                     cache->AddResourceDir(coreCandidates[i]);
                     URHO3D_LOGINFO("CoreData найден и добавлен: " + coreCandidates[i]);
@@ -1178,34 +1223,19 @@ public:
                 }
             }
             if (!coreAdded)
-                URHO3D_LOGWARNING("CoreData не найден! Положи папку: mkdir -p Data && cp -r ~/urho3d/bin/CoreData Data/CoreData (из корня проекта)");
+                URHO3D_LOGWARNING("CoreData не найден! Убедитесь, что каталог CoreData/ находится в корне проекта или рядом с бинарником.");
 
-            // 4) Дополнительно регистрируем bin/Data без вызова внешних shell-команд (system),
-            //    чтобы ресурсы находились при запуске из корня, build/ или bin/.
-            const char* extraDataDirs[] = { "./bin/Data", "../bin/Data" };
-            for (const char* ed : extraDataDirs) {
-                if (dirOk(ed)) {
-                    cache->AddResourceDir(ed);
-                    break;
-                }
-            }
-            if (!exeDir.Empty() && dirOk(exeDir + "/../bin/Data"))
-                cache->AddResourceDir(exeDir + "/../bin/Data");
-
-            // Текстуры HD подключаются отдельным текстурным путём, если лежат в
-            // bin/Data/TexturesHD (генерируются tools/gen_textures.py).
+            // 4) Дополнительно регистрируем TexturesHD, если текстуры разложены отдельно
             {
                 Vector<String> texHdCandidates;
                 if (!goodData.Empty())   texHdCandidates.Push(goodData + "/TexturesHD");
-                if (!exeDir.Empty())     texHdCandidates.Push(exeDir + "/../bin/Data/TexturesHD");
-                texHdCandidates.Push("./bin/Data/TexturesHD");
-                texHdCandidates.Push("../bin/Data/TexturesHD");
+                texHdCandidates.Push("./Data/TexturesHD");
+                texHdCandidates.Push("../Data/TexturesHD");
                 auto fileOk = [](const String& p) -> bool {
                     struct stat st; return !p.Empty() && stat(p.CString(), &st) == 0;
                 };
-                for (unsigned i = 0; i < texHdCandidates.Size(); ++i) {
+                for (unsigned i = 0; i < (unsigned)texHdCandidates.Size(); ++i) {
                     if (fileOk(texHdCandidates[i] + "/StoneHDDiffuse.png")) {
-                        // AddTextureDir не существует — кладём папку в общий реестр ресурсов
                         cache->AddResourceDir(texHdCandidates[i], 1);
                         URHO3D_LOGINFO("TexturesHD подключён: " + texHdCandidates[i]);
                         break;
@@ -1255,20 +1285,22 @@ private:
         // ВАЖНО: отключаем аппаратный GL_FRAMEBUFFER_SRGB на бэкбафере!
         // Раньше SetSRGB(true) высветлял все тёмные плашки UI в «молоко» и давал белый экран в HDR.
         // Теперь тональная компрессия ACES Filmic и цветокоррекция выполняются шейдером Cinema4K.glsl!
+        static const int kAniso[3] = { 1, 4, 16 };
+        static const unsigned kShadowSizes[3] = { 1024, 2048, 4096 };
         graphics->SetSRGB(false);
-        graphics->SetDefaultTextureAnisotropy((gfxAnisoIdx_ >= 3) ? 16 : (gfxAnisoIdx_ == 2 ? 8 : 2));
+        graphics->SetDefaultTextureAnisotropy((unsigned)kAniso[Clamp(gfxAnisoIdx_, 0, 2)]);
         graphics->SetDefaultTextureFilterMode((gfxAnisoIdx_ >= 2) ? FILTER_ANISOTROPIC
                                             : (gfxAnisoIdx_ == 1 ? FILTER_TRILINEAR : FILTER_BILINEAR));
 
         renderer->SetTextureQuality(QUALITY_MAX);
-        renderer->SetMaterialQuality((gfxQualityIdx_ >= 2) ? QUALITY_MAX
+        renderer->SetMaterialQuality((gfxQualityIdx_ >= 2) ? QUALITY_HIGH
                                    : (gfxQualityIdx_ == 1 ? QUALITY_MEDIUM : QUALITY_LOW));
-        renderer->SetSpecularLighting(true);
+        renderer->SetSpecularLighting(gfxQualityIdx_ >= 1);
         renderer->SetDynamicInstancing(true);
-        renderer->SetDrawShadows(gfxShadowIdx_ > 0);
-        renderer->SetShadowMapSize(gfxShadowIdx_ >= 3 ? 8192 : (gfxShadowIdx_ == 2 ? 4096 : 2048));
-        renderer->SetShadowQuality(SHADOWQUALITY_PCF_24BIT);
-        renderer->SetShadowSoftness(1.25f);
+        renderer->SetDrawShadows(gfxQualityIdx_ > 0);
+        renderer->SetShadowMapSize(kShadowSizes[Clamp(gfxShadowIdx_, 0, 2)]);
+        renderer->SetShadowQuality(gfxQualityIdx_ >= 2 ? SHADOWQUALITY_PCF_24BIT : SHADOWQUALITY_PCF_16BIT);
+        renderer->SetShadowSoftness(gfxQualityIdx_ >= 3 ? 1.15f : 1.0f);
         renderer->SetHDRRendering(gfxHdr_ || gfxGlowIdx_ >= 1);
     }
 
@@ -1281,7 +1313,7 @@ private:
         planeModel_  = cache->GetResource<Model>("Models/Plane.mdl");
         if (!font_) {
             font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
-            if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.sdf");
         }
     }
 
@@ -1337,9 +1369,13 @@ private:
         if (!bossRoarSound_) bossRoarSound_ = cache->GetResource<Sound>("Sounds/RoosterBoss.wav");
         waveStartSound_ = cache->GetResource<Sound>("Sounds/Wave_Start.wav");
         if (!waveStartSound_) waveStartSound_ = cache->GetResource<Sound>("Sounds/WaveStart.wav");
+    }
 
+    void StartMusicPlayback() {
+        auto* cache = GetSubsystem<ResourceCache>();
+        if (!cache || !cameraNode_ || musicSource_) return;
         Sound* music = cache->GetResource<Sound>("Music/Game_Theme_Loop.ogg");
-        if (music && cameraNode_ && !musicSource_) {
+        if (music) {
             music->SetLooped(true);
             musicSource_ = cameraNode_->CreateComponent<SoundSource>();
             if (musicSource_) {
@@ -1347,14 +1383,6 @@ private:
                 musicSource_->Play(music);
             }
         }
-    }
-
-    bool LoadResources() {
-        LoadCoreModelsAndFont();
-        CreateMaterials();
-        CreateParticleEffects();
-        LoadAudioAssets();
-        return true;
     }
 
     // Хранилище и O(1)-кэш дедупликации процедурно клонированных материалов (фикс утечки при долгой игре)
@@ -1384,10 +1412,10 @@ private:
         }
     }
 
-    SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<Texture>& norm, const Color& c) {
+    SharedPtr<Material> MakeTinted(Texture* diff, Texture* norm, const Color& c) {
         Color nc = NormByteColor(c);
         uint64_t h = 1469598103934665603ULL;
-        const void* dp = diff.Get(); const void* np = norm.Get();
+        const void* dp = diff; const void* np = norm;
         h = Lite::HashMixBytes(h, &dp, sizeof(dp));
         h = Lite::HashMixBytes(h, &np, sizeof(np));
         h = Lite::HashFloatQ(h, nc.r_); h = Lite::HashFloatQ(h, nc.g_);
@@ -1658,59 +1686,69 @@ private:
     void CreateParticleEffects() {
         auto* cache = GetSubsystem<ResourceCache>();
 
-        // Ищем НАСТОЯЩИЙ валидный pfx: сначала Spark.pfx из Data проекта,
-        // затем стандартные эффекты движка (Urho3D bin/Data/Particle/*).
-        // Пустые/битые файлы дают "unknown resource type" и опасны для эмиттера.
         static const char* kSparkCandidates[] = {
-            "Particle/Spark.pfx", "Particle/SparkBig.pfx",
-            "Particle/Fireworks.pfx", "Particle/ExplosionBig.pfx",
-            "Particle/Torch.pfx", "Particle/Flame.pfx"
+            "Particle/Burst.xml", "Particle/Fire.xml", "Particle/SnowExplosionBig.xml",
+            "Particle/Spark.pfx", "Particle/SparkBig.pfx", "Particle/ExplosionBig.pfx"
         };
         for (const char* p : kSparkCandidates) {
             ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
-            // Валидность проверяем по числу техник (GetTechnique у ParticleEffect отсутствует)
-            if (e && !e->GetName().Empty()) { sparkEffect_ = e; break; }
+            if (e && !e->GetName().Empty() && e->GetMaterial() != nullptr) { sparkEffect_ = e; break; }
         }
         static const char* kSmokeCandidates[] = {
-            "Particle/Smoke.pfx", "Particle/Mist.pfx", "Particle/Dust.pfx"
+            "Particle/Dust.xml", "Particle/SmokeStack.xml", "Particle/SnowExplosionFade.xml",
+            "Particle/Smoke.pfx", "Particle/Dust.pfx", "Particle/Mist.pfx"
         };
         for (const char* p : kSmokeCandidates) {
             ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
-            if (e && !e->GetName().Empty()) { smokeEffect_ = e; break; }
+            if (e && !e->GetName().Empty() && e->GetMaterial() != nullptr) { smokeEffect_ = e; break; }
         }
 
-        // Эмиттер без SetEffect не рендерит ничего и НЕ крашится — это наш
-        // безопасный путь. haveParticles_ включаем только при реальном эффекте.
+        if (!sparkEffect_) {
+            sparkEffectStore_ = MakeProceduralParticles("Materials/Particle.xml",
+                                                        120, 60.0f, 0.08f, 0.25f, 1.2f, true);
+            sparkEffect_ = sparkEffectStore_;
+        }
+        if (!smokeEffect_) {
+            smokeEffectStore_ = MakeProceduralParticles("Materials/Smoke.xml",
+                                                        60, 24.0f, 0.35f, 0.9f, 1.8f, false);
+            smokeEffect_ = smokeEffectStore_;
+        }
         haveParticles_ = (sparkEffect_ != nullptr) || (smokeEffect_ != nullptr);
         if (haveParticles_)
             URHO3D_LOGINFO(String("Частицы активны: ") + (sparkEffect_ ? "искры " : "") + (smokeEffect_ ? "дым" : ""));
         else
-            URHO3D_LOGINFO("Частицы выключены (нет валидных .pfx) — игра работает стабильно без них.");
-
-        // Если ни один .pfx не загрузился (Data неполный / битые файлы), строим
-        // эффекты ПРЯМО В ПАМЯТИ из XML движка: <material><technique name=.../></material>.
-        // Technique грузится по абсолютному пути CoreData, поэтому материал всегда валиден.
-        // Fallback: если ни один .pfx не загрузился — строим эффекты прямо в памяти
-        if (!sparkEffect_) {
-            sparkEffectStore_ = MakeProceduralParticles("Materials/ParticleAdditive.xml",
-                                                        120, 60.0f, 0.05f, 0.25f, 0.8f, true);
-            sparkEffect_ = sparkEffectStore_;
-        }
-        if (!smokeEffect_) {
-            smokeEffectStore_ = MakeProceduralParticles("Materials/ParticleAlphaBlend.xml",
-                                                        80, 30.0f, 0.3f, 0.9f, 1.6f, false);
-            smokeEffect_ = smokeEffectStore_;
-        }
-        haveParticles_ = (sparkEffect_ != nullptr) || (smokeEffect_ != nullptr);
+            URHO3D_LOGINFO("Частицы не загружены — используются декали и Lite-осколки.");
     }
 
     SharedPtr<ParticleEffect> sparkEffectStore_, smokeEffectStore_; // владение fallback-эффектами
 
-    // Программный ParticleEffect из стоковых материалов CoreData.
-    // Функция отключена: текущая сборка Urho3D не имеет нужного API частиц.
-    // haveParticles_ остаётся false — вместо частиц работают декали/осколки (это штатный путь).
-    SharedPtr<ParticleEffect> MakeProceduralParticles(const char*, int, float, float, float, float, bool) {
-        return SharedPtr<ParticleEffect>();
+    SharedPtr<ParticleEffect> MakeProceduralParticles(const char* matName, int count, float rate,
+                                                      float sizeMin, float sizeMax, float ttl, bool spark) {
+        auto* cache = GetSubsystem<ResourceCache>();
+        Material* mat = cache ? cache->GetResource<Material>(String(matName)) : nullptr;
+        if (!mat) return SharedPtr<ParticleEffect>();
+
+        SharedPtr<ParticleEffect> fx(new ParticleEffect(context_));
+        fx->SetMaterial(mat);
+        fx->SetNumParticles((unsigned)Max(1, count));
+        fx->SetEmitterType(EMITTER_SPHERE);
+        fx->SetEmitterSize(Vector3(0.25f, 0.25f, 0.25f));
+        fx->SetMinDirection(spark ? Vector3(-1.0f, 0.2f, -1.0f) : Vector3(-0.35f, 0.6f, -0.35f));
+        fx->SetMaxDirection(spark ? Vector3( 1.0f, 1.2f,  1.0f) : Vector3( 0.35f, 1.2f,  0.35f));
+        fx->SetConstantForce(spark ? Vector3(0.0f, -14.0f, 0.0f) : Vector3(0.0f, 1.8f, 0.0f));
+        fx->SetDampingForce(spark ? 0.5f : 1.5f);
+        fx->SetMinEmissionRate(rate * 0.8f);
+        fx->SetMaxEmissionRate(rate);
+        fx->SetMinTimeToLive(ttl * 0.6f);
+        fx->SetMaxTimeToLive(ttl);
+        fx->SetMinVelocity(spark ? 5.0f : 1.2f);
+        fx->SetMaxVelocity(spark ? 11.0f : 2.8f);
+        fx->SetMinParticleSize(Vector2(sizeMin, sizeMin));
+        fx->SetMaxParticleSize(Vector2(sizeMax, sizeMax));
+        fx->SetSizeMul(spark ? 0.6f : 1.4f);
+        fx->AddColorFrame(ColorFrame(spark ? Color(1.0f, 0.85f, 0.35f, 1.0f) : Color(0.7f, 0.7f, 0.7f, 0.45f), 0.0f));
+        fx->AddColorFrame(ColorFrame(spark ? Color(1.0f, 0.35f, 0.05f, 0.0f) : Color(0.25f, 0.25f, 0.25f, 0.0f), ttl));
+        return fx;
     }
 
 
@@ -1805,10 +1843,6 @@ private:
         }
     }
 
-    Model* cache_GetSphere() {
-        return sphereModel_ ? sphereModel_ : boxModel_;
-    }
-
     void CreateJumpPads() {
         jumpPads_.Clear();
         const Vector3 padCoords[4] = {
@@ -1844,7 +1878,7 @@ private:
         Vector3 camPos = cameraNode_->GetPosition();
         Vector3 feet(camPos.x_, camPos.y_ - eyeHeight_, camPos.z_);
 
-        for (unsigned i = 0; i < jumpPads_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)jumpPads_.Size(); ++i) {
             JumpPadData& jp = jumpPads_[i];
             if (jp.ringNode_) {
                 float h = 0.36f + 0.18f * (0.5f + 0.5f * sinf(timeAcc_ * 4.5f + jp.phase_));
@@ -1930,7 +1964,7 @@ private:
 
         // Мощный взрыв по площади (радиус 9.5 м, урон до 185 + цепная реакция соседних бочек!)
         const float rad = 9.5f;
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             if (!enemies_[i].alive_ || !enemies_[i].node_) continue;
             float d = (enemies_[i].node_->GetPosition() - center).Length();
             if (d < rad) {
@@ -1939,7 +1973,7 @@ private:
                 DamageEnemy(enemies_[i], dmg);
             }
         }
-        for (unsigned i = 0; i < targets_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)targets_.Size(); ++i) {
             if (!targets_[i].isActive_ || !targets_[i].node_) continue;
             float d = (targets_[i].node_->GetPosition() - center).Length();
             if (d < rad) {
@@ -1952,7 +1986,7 @@ private:
             if (pd < rad * 0.75f) DamagePlayer(55.0f * (1.0f - pd / (rad * 0.75f)));
         }
         // Цепная реакция по соседним бочкам
-        for (unsigned i = 0; i < barrels_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)barrels_.Size(); ++i) {
             if (barrels_[i].exploded_) continue;
             float d = (barrels_[i].home_ - center).Length();
             if (d < rad * 0.85f) {
@@ -1963,7 +1997,7 @@ private:
     }
 
     void UpdateExplosiveBarrels(float dt) {
-        for (unsigned i = 0; i < barrels_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)barrels_.Size(); ++i) {
             ExplosiveBarrel& eb = barrels_[i];
             if (eb.exploded_) {
                 eb.respawn_ -= dt;
@@ -2179,11 +2213,6 @@ private:
         
         // Физика: Lite-коллайдер (половина scale = half-extents)
         AddBoxCollider(position, scale * 0.5f);
-    }
-    
-    void CreateCeiling() {
-        // Потолок намеренно не создаётся: открытый небо-купол для прыжков
-        // и обзора динамической камеры. Функция оставлена как заглушка.
     }
     
     void CreateObstacles() {
@@ -2434,7 +2463,7 @@ private:
 
     // Вращение/покачивание декора + пульсация неонового света
     void UpdateAnimatedDecor(float dt) {
-        for (unsigned i = 0; i < animatedDeco_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)animatedDeco_.Size(); ++i) {
             AnimatedDeco& d = animatedDeco_[i];
             Node* n = d.node_.Get();
             if (!n) continue;
@@ -2596,7 +2625,7 @@ private:
             moonLight_->SetBrightness(0.40f * pbr);
         }
         if (spotLight_) spotLight_->SetBrightness(1.45f * pbr);
-        for (unsigned i = 0; i < floodLights_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)floodLights_.Size(); ++i)
             if (floodLights_[i]) floodLights_[i]->SetBrightness(0.95f * pbr);
         if (sceneZone_) {
             float iblAlpha = (gfxQualityIdx_ >= 2) ? 0.68f : 1.0f;
@@ -2743,7 +2772,7 @@ private:
         renderPath_->SetEnabled("SSAO4K", useSsao);
         renderPath_->SetEnabled("BloomHDR", useBloom);
         renderPath_->SetEnabled("Cinema4K", useCinema);
-        renderPath_->SetEnabled("Tonemap", !renderPath_->IsAdded("Cinema4K") && gfxHdr_);
+        renderPath_->SetEnabled("Tonemap", !RenderPathHasTag(renderPath_, "Cinema4K") && gfxHdr_);
         renderPath_->SetEnabled("FXAA3", useFxaa);
 
         renderPath_->SetShaderParameter("SSAORadius", Variant(0.85f));
@@ -2790,6 +2819,7 @@ private:
         SharedPtr<Viewport> vp(new Viewport(context_, scene_, camera));
         renderer->SetViewport(0, vp);
         ConfigureRenderPipeline(vp);
+        CreateWeapon();
     }
     
     void CreateWeapon() {
@@ -2798,7 +2828,7 @@ private:
         weaponNode_->SetPosition(Vector3(0.3f, -0.25f, 0.5f));
         weaponNode_->SetRotation(Quaternion(0, 0, 0));
         
-        // Модель оружия (используем коробку как временную модель)
+        // Модель оружия
         weaponModelNode_ = weaponNode_->CreateChild("WeaponModel");
         BuildWeaponModel(currentWeapon_);
 
@@ -2815,13 +2845,13 @@ private:
             AddPart(wingHandR_, Vector3(-0.35f, 0.10f, z), Vector3(0.30f, 0.16f, 0.16f), wingMat, sph);
         }
         
-        // Дуло оружия (для визуализации выстрела)
+        // Дуло оружия (спереди по +Z)
         Node* muzzleNode = weaponNode_->CreateChild("Muzzle");
-        muzzleNode->SetPosition(Vector3(0, 0.05f, -0.25f));
+        muzzleNode->SetPosition(Vector3(0, 0.05f, 0.55f));
         
         // Свет от выстрела
         Node* muzzleLightNode = weaponNode_->CreateChild("MuzzleLight");
-        muzzleLightNode->SetPosition(Vector3(0, 0.05f, -0.25f));
+        muzzleLightNode->SetPosition(Vector3(0, 0.05f, 0.55f));
         
         Light* muzzleLight = muzzleLightNode->CreateComponent<Light>();
         muzzleLight->SetLightType(LIGHT_POINT);
@@ -3179,9 +3209,9 @@ private:
             BorderImage* t = ui->GetRoot()->CreateChild<BorderImage>();
             t->SetSize(sw, th); t->SetPosition(0, 0);      t->SetBlendMode(BLEND_ADD); t->SetColor(Color(1,0,0,0));
             BorderImage* b = ui->GetRoot()->CreateChild<BorderImage>();
-            b->SetSize(sw, th); b->SetPosition(0, sh-th);  t->SetBlendMode(BLEND_ADD); b->SetColor(Color(1,0,0,0));
+            b->SetSize(sw, th); b->SetPosition(0, sh-th);  b->SetBlendMode(BLEND_ADD); b->SetColor(Color(1,0,0,0));
             BorderImage* l = ui->GetRoot()->CreateChild<BorderImage>();
-            l->SetSize(th, sh); l->SetPosition(0, 0);      t->SetBlendMode(BLEND_ADD); l->SetColor(Color(1,0,0,0));
+            l->SetSize(th, sh); l->SetPosition(0, 0);      l->SetBlendMode(BLEND_ADD); l->SetColor(Color(1,0,0,0));
             BorderImage* r = ui->GetRoot()->CreateChild<BorderImage>();
             r->SetSize(th, sh); r->SetPosition(sw-th, 0);  r->SetBlendMode(BLEND_ADD); r->SetColor(Color(1,0,0,0));
             lowHealthVignette_ = t;
@@ -3239,7 +3269,7 @@ private:
             else c = kill ? Color(1.0f, 0.25f, 0.2f, a) : Color(1.0f, 1.0f, 1.0f, a * 0.92f);
             if (hitMarkerTimer_ <= 0.0f) hitWasHeadshot_ = false;
         }
-        for (unsigned i = 0; i < hitMarkerBars_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)hitMarkerBars_.Size(); ++i)
             hitMarkerBars_[i]->SetColor(c);
     }
 
@@ -3251,7 +3281,7 @@ private:
             float pulseFreq = 3.0f + (0.3f - ratio) * 20.0f;
             a = (0.25f + 0.2f * sinf(timeAcc_ * pulseFreq)) * (1.0f - ratio / 0.3f);
         }
-        for (unsigned i = 0; i < vignetteEdges_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)vignetteEdges_.Size(); ++i)
             vignetteEdges_[i]->SetColor(Color(1.0f, 0.05f, 0.05f, a));
     }
 
@@ -3418,7 +3448,7 @@ private:
 
         unsigned used = 0;
         auto placeBlip = [&](const Vector3& wp, const Color& col, int sz) {
-            if (used >= radarBlips_.Size()) return;
+            if (used >= (unsigned)radarBlips_.Size()) return;
             Vector3 d = wp - camPos;
             float rx =  d.x_ * cs - d.z_ * sn;
             float rz =  d.x_ * sn + d.z_ * cs;
@@ -3433,7 +3463,7 @@ private:
             b->SetVisible(true);
         };
 
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             if (!enemies_[i].alive_ || !enemies_[i].node_) continue;
             EnemyType et = enemies_[i].type_;
             Color ec = (et == E_BOSS)     ? Color(1.0f, 0.85f, 0.15f, 1.0f)
@@ -3442,11 +3472,11 @@ private:
                                           : Color(1.0f, 0.22f, 0.22f, 0.95f);
             placeBlip(enemies_[i].node_->GetPosition(), ec, (et == E_BOSS) ? S(9.0f) : S(5.5f));
         }
-        for (unsigned i = 0; i < turrets_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)turrets_.Size(); ++i) {
             if (turrets_[i].ttl_ > 0.0f)
                 placeBlip(turrets_[i].pos_, Color(0.15f, 1.0f, 0.72f, 1.0f), S(6.5f));
         }
-        for (unsigned i = 0; i < pickups_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)pickups_.Size(); ++i) {
             if (pickups_[i].respawn_ > 0.0f) continue;
             Color pc = (pickups_[i].type_ == 0) ? Color(0.25f, 1.0f, 0.45f, 0.85f)
                      : (pickups_[i].type_ == 2) ? Color(0.25f, 0.85f, 1.0f, 0.85f)
@@ -3454,7 +3484,7 @@ private:
                                                 : Color(1.0f, 0.85f, 0.25f, 0.80f);
             placeBlip(pickups_[i].home_, pc, S(4.5f));
         }
-        for (unsigned i = used; i < radarBlips_.Size(); ++i)
+        for (unsigned i = used; i < (unsigned)radarBlips_.Size(); ++i)
             radarBlips_[i]->SetVisible(false);
     }
 
@@ -3495,13 +3525,13 @@ private:
         credits_ += 50;
         SaveSettingsFile();
         UpdateScoreDisplay();
-        PushKillFeed("🏆 ДОСТИЖЕНИЕ: " + title);
+        PushKillFeed("◆ ДОСТИЖЕНИЕ: " + title);
         if (soundSource_ && achievementSound_) {
             soundSource_->SetGain(SfxGain(0.92f));
             soundSource_->Play(achievementSound_);
         }
         if (achievToastBg_ && achievToastText_) {
-            achievToastText_->SetText("🏆 ДОСТИЖЕНИЕ ОТКРЫТО (" + String(CountUnlockedAchievements()) + "/" +
+            achievToastText_->SetText("◆ ДОСТИЖЕНИЕ ОТКРЫТО (" + String(CountUnlockedAchievements()) + "/" +
                                       String(Cyber::TOTAL_ACHIEVEMENTS) + ")\n" + title + "  [+250 ОЧК / +50 КР]");
             achievToastBg_->SetVisible(true);
             achievToastTimer_ = 4.2f;
@@ -3569,7 +3599,7 @@ private:
         }
         Text* t = root->CreateChild<Text>();
         t->SetFont(font_, crit ? SF(26) : SF(19));
-        t->SetText(crit ? ("★ " + String(dmg) + " КРИТ!") : ("-" + String(dmg)));
+        t->SetText(crit ? ("◆ " + String(dmg) + " КРИТ!") : ("-" + String(dmg)));
         t->SetColor(crit ? Color(1.0f, 0.88f, 0.18f, 1.0f) : Color(1.0f, 0.96f, 0.92f, 0.95f));
         StyleCrispText(t, crit);
 
@@ -3757,7 +3787,7 @@ private:
 
         helpText_ = root->CreateChild<Text>();
         helpText_->SetFont(font_, SF(13));
-        helpText_->SetText("[ALT/X] Рывок  •  [V] Удар крылом  •  [L] Лазер  •  [G] Осмотр  •  [TAB] Арсенал  •  [F2] Фото 4K  •  [F3] GPU  •  [F1] Справка");
+        helpText_->SetText("[ALT] Рывок  •  [Z] Крюк  •  [X] Орбита  •  [G] Граната  •  [T] Турель  •  [B] Перки  •  [P] Баня  •  [F1] Справка");
         helpText_->SetPosition(S(24), S(182));
         helpText_->SetColor(Color(0.75f, 0.88f, 0.98f, 0.82f));
         StyleCrispText(helpText_);
@@ -3783,7 +3813,7 @@ private:
     void RefreshKillFeedText() {
         if (!killFeedText_) return;
         String txt;
-        for (unsigned i = 0; i < killFeed_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)killFeed_.Size(); ++i)
             txt += killFeed_[i].text_ + "\n";
         killFeedText_->SetText(txt);
     }
@@ -3802,14 +3832,14 @@ private:
     void UpdateKillFeed(float dt) {
         if (killFeed_.Empty()) return;
         bool changed = false;
-        for (unsigned i = 0; i < killFeed_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)killFeed_.Size(); ++i) {
             killFeed_[i].ttl_ -= dt;
             if (killFeed_[i].ttl_ <= 0.0f) changed = true;
         }
         if (changed) {
             Vector<FeedEntry> keep;
             float minTtl = 99.0f;
-            for (unsigned i = 0; i < killFeed_.Size(); ++i) {
+            for (unsigned i = 0; i < (unsigned)killFeed_.Size(); ++i) {
                 if (killFeed_[i].ttl_ > 0.0f) { keep.Push(killFeed_[i]); minTtl = Min(minTtl, killFeed_[i].ttl_); }
             }
             killFeed_ = keep;
@@ -3845,10 +3875,10 @@ private:
     void UpdateBossBar() {
         if (!bossBarBg_ || !bossBarFill_) return;
         EnemyData* boss = nullptr;
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             if (enemies_[i].alive_ && enemies_[i].type_ == E_BOSS) { boss = &enemies_[i]; break; }
         }
-        bool show = (boss != nullptr) && !inMenu_ && !gameOver_ && !photoMode_;
+        bool show = (boss != nullptr) && !inMenu_ && !gameOver_ && !paused_ && !banyaOpen_ && !rouletteOpen_ && !arcadeOpen_ && !helpOpen_ && !perkShopOpen_ && !photoMode_;
         bossBarBg_->SetVisible(show);
         bossBarFill_->SetVisible(show);
         if (bossBarText_) bossBarText_->SetVisible(show);
@@ -3916,28 +3946,28 @@ private:
         }
         if (statusBuffText_) {
             String b;
-            if (banyaBuffTier_ >= 2)      b += "👑 СМОТРЯЩИЙ (+50HP/+15%УР)  ";
-            else if (banyaBuffTier_ == 1) b += "♨ БАННЫЙ ЗАКАЛ (+25HP)  ";
+            if (banyaBuffTier_ >= 2)      b += "◆ СМОТРЯЩИЙ (+50HP/+15%УР)  ";
+            else if (banyaBuffTier_ == 1) b += "• БАННЫЙ ЗАКАЛ (+25HP)  ";
             if (overdriveTimer_ > 0.0f)
-                b += "⚡ ОВЕРДРАЙВ 2X (" + String(overdriveTimer_, 1) + "с)  ";
+                b += "◆ ОВЕРДРАЙВ 2X (" + String(overdriveTimer_, 1) + "с)  ";
             b += (grappleCooldown_ <= 0.0f) ? "[Z] КРЮК  " : ("[Z] " + String(grappleCooldown_, 1) + "с  ");
             if (orbitalCharge_ >= 99.9f)
-                b += "☢ [X] ЯЙЦЕГЕДДОН: ГОТОВ!  ";
+                b += "[!] [X] ЯЙЦЕГЕДДОН: ГОТОВ!  ";
             else
                 b += "[X] ОРБИТА " + String((int)orbitalCharge_) + "%  ";
             b += (grenadeCooldown_ <= 0.0f) ? "[G] ГРАНАТА  " : ("[G] " + String(grenadeCooldown_, 1) + "с  ");
-            b += (turretCooldown_ <= 0.0f)  ? "[T] ТУРЕЛЬ (100₵)  " : ("[T] " + String((int)turretCooldown_) + "с  ");
-            b += "[B] ПЕРКИ (" + String(credits_) + "₵)  [P] БАНЯ";
+            b += (turretCooldown_ <= 0.0f)  ? "[T] ТУРЕЛЬ (100¤)  " : ("[T] " + String((int)turretCooldown_) + "с  ");
+            b += "[B] ПЕРКИ (" + String(credits_) + "¤)  [P] БАНЯ";
             statusBuffText_->SetText(b);
         }
     }
     
     void UpdateScoreDisplay() {
         if (scoreText_) {
-            String s = "СЧЁТ: " + String(player_.score_) + "  |  ₵" + String(credits_) + "  |  УБИЙСТВ: " + String(player_.kills_);
-            if (player_.headshots_ > 0) s += " (★" + String(player_.headshots_) + ")";
+            String s = "СЧЁТ: " + String(player_.score_) + "  |  " + String(credits_) + "¤  |  УБИЙСТВ: " + String(player_.kills_);
+            if (player_.headshots_ > 0) s += " (◆" + String(player_.headshots_) + ")";
             if (comboCount_ > 1) s += "  |  КОМБО x" + String(comboCount_);
-            s += "\nРЕКОРД: " + String(highScore_) + "  |  🏆 " + String(CountUnlockedAchievements()) + "/" + String(Cyber::TOTAL_ACHIEVEMENTS);
+            s += "\nРЕКОРД: " + String(highScore_) + "  |  ◆ " + String(CountUnlockedAchievements()) + "/" + String(Cyber::TOTAL_ACHIEVEMENTS);
             if (gameMode_ == MODE_ARENA) {
                 s += "  |  ВОЛНА " + String(waveNum_);
                 if (activeMutator_ != Cyber::MUT_STANDARD)
@@ -4009,7 +4039,7 @@ private:
 
             Text* title = helpPanel_->CreateChild<Text>();
             title->SetFont(font_, SF(40));
-            title->SetText("CHIKENGUN 2.1 — 4K ULTRA СПРАВКА");
+            title->SetText("CHIKENGUN 2.3 — 4K ULTRA СПРАВКА");
             title->SetTextAlignment(HA_CENTER);
             title->SetPosition(sw / 2 - S(540), sh / 2 - S(280));
             title->SetWidth(S(1080));
@@ -4034,10 +4064,10 @@ private:
                 "\n"
                 "ТАКТИКА, БАНЬКА СМОТРЯЩЕГО [P] И ПЕРКИ\n"
                 "  • [P] «КОЧЕТ В БАНЬКЕ»: продержись 3 минуты и разгадай загадки смотрящего (14 концовок, 57 загадок)!\n"
-                "    Выход с зачётом даёт кредиты (₵) и бафф «Банный закал» (+25 HP/Брони) или «Ковш Смотрящего» (+50 HP, +15% урона)!\n"
+                "    Выход с зачётом даёт кредиты (¤) и бафф «Банный закал» (+25 HP/Брони) или «Ковш Смотрящего» (+50 HP, +15% урона)!\n"
                 "  • [8] RAILGUN прошивает ВСЕХ врагов и бочки насквозь! [9] PLASMA бьёт рикошетной плазмой.\n"
                 "  • Встань на ДЖАМП-ПЛАТФОРМУ или зацепись крюком [Z] для аэро-фрагов с высоты!\n"
-                "  • Копи кредиты (₵) за убийства и парение в баньке — качай перки в лаборатории [B]!");
+                "  • Копи кредиты (¤) за убийства и парение в баньке — качай перки в лаборатории [B]!");
 
             Text* hint = helpPanel_->CreateChild<Text>();
             hint->SetFont(font_, SF(18));
@@ -4068,10 +4098,10 @@ private:
     void UpdatePerkShopDisplay() {
         if (!perkShopBody_) return;
         auto fmtRow = [&](int keyNum, const char* name, int lvl, const char* desc) -> String {
-            String costStr = (lvl >= 5) ? "[МАКС. УР. 5/5]" : ("Цена: " + String(GetPerkCost(lvl)) + "₵  (Ур. " + String(lvl) + "/5)");
+            String costStr = (lvl >= 5) ? "[МАКС. УР. 5/5]" : ("Цена: " + String(GetPerkCost(lvl)) + "¤  (Ур. " + String(lvl) + "/5)");
             return "  [" + String(keyNum) + "]  " + String(name) + "   —   " + costStr + "\n        " + String(desc) + "\n\n";
         };
-        String txt = "ДОСТУПНО КИБЕР-КРЕДИТОВ:  " + String(credits_) + " ₵\n\n";
+        String txt = "ДОСТУПНО КИБЕР-КРЕДИТОВ:  " + String(credits_) + " ¤\n\n";
         txt += fmtRow(1, "ТИТАНОВОЕ ОПЕРЕНИЕ", perkHpLvl_,  "+25 к макс. HP и мгновенное лечение +40 HP");
         txt += fmtRow(2, "УСКОРЕННЫЙ ЗАТВОР",  perkRofLvl_, "+12% скорострельности и скорости перезарядки");
         txt += fmtRow(3, "КАЛИБР ВОЛЬФРАМ",    perkDmgLvl_, "+14% урона всему оружию, гранатам и авто-турелям");
@@ -4216,7 +4246,7 @@ private:
         StyleCrispText(stats);
         stats->SetText("ВРЕМЯ: " + FormatTime(arenaTime_) + "\n" +
                        "СЧЁТ: " + String(player_.score_) + "   |   УБИЙСТВ: " + String(player_.kills_) +
-                       " (★" + String(player_.headshots_) + ")   |   ТОЧНОСТЬ: " + String((int)player_.GetAccuracy()) + "%\n" +
+                       " (◆" + String(player_.headshots_) + ")   |   ТОЧНОСТЬ: " + String((int)player_.GetAccuracy()) + "%\n" +
                        "РЕЖИМ: " + String(gameMode_ == MODE_ARENA ? "АРЕНА" : "ТИР") +
                        (gameMode_ == MODE_ARENA ? ("   |   ВОЛНА: " + String(waveNum_)) : String()));
 
@@ -4297,17 +4327,24 @@ private:
         achievToastBg_ = nullptr; achievToastText_ = nullptr;
         perkShopPanel_ = nullptr; perkShopBody_ = nullptr;
         ResetBanyaUIPointers();
+        ResetMiniAppUIPointers();
 
         CreateUI();
         CreateMainMenu();
 
-        SetGameHudVisible(!inMenu_ && !gameOver_ && !paused_ && !perkShopOpen_ && !banyaOpen_ && !photoMode_);
-        if (mainMenuPanel_) mainMenuPanel_->SetVisible(inMenu_ && !banyaOpen_);
+        SetGameHudVisible(!inMenu_ && !gameOver_ && !paused_ && !perkShopOpen_ && !banyaOpen_ && !rouletteOpen_ && !arcadeOpen_ && !photoMode_);
+        if (mainMenuPanel_) mainMenuPanel_->SetVisible(inMenu_ && !banyaOpen_ && !rouletteOpen_ && !arcadeOpen_);
         if (inSettings_) { CreateSettingsPanel(); if (settingsPanel_) settingsPanel_->SetVisible(true); }
         if (armoryOpen_) { CreateArmoryMenu(); if (armoryPanel_) armoryPanel_->SetVisible(true); }
         if (perkShopOpen_) { CreatePerkShop(); if (perkShopPanel_) perkShopPanel_->SetVisible(true); }
         if (banyaOpen_) { CreateBanyaPanel(); if (banyaPanel_) banyaPanel_->SetVisible(true); SyncBanyaVisuals(0.0f); }
-        if (gameOverPanel_) gameOverPanel_->SetVisible(gameOver_);
+        if (rouletteOpen_) { CreateRoulettePanel(); if (roulettePanel_) roulettePanel_->SetVisible(true); SyncRouletteUI(); }
+        if (arcadeOpen_) { CreateArcadePanel(); if (arcadePanel_) arcadePanel_->SetVisible(true); SyncArcadeUI(); }
+        if (gameOverPanel_) {
+            if (gameOverStatsText_ && !lastGameOverStats_.Empty())
+                gameOverStatsText_->SetText(lastGameOverStats_);
+            gameOverPanel_->SetVisible(gameOver_);
+        }
         if (paused_) { CreatePausePanel(); if (pausePanel_) pausePanel_->SetVisible(true); }
         UpdateMainMenuSelection();
 
@@ -4346,6 +4383,7 @@ private:
     
     void HandleUpdate(StringHash eventType, VariantMap& eventData) {
         using namespace Update;
+        (void)eventType;
         
         float dt = eventData[P_TIMESTEP].GetFloat();
         if (dt > 0.1f) dt = 0.1f;
@@ -4379,6 +4417,14 @@ private:
             UpdateBanyaSimulator(dt);
             return;
         }
+        if (rouletteOpen_) {
+            UpdateRouletteOverlay(dt);
+            return;
+        }
+        if (arcadeOpen_) {
+            UpdateArcadeOverlay(dt);
+            return;
+        }
 
         if (paused_ || helpOpen_ || perkShopOpen_) return;
 
@@ -4391,7 +4437,7 @@ private:
         AnimateMainMenu(dt);
         AnimateGameOver(dt);
         Vector<PendingRemove> alive;
-        for (unsigned i = 0; i < pendingRemoves_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)pendingRemoves_.Size(); ++i) {
             PendingRemove pr = pendingRemoves_[i];
             pr.ttl_ -= dt;
             if (pr.ttl_ <= 0.0f) { if (pr.node_) pr.node_->Remove(); }
@@ -4506,7 +4552,7 @@ private:
             float dBanya = Vector3(ppos.x_ - banyaDoorPos_.x_, 0.0f, ppos.z_ - banyaDoorPos_.z_).Length();
             if (dBanya < 5.4f && banyaPromptCooldown_ <= 0.0f) {
                 banyaPromptCooldown_ = 6.5f;
-                ShowMessage("♨ БАНЬКА СМОТРЯЩЕГО — нажмите [P], чтобы попариться (бафф + ₵)!");
+                ShowMessage("◆ БАНЬКА СМОТРЯЩЕГО — нажмите [P], чтобы попариться (бафф + ¤)!");
             }
         }
 
@@ -4522,7 +4568,7 @@ private:
             if (gameMode_ == MODE_ARENA) {
                 UpdateEnemies(dt);
                 int aliveCount = 0;
-                for (unsigned i = 0; i < enemies_.Size(); ++i) if (enemies_[i].alive_) aliveCount++;
+                for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) if (enemies_[i].alive_) aliveCount++;
                 if (aliveCount == 0) {
                     waveRespawnTimer_ += dt;
                     if (waveRespawnTimer_ > 3.0f) { waveRespawnTimer_ = 0.0f; SpawnWave(); }
@@ -4535,7 +4581,7 @@ private:
                     }
                 }
                 int activeCount = 0;
-                for (unsigned i = 0; i < targets_.Size(); ++i) if (targets_[i].isActive_) activeCount++;
+                for (unsigned i = 0; i < (unsigned)targets_.Size(); ++i) if (targets_[i].isActive_) activeCount++;
                 if (activeCount < 3) {
                     rangeRespawnTimer_ += dt;
                     if (rangeRespawnTimer_ > 8.0f) {
@@ -4589,7 +4635,7 @@ private:
         (void)eventType;
         if (loadingScreenActive_) return;
         
-        int key = eventData[P_KEY].GetI32();
+        int key = VarToInt(eventData[P_KEY]);
 
         // Глобальные горячие клавиши 4K Ultra & Cyber Overload
         if (key == KEY_F3) {
@@ -4628,10 +4674,39 @@ private:
             HandleBanyaKey(key);
             return;
         }
+        // ===== Золотая Рулетка [J] =====
+        if (rouletteOpen_) {
+            HandleRouletteKey(key);
+            return;
+        }
+        // ===== Pixel Arcade [K] =====
+        if (arcadeOpen_) {
+            HandleArcadeKey(key);
+            return;
+        }
+
+        // ===== Справка [F1] =====
+        if (helpOpen_) {
+            if (key == KEY_F1 || key == KEY_ESCAPE) { PlayUISound(); ToggleHelp(); }
+            return;
+        }
+
+        // ===== Арсенал [TAB] =====
+        if (armoryOpen_) {
+            if (key == KEY_TAB || key == KEY_ESCAPE) { ToggleArmory(); return; }
+            if (key >= (int)KEY_1 && key <= (int)KEY_9) {
+                int idx = key - KEY_1;
+                if (idx < WEAPON_COUNT) { EquipWeapon(idx, false); UpdateArmoryHighlight(); ShowMessage(String("Оружие: ") + WEAPON_DEFS[idx].name); }
+                return;
+            }
+            if (key == KEY_Q) { CycleSkin(1); return; }
+            if (key == KEY_E) { CycleSkin(-1); return; }
+            return;
+        }
 
         // ===== Магазин перков [B] =====
         if (perkShopOpen_) {
-            if (key >= KEY_1 && key <= KEY_4) { BuyPerk(key - KEY_1); return; }
+            if (key >= (int)KEY_1 && key <= (int)KEY_4) { BuyPerk(key - (int)KEY_1); return; }
             if (key == KEY_B || key == KEY_ESCAPE) { TogglePerkShop(); return; }
             return;
         }
@@ -4640,11 +4715,13 @@ private:
         if (gameOver_) {
             if (key == KEY_RETURN || key == KEY_SPACE) { PlayUISound(); RestartArena(); }
             else if (key == KEY_P) { PlayUISound(); ShowGameOver(false); OpenBanyaSimulator(true); }
+            else if (key == KEY_J) { PlayUISound(); ShowGameOver(false); OpenRoulette(true); }
+            else if (key == KEY_K) { PlayUISound(); ShowGameOver(false); OpenArcade(true); }
             else if (key == KEY_ESCAPE) { PlayUISound(); ShowGameOver(false); ShowMainMenu(true); }
             return;
         }
 
-        // ===== Главное меню (5 пунктов: вкл. «КОЧЕТ В БАНЬКЕ») и 14-строчные 4K настройки =====
+        // ===== Главное меню (7 пунктов: вкл. Баньку, Рулетку, Миниигры) и 14-строчные 4K настройки =====
         if (inMenu_) {
             if (inSettings_) {
                 const int kRows = 14;
@@ -4657,13 +4734,17 @@ private:
                 return;
             }
             if (key == KEY_P) { PlayUISound(); OpenBanyaSimulator(true); return; }
-            if (key == KEY_UP || key == KEY_W) { menuSel_ = (menuSel_ + 4) % 5; PlayUISound(); UpdateMainMenuSelection(); }
-            else if (key == KEY_DOWN || key == KEY_S) { menuSel_ = (menuSel_ + 1) % 5; PlayUISound(); UpdateMainMenuSelection(); }
+            if (key == KEY_J) { PlayUISound(); OpenRoulette(true); return; }
+            if (key == KEY_K) { PlayUISound(); OpenArcade(true); return; }
+            if (key == KEY_UP || key == KEY_W) { menuSel_ = (menuSel_ + 6) % 7; PlayUISound(); UpdateMainMenuSelection(); }
+            else if (key == KEY_DOWN || key == KEY_S) { menuSel_ = (menuSel_ + 1) % 7; PlayUISound(); UpdateMainMenuSelection(); }
             else if (key == KEY_RETURN || key == KEY_SPACE) {
                 if (menuSel_ == 0) StartGameMode(MODE_RANGE);
                 else if (menuSel_ == 1) StartGameMode(MODE_ARENA);
                 else if (menuSel_ == 2) OpenBanyaSimulator(true);
-                else if (menuSel_ == 3) ShowSettings(true);
+                else if (menuSel_ == 3) OpenRoulette(true);
+                else if (menuSel_ == 4) OpenArcade(true);
+                else if (menuSel_ == 5) ShowSettings(true);
                 else engine_->Exit();
             }
             else if (key == KEY_ESCAPE) engine_->Exit();
@@ -4674,15 +4755,25 @@ private:
         if (paused_) {
             if (key == KEY_F1) { PlayUISound(); ToggleHelp(); return; }
             if (key == KEY_P)  { TogglePause(); OpenBanyaSimulator(false); return; }
+            if (key == KEY_J)  { TogglePause(); OpenRoulette(false); return; }
+            if (key == KEY_K)  { TogglePause(); OpenArcade(false); return; }
             if (key == KEY_ESCAPE || key == KEY_RETURN) TogglePause();
             else if (key == KEY_M) { TogglePause(); ShowMainMenu(true); }
             else if (key == KEY_Q) engine_->Exit();
             return;
         }
 
-        // P — вход в парную «КОЧЕТ В БАНЬКЕ» прямо из боя
+        // P — банька, J — казик/рулетка, K — миниигры прямо из боя
         if (key == KEY_P) {
             OpenBanyaSimulator(false);
+            return;
+        }
+        if (key == KEY_J) {
+            OpenRoulette(false);
+            return;
+        }
+        if (key == KEY_K) {
+            OpenArcade(false);
             return;
         }
 
@@ -4789,7 +4880,7 @@ private:
             return;
         }
 
-        if (key >= KEY_1 && key <= KEY_9) {
+        if (key >= (int)KEY_1 && key <= (int)KEY_9) {
             int idx = key - KEY_1;
             if (idx < WEAPON_COUNT) { EquipWeapon(idx, false); ShowMessage(String("Оружие: ") + WEAPON_DEFS[idx].name); }
             return;
@@ -4802,7 +4893,7 @@ private:
     void HandleKeyUp(StringHash eventType, VariantMap& eventData) {
         using namespace KeyUp;
         (void)eventType;
-        int key = eventData[P_KEY].GetI32();
+        int key = VarToInt(eventData[P_KEY]);
         if (key == KEY_LSHIFT || key == KEY_RSHIFT) {
             isSprinting_ = false;
         }
@@ -4812,10 +4903,18 @@ private:
         using namespace MouseButtonDown;
         (void)eventType;
         if (loadingScreenActive_) return;
-        int button = eventData[P_BUTTON].GetI32();
+        int button = VarToInt(eventData[P_BUTTON]);
         
         if (banyaOpen_) {
             if (button == MOUSEB_LEFT) HandleBanyaClick();
+            return;
+        }
+        if (rouletteOpen_) {
+            if (button == MOUSEB_LEFT) HandleRouletteClick();
+            return;
+        }
+        if (arcadeOpen_) {
+            if (button == MOUSEB_LEFT) HandleArcadeClick();
             return;
         }
 
@@ -4824,7 +4923,7 @@ private:
             return;
         }
 
-        if (button == MOUSEB_LEFT && !inMenu_ && !gameOver_ && !paused_ && !helpOpen_ && !perkShopOpen_ && !photoMode_ && !isMouseVisible_) {
+        if (button == MOUSEB_LEFT && !inMenu_ && !gameOver_ && !paused_ && !rouletteOpen_ && !arcadeOpen_ && !helpOpen_ && !perkShopOpen_ && !photoMode_ && !isMouseVisible_) {
             inspectTimer_ = 0.0f;
             TryFire();
         }
@@ -4838,7 +4937,7 @@ private:
     void HandleMouseButtonUp(StringHash eventType, VariantMap& eventData) {
         using namespace MouseButtonUp;
         (void)eventType;
-        int button = eventData[P_BUTTON].GetI32();
+        int button = VarToInt(eventData[P_BUTTON]);
         if (button == MOUSEB_RIGHT) isAiming_ = false;
     }
 
@@ -4967,7 +5066,7 @@ private:
         }
         int cost = (gameMode_ == MODE_ARENA) ? 100 : 0;
         if (credits_ < cost) {
-            ShowMessage("Нужно 100₵ кибер-кредитов для установки авто-турели!");
+            ShowMessage("Нужно 100¤ кибер-кредитов для установки авто-турели!");
             PlayEmptyClickSound();
             return;
         }
@@ -5033,7 +5132,7 @@ private:
             // Поиск ближайшей живой курицы в радиусе 36 м с прямой видимостью
             int bestEnemy = -1;
             float bestDist = 36.0f;
-            for (unsigned ei = 0; ei < enemies_.Size(); ++ei) {
+            for (unsigned ei = 0; ei < (unsigned)enemies_.Size(); ++ei) {
                 if (!enemies_[ei].alive_ || !enemies_[ei].node_) continue;
                 Vector3 ep = enemies_[ei].node_->GetPosition() + Vector3(0, 0.9f, 0);
                 float d = (ep - muzzleOrig).Length();
@@ -5087,7 +5186,7 @@ private:
         bool hitAny = false;
 
         // Удар крылом по курам в конусе 3.0 м перед игроком + сильный отброс
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             EnemyData& e = enemies_[i];
             if (!e.alive_ || !e.node_) continue;
             Vector3 ep = e.node_->GetPosition() + Vector3(0, 0.9f, 0);
@@ -5207,10 +5306,10 @@ private:
         if (orbitalCharge_ < 99.9f) {
             if (credits_ >= Cyber::ORBITAL_EMERGENCY_CREDITS) {
                 credits_ -= Cyber::ORBITAL_EMERGENCY_CREDITS;
-                PushKillFeed("🛰 СРОЧНЫЙ ВЫЗОВ ОРБИТЫ ЗА " + String(Cyber::ORBITAL_EMERGENCY_CREDITS) + "₵!");
+                PushKillFeed("[ОРБИТА] СРОЧНЫЙ ВЫЗОВ ЗА " + String(Cyber::ORBITAL_EMERGENCY_CREDITS) + "¤!");
             } else {
                 ShowMessage("Орбитальный удар [X]: заряд " + String((int)orbitalCharge_) + "% (или " +
-                            String(Cyber::ORBITAL_EMERGENCY_CREDITS) + "₵ для мгновенного залпа)");
+                            String(Cyber::ORBITAL_EMERGENCY_CREDITS) + "¤ для мгновенного залпа)");
                 PlayEmptyClickSound();
                 return;
             }
@@ -5266,7 +5365,7 @@ private:
 
         float maxDmg = Cyber::ORBITAL_BASE_DAMAGE * (1.0f + 0.15f * (float)perkDmgLvl_) * (overdriveTimer_ > 0.0f ? 1.5f : 1.0f);
         int strikeKills = 0;
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             EnemyData& e = enemies_[i];
             if (!e.alive_ || !e.node_) continue;
             float d = (e.node_->GetPosition() - strikePos).Length();
@@ -5278,7 +5377,7 @@ private:
                 if (wasAlive && !e.alive_) ++strikeKills;
             }
         }
-        for (unsigned bi = 0; bi < barrels_.Size(); ++bi) {
+        for (unsigned bi = 0; bi < (unsigned)barrels_.Size(); ++bi) {
             if (!barrels_[bi].exploded_ && (barrels_[bi].home_ - strikePos).Length() <= Cyber::ORBITAL_RADIUS)
                 DetonateBarrel(barrels_[bi]);
         }
@@ -5287,7 +5386,7 @@ private:
             slowMoTimer_ = Max(slowMoTimer_, 0.42f);
             UnlockAchievement(11, "ЯЙЦЕГЕДДОН С ОРБИТЫ (3+ кур одним орбитальным залпом)");
         }
-        ShowWaveBanner("☢ ОРБИТАЛЬНЫЙ УДАР «ЯЙЦЕГЕДДОН»!", Color(0.32f, 0.96f, 1.0f));
+        ShowWaveBanner("[!] ОРБИТАЛЬНЫЙ УДАР «ЯЙЦЕГЕДДОН»!", Color(0.32f, 0.96f, 1.0f));
         UpdateDashAndBuffHUD();
         UpdateScoreDisplay();
     }
@@ -5315,9 +5414,17 @@ private:
     }
 
     void UpdateWeatherParticles(float dt) {
-        if (!scene_ || !cameraNode_ || gfxQualityIdx_ <= 0) return;
+        if (!scene_ || !cameraNode_) return;
+        if (gfxQualityIdx_ <= 0) {
+            if (!weatherMotes_.Empty()) {
+                for (unsigned i = 0; i < (unsigned)weatherMotes_.Size(); ++i)
+                    if (weatherMotes_[i].node_) weatherMotes_[i].node_->Remove();
+                weatherMotes_.Clear();
+            }
+            return;
+        }
         if (weatherAtmBuilt_ != atmosphereIdx_ || weatherMotes_.Empty()) {
-            for (unsigned i = 0; i < weatherMotes_.Size(); ++i)
+            for (unsigned i = 0; i < (unsigned)weatherMotes_.Size(); ++i)
                 if (weatherMotes_[i].node_) weatherMotes_[i].node_->Remove();
             weatherMotes_.Clear();
             weatherAtmBuilt_ = atmosphereIdx_;
@@ -5349,7 +5456,7 @@ private:
         }
 
         Vector3 camPos = cameraNode_->GetPosition();
-        for (unsigned i = 0; i < weatherMotes_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)weatherMotes_.Size(); ++i) {
             WeatherMote& m = weatherMotes_[i];
             if (!m.node_) continue;
             m.phase_ += dt * 1.8f;
@@ -5574,6 +5681,7 @@ private:
     }
     
     void UpdateWeaponBob(float dt) {
+        if (!weaponNode_) return;
         bool moving = playerVelocity_.LengthSquared() > 0.5f;
 
         if (moving && !weapon_.isReloading_ && !isAiming_ && inspectTimer_ <= 0.0f) {
@@ -5619,6 +5727,7 @@ private:
     }
     
     void ApplyRecoilToWeapon() {
+        if (!weaponNode_) return;
         Vector3 basePos = weaponNode_->GetPosition();
         Vector3 recoilOffset(-weapon_.recoilY_ * 0.01f, -weapon_.recoilX_ * 0.01f, -weapon_.recoilX_ * 0.02f);
         weaponNode_->SetPosition(basePos + recoilOffset);
@@ -5722,7 +5831,7 @@ private:
         // Проверяем ВСЕ динамические коллайдеры (враги tag 2, бочки tag 3, мишени tag 1/4), пересекаемые лучом до maxDist!
         struct HitEntry { int tag; void* ptr; Vector3 pt; float dist; };
         Vector<HitEntry> hits;
-        for (unsigned ci = 0; ci < colliders_.Size(); ++ci) {
+        for (unsigned ci = 0; ci < (unsigned)colliders_.Size(); ++ci) {
             const Lite::Collider& c = colliders_[ci];
             if (c.tag == 0 || c.tag == 7 || !c.ptr) continue;
             float t = c.sphere ? Lite::RaySphere(startPos, dir, c.center, c.half.x_)
@@ -5733,13 +5842,13 @@ private:
         }
 
         int killsBefore = player_.kills_;
-        for (unsigned hi = 0; hi < hits.Size(); ++hi) {
+        for (unsigned hi = 0; hi < (unsigned)hits.Size(); ++hi) {
             CheckTargetHit(hits[hi].tag, hits[hi].ptr, hits[hi].pt, damage);
         }
         int killsMade = player_.kills_ - killsBefore;
         if (killsMade >= 2) {
             slowMoTimer_ = Max(slowMoTimer_, 0.34f);
-            PushKillFeed("⚡ СКВОЗНОЙ РЕЛЬС x" + String(killsMade) + "!");
+            PushKillFeed("◆ СКВОЗНОЙ РЕЛЬС x" + String(killsMade) + "!");
             UnlockAchievement(5, "СКВОЗНОЙ РЕЛЬС (2+ врага одним выстрелом Railgun)");
         }
         return !hits.Empty();
@@ -5804,7 +5913,7 @@ private:
                 if (htag != 0) CheckTargetHit(htag, hptr, hp, b.damage_);
                 // Изумрудный плазменный мини-всплеск по соседям в радиусе 2.8 м
                 CreateShockwave(hp, plasmaOrbMat_.Get(), 0.30f);
-                for (unsigned ei = 0; ei < enemies_.Size(); ++ei) {
+                for (unsigned ei = 0; ei < (unsigned)enemies_.Size(); ++ei) {
                     if (!enemies_[ei].alive_ || !enemies_[ei].node_) continue;
                     float d = (enemies_[ei].node_->GetPosition() + Vector3(0, 0.8f, 0) - hp).Length();
                     if (d < 2.8f) DamageEnemy(enemies_[ei], b.damage_ * 0.42f * (1.0f - d / 2.8f));
@@ -5887,7 +5996,7 @@ private:
         // Взрывные бочки (tag == 3, ptr == Node* бочки)
         if (hitTag == 3 && hitPtr) {
             Node* bNode = static_cast<Node*>(hitPtr);
-            for (unsigned bi = 0; bi < barrels_.Size(); ++bi) {
+            for (unsigned bi = 0; bi < (unsigned)barrels_.Size(); ++bi) {
                 ExplosiveBarrel& eb = barrels_[bi];
                 if (!eb.exploded_ && eb.node_ == bNode) {
                     eb.hp_ -= damage;
@@ -5910,7 +6019,7 @@ private:
 
         // Роботы-курицы (tag == 2) + детектор ХЭДШОТОВ по высоте головы курицы!
         if (hitTag == 2) {
-            for (unsigned ei = 0; ei < enemies_.Size(); ++ei) {
+            for (unsigned ei = 0; ei < (unsigned)enemies_.Size(); ++ei) {
                 EnemyData& e = enemies_[ei];
                 if (e.alive_ && e.node_ == hitNode) {
                     float sc = hitNode->GetScale().y_;
@@ -5930,9 +6039,9 @@ private:
                             soundSource_->SetGain(SfxGain(0.85f));
                             soundSource_->Play(headshotSound_);
                         }
-                        if (killed) PushKillFeed("★ КРИТИЧЕСКИЙ ХЭДШОТ!");
+                        if (killed) PushKillFeed("[CRIT] КРИТИЧЕСКИЙ ХЭДШОТ!");
                     }
-                    DamageEnemy(e, finalDmg);
+                    DamageEnemy(e, finalDmg, headshot);
                     break;
                 }
             }
@@ -5940,7 +6049,7 @@ private:
         }
 
         // Мишени тира (tag == 1 или 4)
-        for (unsigned ti = 0; ti < targets_.Size(); ++ti) {
+        for (unsigned ti = 0; ti < (unsigned)targets_.Size(); ++ti) {
             TargetData& target = targets_[ti];
             if (target.isActive_ && target.node_ == hitNode) {
                 bool bullseye = (hitPosition - hitNode->GetPosition()).Length() < 0.35f;
@@ -6051,20 +6160,19 @@ private:
     }
 
     void CreateImpactEffect(const Vector3& position, const Vector3& normal) {
-        // Создаем узел для эффекта
-        Node* effectNode = scene_->CreateChild("ImpactEffect");
-        effectNode->SetPosition(position);
-        effectNode->LookAt(position + normal);
+        if (haveParticles_ && sparkEffect_) {
+            Node* effectNode = scene_->CreateChild("ImpactEffect");
+            effectNode->SetPosition(position);
+            effectNode->LookAt(position + normal);
 
-        // Эмиттер искр
-        ParticleEmitter* emitter = effectNode->CreateComponent<ParticleEmitter>();
-        if (sparkEffect_) emitter->SetEffect(sparkEffect_);
+            ParticleEmitter* emitter = effectNode->CreateComponent<ParticleEmitter>();
+            emitter->SetEffect(sparkEffect_);
+
+            PendingRemove pr; pr.node_ = effectNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr);
+        }
 
         // Отверстие от пули на поверхности (видно, куда именно попал)
         CreateBulletDecal(position, normal);
-
-        // Автоудаление через 1 секунду
-        { PendingRemove pr; pr.node_ = effectNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr); }
     }
     
     void CreateExplosionEffect(const Vector3& position) {
@@ -6072,8 +6180,10 @@ private:
         effectNode->SetPosition(position);
         
         // Эмиттер дыма
-        ParticleEmitter* smokeEmitter = effectNode->CreateComponent<ParticleEmitter>();
-        if (smokeEffect_) smokeEmitter->SetEffect(smokeEffect_);
+        if (haveParticles_ && smokeEffect_) {
+            ParticleEmitter* smokeEmitter = effectNode->CreateComponent<ParticleEmitter>();
+            smokeEmitter->SetEffect(smokeEffect_);
+        }
         
         // Точечный свет для вспышки
         Node* lightNode = effectNode->CreateChild("ExplosionLight");
@@ -6241,31 +6351,30 @@ private:
         RefreshUIScale();
         auto* cache = GetSubsystem<ResourceCache>();
         if (!font_) {
-            font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
-            if (!font_) font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.sdf");
         }
         auto* ui = GetSubsystem<UI>();
         auto* root = ui->GetRoot();
         int sw = GetSubsystem<Graphics>()->GetWidth();
         int sh = GetSubsystem<Graphics>()->GetHeight();
 
-        loadSteps_ = Vector<String>{
-            "Инициализация 4K HDR конвейера, ACES Filmic и шейдеров CAS",
-            "Загрузка 4K PBR текстур, карт нормалей и шероховатости/металла",
-            "Генерация кубической карты неба 4K и IBL-отражений арены",
-            "Построение арены 192×192, неоновых пилонов и взрывных бочек",
-            "Настройка 4-каскадных теней 4096px, SSAO4K и оружия игрока",
-            "Калибровка тактического радара, телеметрии GPU и 3D-звука",
-            "Все системы 4K ULTRA готовы к бою!"
-        };
+        loadSteps_.Clear();
+        loadSteps_.Push("Инициализация 4K HDR конвейера, ACES Filmic и шейдеров CAS");
+        loadSteps_.Push("Загрузка 4K PBR текстур, карт нормалей и шероховатости/металла");
+        loadSteps_.Push("Генерация кубической карты неба 4K и IBL-отражений арены");
+        loadSteps_.Push("Построение арены 192×192, неоновых пилонов и взрывных бочек");
+        loadSteps_.Push("Настройка 4-каскадных теней 4096px, SSAO4K и оружия игрока");
+        loadSteps_.Push("Калибровка тактического радара, телеметрии GPU и 3D-звука");
+        loadSteps_.Push("Все системы 4K ULTRA готовы к бою!");
 
         static const char* kTips[6] = {
-            "СОВЕТ: Попадание в голову курицы наносит 2.0× КРИТИЧЕСКОГО урона (золотой маркер ★).",
-            "СОВЕТ: Нажми ALT или X для реактивного рывка (Jet-Dash) сквозь стаю врагов!",
+            "СОВЕТ: Попадание в голову курицы наносит 2.0× КРИТИЧЕСКОГО урона (золотой маркер ◆).",
+            "СОВЕТ: Нажми ALT для реактивного рывка, Z — для грэппл-крюка, X — орбитальный удар!",
             "СОВЕТ: Стреляй по красным бочкам «ОПАСНО» — цепная детонация сносит целую волну.",
             "СОВЕТ: Фиолетовая сфера ОВЕРДРАЙВА удваивает урон всех стволов на 12 секунд.",
-            "СОВЕТ: Клавиша V — удар кибер-крылом вблизи, L — 3D лазер, G — осмотр 4K PBR-скина.",
-            "СОВЕТ: F2 включает чистый 4K фоторежим без интерфейса, а F12 сохраняет PNG-скриншот."
+            "СОВЕТ: V — удар кибер-крылом, G — граната, T — турель, B — перки, P — баня, I — осмотр.",
+            "СОВЕТ: F2 включает чистый 4K фоторежим без HUD, F8 — погода, F12 — 4K PNG-скриншот."
         };
         loadingTipIdx_ = rand() % 6;
 
@@ -6331,7 +6440,7 @@ private:
 
         loadingTitleText_ = loadingPanel_->CreateChild<Text>();
         loadingTitleText_->SetFont(font_, SF(60));
-        loadingTitleText_->SetText("CHIKENGUN 2.2");
+        loadingTitleText_->SetText("CHIKENGUN 2.3");
         loadingTitleText_->SetTextAlignment(HA_CENTER);
         loadingTitleText_->SetPosition(sw / 2 - S(410), sh / 2 - S(198));
         loadingTitleText_->SetWidth(S(820));
@@ -6440,7 +6549,7 @@ private:
             String list;
             for (int i = 0; i < 6; ++i) {
                 if (i < activeStage)      list += "  [✓]  ";
-                else if (i == activeStage) list += "  [▶]  ";
+                else if (i == activeStage) list += "  [›]  ";
                 else                      list += "  [·]  ";
                 list += String(shortNames[i]) + "\n";
             }
@@ -6469,6 +6578,7 @@ private:
                 break;
             case 1:
                 CreateMaterials();
+                CreateParticleEffects();
                 UpdateLoadingVisuals(0.36f, 2);
                 break;
             case 2:
@@ -6482,11 +6592,11 @@ private:
                 break;
             case 4:
                 CreatePlayer();
+                StartMusicPlayback();
                 ApplyGraphicsSettings();
                 UpdateLoadingVisuals(0.90f, 5);
                 break;
             case 5:
-                InitSfx3DPool();
                 CreateUI();
                 CreateMainMenu();
                 SetupInput();
@@ -6626,7 +6736,7 @@ private:
             }
         }
         // Гранатомёт подрывает и взрывные бочки в радиусе!
-        for (unsigned bi = 0; bi < barrels_.Size(); ++bi) {
+        for (unsigned bi = 0; bi < (unsigned)barrels_.Size(); ++bi) {
             if (barrels_[bi].exploded_) continue;
             float dist = (barrels_[bi].home_ - center).Length();
             if (dist <= radius) DetonateBarrel(barrels_[bi]);
@@ -6679,13 +6789,14 @@ private:
             highScore_ = player_.score_;
             SaveSettingsFile();
         }
+        lastGameOverStats_ =
+            String("СЧЁТ: ") + String(player_.score_) + "   |   ВОЛНА: " + String(waveNum_) + "\n" +
+            String("УБИЙСТВ: ") + String(player_.kills_) + "  (ХЭДШОТОВ ◆: " + String(player_.headshots_) + ")   |   ЛУЧШЕЕ КОМБО: x" + String(bestCombo_) + "\n" +
+            String("ТОЧНОСТЬ: ") + String((int)player_.GetAccuracy()) + "%   |   РЕКОРД: " + String(highScore_) + "\n" +
+            String("ВРЕМЯ: ") + FormatTime(arenaTime_) + "   |   ТЕМП: " +
+            String(arenaTime_ > 5.0f ? (int)(player_.kills_ / (arenaTime_ / 60.0f)) : 0) + " уб/мин";
         if (gameOverStatsText_) {
-            gameOverStatsText_->SetText(
-                String("СЧЁТ: ") + String(player_.score_) + "   |   ВОЛНА: " + String(waveNum_) + "\n" +
-                String("УБИЙСТВ: ") + String(player_.kills_) + "  (ХЭДШОТОВ ★: " + String(player_.headshots_) + ")   |   ЛУЧШЕЕ КОМБО: x" + String(bestCombo_) + "\n" +
-                String("ТОЧНОСТЬ: ") + String((int)player_.GetAccuracy()) + "%   |   РЕКОРД: " + String(highScore_) + "\n" +
-                String("ВРЕМЯ: ") + FormatTime(arenaTime_) + "   |   ТЕМП: " +
-                String(arenaTime_ > 5.0f ? (int)(player_.kills_ / (arenaTime_ / 60.0f)) : 0) + " уб/мин");
+            gameOverStatsText_->SetText(lastGameOverStats_);
         }
         ShowGameOver(true);
     }
@@ -6749,7 +6860,7 @@ private:
 
         Text* title = armoryPanel_->CreateChild<Text>();
         title->SetFont(font_, SF(36));
-        title->SetText("АРСЕНАЛ 4K PBR — CHIKENGUN 2.2");
+        title->SetText("АРСЕНАЛ 4K PBR — CHIKENGUN 2.3");
         title->SetTextAlignment(HA_CENTER);
         title->SetPosition(sw / 2 - S(360), S(32));
         title->SetWidth(S(720));
@@ -6808,11 +6919,11 @@ private:
     }
 
     void UpdateArmoryHighlight() {
-        for (unsigned i = 0; i < armoryWeaponRows_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)armoryWeaponRows_.Size(); ++i) {
             bool sel = ((int)i == currentWeapon_);
             armoryWeaponRows_[i]->SetColor(sel ? Color(1.0f, 0.86f, 0.22f, 1.0f) : Color(0.85f, 0.88f, 0.94f, 1.0f));
         }
-        for (unsigned i = 0; i < armorySkinRows_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)armorySkinRows_.Size(); ++i) {
             bool sel = ((int)i == currentSkin_);
             Color sc = NormByteColor(SKIN_DEFS[i].color);
             if (sel) armorySkinRows_[i]->SetColor(Color(1.0f, 0.86f, 0.22f, 1.0f));
@@ -6829,25 +6940,15 @@ private:
             for (UIElement* e = el; e; e = e->GetParent()) { p.x_ += e->GetPosition().x_; p.y_ += e->GetPosition().y_; }
             return p;
         };
-        for (unsigned i = 0; i < armoryWeaponRows_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)armoryWeaponRows_.Size(); ++i) {
             UIElement* row = armoryWeaponRows_[i];
             IntVector2 rp = screenPos(row);
             if (rp.x_ <= mp.x_ && mp.x_ < rp.x_ + (int)row->GetWidth() && rp.y_ <= mp.y_ && mp.y_ < rp.y_ + (int)row->GetHeight()) { EquipWeapon((int)i, false); UpdateArmoryHighlight(); return; }
         }
-        for (unsigned i = 0; i < armorySkinRows_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)armorySkinRows_.Size(); ++i) {
             UIElement* row = armorySkinRows_[i];
             IntVector2 rp = screenPos(row);
             if (rp.x_ <= mp.x_ && mp.x_ < rp.x_ + (int)row->GetWidth() && rp.y_ <= mp.y_ && mp.y_ < rp.y_ + (int)row->GetHeight()) { CycleSkin((int)i - currentSkin_); return; }
-        }
-    }
-
-    void ToggleMouseVisibility() {
-        auto* input = GetSubsystem<Input>();
-        isMouseVisible_ = !isMouseVisible_;
-        input->SetMouseVisible(isMouseVisible_);
-        if (!isMouseVisible_) {
-            auto* graphics = GetSubsystem<Graphics>();
-            input->SetMousePosition(IntVector2(graphics->GetWidth() / 2, graphics->GetHeight() / 2));
         }
     }
 
@@ -7020,7 +7121,7 @@ private:
         }
         if (gfx) gfx->SetDefaultTextureAnisotropy((unsigned)aniso);
 
-        for (unsigned i = 0; i < anisoTextures_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)anisoTextures_.Size(); ++i) {
             if (anisoTextures_[i]) {
                 anisoTextures_[i]->SetFilterMode(fm);
                 anisoTextures_[i]->SetAnisotropy((unsigned)aniso);
@@ -7125,19 +7226,19 @@ private:
             menuParticleSpeed_.Push((18.0f + rand() % 42) * uiScale_);
         }
 
-        int plateW = S(720), plateH = S(544);
+        int plateW = S(740), plateH = S(620);
         menuPlate_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuPlate_->SetPosition(sw / 2 - plateW / 2, sh / 2 - S(278));
+        menuPlate_->SetPosition(sw / 2 - plateW / 2, sh / 2 - S(308));
         menuPlate_->SetSize(plateW, plateH);
         menuPlate_->SetColor(Color(0.018f, 0.042f, 0.088f, 0.64f));
 
         int bTh = Max(2, S(2.0f));
         struct Edge { int x, y, w, h; };
         Edge edges[4] = {
-            { sw/2 - plateW/2 - bTh, sh/2 - S(278) - bTh, plateW + bTh*2, bTh },
-            { sw/2 - plateW/2 - bTh, sh/2 - S(278) + plateH, plateW + bTh*2, bTh },
-            { sw/2 - plateW/2 - bTh, sh/2 - S(278) - bTh, bTh, plateH + bTh*2 },
-            { sw/2 + plateW/2,       sh/2 - S(278) - bTh, bTh, plateH + bTh*2 }
+            { sw/2 - plateW/2 - bTh, sh/2 - S(308) - bTh, plateW + bTh*2, bTh },
+            { sw/2 - plateW/2 - bTh, sh/2 - S(308) + plateH, plateW + bTh*2, bTh },
+            { sw/2 - plateW/2 - bTh, sh/2 - S(308) - bTh, bTh, plateH + bTh*2 },
+            { sw/2 + plateW/2,       sh/2 - S(308) - bTh, bTh, plateH + bTh*2 }
         };
         for (int i = 0; i < 4; ++i) {
             BorderImage* e = mainMenuPanel_->CreateChild<BorderImage>();
@@ -7147,59 +7248,61 @@ private:
         }
 
         Text* title = mainMenuPanel_->CreateChild<Text>();
-        title->SetFont(font_, SF(64));
+        title->SetFont(font_, SF(60));
         title->SetText("CHIKENGUN 2.3");
         title->SetTextAlignment(HA_CENTER);
-        title->SetPosition(sw / 2 - S(420), sh / 2 - S(252));
+        title->SetPosition(sw / 2 - S(420), sh / 2 - S(284));
         title->SetWidth(S(840));
         title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
         StyleCrispText(title, true);
         menuTitle_ = SharedPtr<Text>(title);
 
         menuAccentBar_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuAccentBar_->SetPosition(sw / 2 - S(200), sh / 2 - S(170));
+        menuAccentBar_->SetPosition(sw / 2 - S(200), sh / 2 - S(206));
         menuAccentBar_->SetSize(S(400), Max(2, S(2.5f)));
         menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.9f));
 
         Text* sub = mainMenuPanel_->CreateChild<Text>();
-        sub->SetFont(font_, SF(16));
-        sub->SetText("[ 4K ULTRA PBR ]   •   [ CYBER ARENA ]   •   [ КОЧЕТ В БАНЬКЕ ]");
+        sub->SetFont(font_, SF(15));
+        sub->SetText("[ 4K ULTRA ]  •  [ БАНЬКА ]  •  [ КАЗИК ]  •  [ МИНИИГРЫ ]");
         sub->SetTextAlignment(HA_CENTER);
-        sub->SetPosition(sw / 2 - S(440), sh / 2 - S(154));
+        sub->SetPosition(sw / 2 - S(440), sh / 2 - S(190));
         sub->SetWidth(S(880));
         sub->SetColor(Color(0.48f, 0.86f, 1.0f, 0.95f));
         StyleCrispText(sub);
         menuSub_ = SharedPtr<Text>(sub);
 
-        const char* items[5] = {
+        const char* items[7] = {
             "ПОЛИГОН (тир 4K)",
             "КИБЕР-АРЕНА (волны + босс)",
-            "КОЧЕТ В БАНЬКЕ (симулятор парной)",
+            "КОЧЕТ В БАНЬКЕ (парная) [P]",
+            "ЗОЛОТАЯ РУЛЕТКА (казик) [J]",
+            "PIXEL ARCADE (миниигры) [K]",
             "НАСТРОЙКИ 4K ULTRA",
             "ВЫХОД"
         };
-        for (int i = 0; i < 5; ++i) {
+        for (int i = 0; i < 7; ++i) {
             BorderImage* rowBg = mainMenuPanel_->CreateChild<BorderImage>();
-            rowBg->SetPosition(sw / 2 - S(300), sh / 2 - S(100) + i * S(49));
-            rowBg->SetSize(S(600), S(42));
+            rowBg->SetPosition(sw / 2 - S(300), sh / 2 - S(142) + i * S(44));
+            rowBg->SetSize(S(600), S(38));
             rowBg->SetColor(Color(0.05f, 0.14f, 0.24f, i == menuSel_ ? 0.52f : 0.0f));
             rowBg->SetName(String("MenuRow") + String(i));
             menuRows_.Push(rowBg);
 
             Text* it = mainMenuPanel_->CreateChild<Text>();
-            it->SetFont(font_, SF(25));
+            it->SetFont(font_, SF(23));
             it->SetText(items[i]);
-            it->SetPosition(sw / 2 - S(290), sh / 2 - S(94) + i * S(49));
+            it->SetPosition(sw / 2 - S(290), sh / 2 - S(137) + i * S(44));
             it->SetWidth(S(580));
             StyleCrispText(it);
             mainMenuItems_.Push(SharedPtr<Text>(it));
         }
 
         Text* hint = mainMenuPanel_->CreateChild<Text>();
-        hint->SetFont(font_, SF(15));
-        hint->SetText("W/S — выбор   •   ENTER — запуск   •   [P] БАНЬКА   •   F11 — полный экран   •   F3 — FPS");
+        hint->SetFont(font_, SF(14));
+        hint->SetText("W/S — выбор  •  ENTER — старт  •  [P] БАНЯ  •  [J] КАЗИК  •  [K] МИНИИГРЫ  •  F11/F3");
         hint->SetTextAlignment(HA_CENTER);
-        hint->SetPosition(sw / 2 - S(440), sh / 2 + S(186));
+        hint->SetPosition(sw / 2 - S(440), sh / 2 + S(192));
         hint->SetWidth(S(880));
         hint->SetColor(Color(0.75f, 0.82f, 0.90f, 0.92f));
         StyleCrispText(hint);
@@ -7236,7 +7339,7 @@ private:
         if (menuHint_) {
             menuHint_->SetColor(Color(0.75f, 0.82f, 0.90f, 0.58f + 0.36f * sinf(timeAcc_ * 2.0f)));
         }
-        for (unsigned i = 0; i < menuParticles_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)menuParticles_.Size(); ++i) {
             BorderImage* p = menuParticles_[i].Get();
             float speed = menuParticleSpeed_[i];
             float phase = menuParticlePhase_[i];
@@ -7268,6 +7371,12 @@ private:
         inMenu_ = show;
         if (show) {
             photoMode_ = false;
+            armoryOpen_ = false;
+            perkShopOpen_ = false;
+            helpOpen_ = false;
+            if (armoryPanel_) armoryPanel_->SetVisible(false);
+            if (perkShopPanel_) perkShopPanel_->SetVisible(false);
+            if (helpPanel_) helpPanel_->SetVisible(false);
             if (weaponNode_) weaponNode_->SetEnabled(true);
             if (!mainMenuPanel_) CreateMainMenu();
             mainMenuPanel_->SetVisible(true);
@@ -7308,29 +7417,43 @@ private:
         if (radarBg_) radarBg_->SetVisible(vis);
         if (damageOverlay_) damageOverlay_->SetVisible(vis);
         if (reloadOverlay_) reloadOverlay_->SetVisible(vis);
+        if (!vis) {
+            if (bossBarBg_) bossBarBg_->SetVisible(false);
+            if (bossBarFill_) bossBarFill_->SetVisible(false);
+            if (bossBarText_) bossBarText_->SetVisible(false);
+        }
     }
 
     void UpdateMainMenuSelection() {
-        static const char* labels[5] = {
+        static const char* labels[7] = {
             "ПОЛИГОН (тир 4K)",
             "КИБЕР-АРЕНА (волны + босс)",
-            "КОЧЕТ В БАНЬКЕ (симулятор парной)",
+            "КОЧЕТ В БАНЬКЕ (парная) [P]",
+            "ЗОЛОТАЯ РУЛЕТКА (казик) [J]",
+            "PIXEL ARCADE (миниигры) [K]",
             "НАСТРОЙКИ 4K ULTRA",
             "ВЫХОД"
         };
         auto* gfx = GetSubsystem<Graphics>();
         int sw = gfx->GetWidth();
-        for (unsigned i = 0; i < mainMenuItems_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)mainMenuItems_.Size() && i < 7u; ++i) {
             bool sel = ((int)i == menuSel_);
-            mainMenuItems_[i]->SetText((sel ? "\xe2\x96\xb6  " : "   ") + String(labels[i]) + (sel ? "  \xe2\x97\x80" : ""));
-            Color unselCol = (i == 2) ? Color(0.96f, 0.76f, 0.48f, 1.0f) : Color(0.58f, 0.66f, 0.76f, 1.0f);
+            mainMenuItems_[i]->SetText((sel ? "›  " : "   ") + String(labels[i]) + (sel ? "  ‹" : ""));
+            Color unselCol = (i == 2) ? Color(0.96f, 0.76f, 0.48f, 1.0f)
+                           : (i == 3) ? Color(0.96f, 0.84f, 0.36f, 1.0f)
+                           : (i == 4) ? Color(0.96f, 0.54f, 0.84f, 1.0f)
+                                      : Color(0.58f, 0.66f, 0.76f, 1.0f);
             mainMenuItems_[i]->SetColor(sel ? Color(1.0f, 0.87f, 0.30f, 1.0f) : unselCol);
-            if ((int)menuRows_.Size() > (int)i && i < mainMenuItems_.Size()) {
+            if ((int)menuRows_.Size() > (int)i) {
                 BorderImage* bi = static_cast<BorderImage*>(menuRows_[i]);
                 if (bi) {
                     bi->SetColor(i == 2
                         ? Color(0.28f, 0.14f, 0.05f, sel ? 0.68f : 0.22f)
-                        : Color(0.06f, 0.16f, 0.28f, sel ? 0.56f : 0.0f));
+                        : (i == 3
+                            ? Color(0.06f, 0.22f, 0.14f, sel ? 0.68f : 0.20f)
+                            : (i == 4
+                                ? Color(0.22f, 0.07f, 0.24f, sel ? 0.68f : 0.20f)
+                                : Color(0.06f, 0.16f, 0.28f, sel ? 0.56f : 0.0f))));
                     IntVector2 base = bi->GetPosition();
                     bi->SetPosition(sw / 2 - S(300) + (sel ? S(5) : 0), base.y_);
                 }
@@ -7449,14 +7572,14 @@ private:
         vals[10] = String((int)fovBase_) + "°";
         vals[11] = sensNames[Clamp(mouseSensIdx_, 0, 2)];
         vals[12] = "SFX " + String((int)(sfxVolume_ * 100.0f + 0.5f)) + "%  /  МУЗ " + String((int)(musicVolume_ * 100.0f + 0.5f)) + "%";
-        vals[13] = "◀ СОХРАНИТЬ И ВЫЙТИ В МЕНЮ";
+        vals[13] = "‹ СОХРАНИТЬ И ВЫЙТИ В МЕНЮ";
 
-        for (unsigned i = 0; i < settingsItems_.Size() && i < 14; ++i) {
+        for (unsigned i = 0; i < (unsigned)settingsItems_.Size() && i < 14; ++i) {
             bool sel = ((int)i == settingsSel_);
             if (i == 13)
-                settingsItems_[i]->SetText((sel ? "▶  " : "   ") + vals[i]);
+                settingsItems_[i]->SetText((sel ? "›  " : "   ") + vals[i]);
             else
-                settingsItems_[i]->SetText((sel ? "▶  " : "   ") + String(names[i]) + ":   " + vals[i]);
+                settingsItems_[i]->SetText((sel ? "›  " : "   ") + String(names[i]) + ":   " + vals[i]);
             settingsItems_[i]->SetColor(sel ? Color(1.0f, 0.88f, 0.24f, 1.0f) : Color(0.84f, 0.88f, 0.94f, 1.0f));
         }
     }
@@ -7512,24 +7635,24 @@ private:
     // =========================================================================
 
     void ClearEnemies() {
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             RemoveColliderLite(enemies_[i].colliderIdx_);
             if (enemies_[i].node_) enemies_[i].node_->Remove();
         }
         enemies_.Clear();
-        for (unsigned i = 0; i < enemyProjectiles_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)enemyProjectiles_.Size(); ++i)
             if (enemyProjectiles_[i].node_) enemyProjectiles_[i].node_->Remove();
         enemyProjectiles_.Clear();
-        for (unsigned i = 0; i < playerPlasmaBolts_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)playerPlasmaBolts_.Size(); ++i)
             if (playerPlasmaBolts_[i].node_) playerPlasmaBolts_[i].node_->Remove();
         playerPlasmaBolts_.Clear();
-        for (unsigned i = 0; i < thrownGrenades_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)thrownGrenades_.Size(); ++i)
             if (thrownGrenades_[i].node_) thrownGrenades_[i].node_->Remove();
         thrownGrenades_.Clear();
-        for (unsigned i = 0; i < turrets_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)turrets_.Size(); ++i)
             if (turrets_[i].node_) turrets_[i].node_->Remove();
         turrets_.Clear();
-        for (unsigned i = 0; i < orbitalStrikes_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)orbitalStrikes_.Size(); ++i) {
             if (orbitalStrikes_[i].beamNode_) orbitalStrikes_[i].beamNode_->Remove();
             if (orbitalStrikes_[i].ringNode_) orbitalStrikes_[i].ringNode_->Remove();
         }
@@ -7590,7 +7713,7 @@ private:
         ClearEnemies();
 
         // Мгновенный респавн взрывных бочек при старте раунда
-        for (unsigned bi = 0; bi < barrels_.Size(); ++bi) {
+        for (unsigned bi = 0; bi < (unsigned)barrels_.Size(); ++bi) {
             ExplosiveBarrel& b = barrels_[bi];
             if (b.exploded_) {
                 b.exploded_ = false;
@@ -7630,7 +7753,7 @@ private:
 
     // Полная пересборка мишеней тира (без накопления узлов и коллайдеров)
     void ResetRangeTargets() {
-        for (unsigned i = 0; i < targets_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)targets_.Size(); ++i) {
             RemoveColliderLite(targets_[i].colliderIdx_);
             if (targets_[i].node_) targets_[i].node_->Remove();
         }
@@ -7759,7 +7882,7 @@ private:
         const Cyber::MutatorInfo& mut = Cyber::GetMutatorInfo(activeMutator_);
         if (waveNum_ > 1) {
             credits_ += 45;
-            PushKillFeed("+45₵ БОНУС ЗА ЗАЧИСТКУ ВОЛНЫ!");
+            PushKillFeed("+45¤ БОНУС ЗА ЗАЧИСТКУ ВОЛНЫ!");
         }
         if (waveNum_ >= 5)  UnlockAchievement(4, "ШТУРМОВИК АРЕНЫ (достичь 5-й волны)");
         if (waveNum_ >= 10) UnlockAchievement(9, "ЛЕГЕНДА КУРЯТНИКА (выжить до 10-й волны)");
@@ -7986,7 +8109,7 @@ private:
     }
 
     void ResetPickups() {
-        for (unsigned i = 0; i < pickups_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)pickups_.Size(); ++i) {
             PickupData& p = pickups_[i];
             p.respawn_ = 0.0f;
             if (p.node_) {
@@ -8002,7 +8125,7 @@ private:
         Vector3 camPos = cameraNode_->GetPosition();
         const float r2 = GameConstants::PICKUP_RADIUS * GameConstants::PICKUP_RADIUS;
 
-        for (unsigned i = 0; i < pickups_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)pickups_.Size(); ++i) {
             PickupData& p = pickups_[i];
             Node* n = p.node_.Get();
             if (!n) continue;
@@ -8054,8 +8177,8 @@ private:
             } else {
                 overdriveTimer_ = 12.0f;
                 UpdateDashAndBuffHUD();
-                ShowMessage("⚡ КИБЕР-ОВЕРДРАЙВ: 2× УРОН И БЫСТРАЯ ПЕРЕЗАРЯДКА (12 сек)!");
-                PushKillFeed("⚡ КИБЕР-ОВЕРДРАЙВ 2X АКТИВЕН!");
+                ShowMessage("◆ КИБЕР-ОВЕРДРАЙВ: 2× УРОН И БЫСТРАЯ ПЕРЕЗАРЯДКА (12 сек)!");
+                PushKillFeed("◆ КИБЕР-ОВЕРДРАЙВ 2X АКТИВЕН!");
                 if (soundSource_ && overdriveSound_) { soundSource_->SetGain(SfxGain(0.9f)); soundSource_->Play(overdriveSound_); }
                 else PlayUISound();
                 p.respawn_ = 32.0f;
@@ -8067,7 +8190,7 @@ private:
     // Движение «летучих» мишеней тира без Bullet: простая интеграция + отскок от границ
     void UpdateMovingTargetsLite(float dt) {
         const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 3.0f;
-        for (unsigned i = 0; i < movingTargetsLite_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)movingTargetsLite_.Size(); ++i) {
             MovingTargetLite& mt = movingTargetsLite_[i];
             // Уничтоженная мишень остаётся жить как отсоединённый узел (SharedPtr держит её),
             // поэтому проверяем ещё и сцену — иначе запись висит вечно.
@@ -8107,7 +8230,7 @@ private:
         for (unsigned i = enemies_.Size(); i-- > 0; ) {
             if (!enemies_[i].alive_) { RemoveColliderLite(enemies_[i].colliderIdx_); enemies_.Erase(i); }
         }
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             EnemyData& e = enemies_[i];
             if (!e.alive_) continue;
             Node* n = e.node_.Get();
@@ -8167,8 +8290,8 @@ private:
                     n->SetScale(n->GetScale() * 1.12f);
                     CreateShockwave(p + Vector3(0, 0.5f, 0), nullptr, 0.7f);
                     if (bossRoarSound_) PlaySfx3D(p, bossRoarSound_, 1.0f);
-                    ShowWaveBanner("🔥 МЕГА-ИНДЮК ВПАЛ В ЯРОСТЬ!", Color(1.0f, 0.22f, 0.22f));
-                    PushKillFeed("🔥 БОСС В ЯРОСТИ: СКОРОСТЬ И ТРОЙНОЙ ЗАЛП!");
+                    ShowWaveBanner("[!] МЕГА-ИНДЮК ВПАЛ В ЯРОСТЬ!", Color(1.0f, 0.22f, 0.22f));
+                    PushKillFeed("[!] БОСС В ЯРОСТИ: СКОРОСТЬ И ТРОЙНОЙ ЗАЛП!");
                 }
                 move = toDir * effSpd;
                 if (dist < 2.2f && e.attackTimer_ <= 0.0f) {
@@ -8207,7 +8330,7 @@ private:
                     if (barrelBoomSound_) PlaySfx3D(boomPos, barrelBoomSound_, 0.95f);
                     ApplyExplosionDamage(boomPos, 75.0f);
                     AddCameraShake(0.24f);
-                    PushKillFeed("💥 ПОДРЫВ ЦЫПЛЁНКА-КАМИКАДЗЕ!");
+                    PushKillFeed("[!] ПОДРЫВ ЦЫПЛЁНКА-КАМИКАДЗЕ!");
                     continue;
                 }
                 break;
@@ -8251,7 +8374,7 @@ private:
             }
 
             // Расталкивание роботов, чтобы они не слипались в одну точку
-            for (unsigned j = 0; j < enemies_.Size(); ++j) {
+            for (unsigned j = 0; j < (unsigned)enemies_.Size(); ++j) {
                 if (j == i || !enemies_[j].alive_) continue;
                 Node* other = enemies_[j].node_.Get();
                 if (!other) continue;
@@ -8309,7 +8432,7 @@ private:
         }
     }
 
-    void DamageEnemy(EnemyData& e, float damage) {
+    void DamageEnemy(EnemyData& e, float damage, bool isHeadshot = false) {
         if (!e.alive_) return;
         e.health_ -= damage;
         Node* n = e.node_.Get();
@@ -8361,7 +8484,7 @@ private:
                 float blastD = (killedType == E_KAMIKAZE) ? 115.0f : 55.0f;
                 CreateShockwave(deathPos + Vector3(0, 0.5f, 0), nullptr, 0.62f);
                 if (barrelBoomSound_ && killedType == E_KAMIKAZE) PlaySfx3D(deathPos, barrelBoomSound_, 0.88f);
-                for (unsigned oi = 0; oi < enemies_.Size(); ++oi) {
+                for (unsigned oi = 0; oi < (unsigned)enemies_.Size(); ++oi) {
                     if (!enemies_[oi].alive_ || !enemies_[oi].node_) continue;
                     float dd = (enemies_[oi].node_->GetPosition() - deathPos).Length();
                     if (dd < blastR) DamageEnemy(enemies_[oi], blastD * (1.0f - dd / blastR));
@@ -8371,13 +8494,13 @@ private:
             int baseCred = (killedType == E_BOSS) ? 120 : (killedType == E_DRONE || killedType == E_KAMIKAZE ? 35 : 22);
             int creditGain = (int)lroundf((float)baseCred * mut.creditMul);
             credits_ += creditGain;
-            orbitalCharge_ = Cyber::AddOrbitalCharge(orbitalCharge_, killedType == E_BOSS, false);
+            orbitalCharge_ = Cyber::AddOrbitalCharge(orbitalCharge_, killedType == E_BOSS, isHeadshot);
 
             // Бонус за убийство в воздухе с джамп-платформы!
             if (!onGround_ && airborneFromPad_) {
                 player_.score_ += 100;
                 credits_ += 20;
-                PushKillFeed("🚀 АЭРО-ФРАГ С ДЖАМП-ПАДА! +100");
+                PushKillFeed("^ АЭРО-ФРАГ С ДЖАМП-ПАДА! +100");
                 UnlockAchievement(3, "НЕБЕСНЫЙ ПЕТУХ (убийство в полёте с джамп-пада)");
             }
 
@@ -8392,17 +8515,17 @@ private:
             // Система быстрых серий (Multi-Kill Announcer)
             multiKillCount_ = (multiKillTimer_ > 0.0f) ? (multiKillCount_ + 1) : 1;
             multiKillTimer_ = 3.2f;
-            if (multiKillCount_ == 2)      PushKillFeed("🔥 ДВОЙНОЙ ФРАГ!");
-            else if (multiKillCount_ == 3) PushKillFeed("🔥🔥 ТРОЙНОЙ ШАШЛЫК!");
-            else if (multiKillCount_ == 4) PushKillFeed("⚡ УЛЬТРА-ОЩИП x4!");
+            if (multiKillCount_ == 2)      PushKillFeed("◆ ДВОЙНОЙ ФРАГ!");
+            else if (multiKillCount_ == 3) PushKillFeed("◆◆ ТРОЙНОЙ ШАШЛЫК!");
+            else if (multiKillCount_ == 4) PushKillFeed("[!] УЛЬТРА-ОЩИП x4!");
             else if (multiKillCount_ >= 5) {
-                PushKillFeed("💀 КУРИНЫЙ АПОКАЛИПСИС x" + String(multiKillCount_) + "!");
+                PushKillFeed("[X] КУРИНЫЙ АПОКАЛИПСИС x" + String(multiKillCount_) + "!");
                 slowMoTimer_ = Max(slowMoTimer_, 0.30f);
             }
 
             UpdateScoreDisplay();
             ShowMessage((killedType == E_BOSS ? "БОСС-ИНДЮК ПАЛ! +" : "КУРИЦА ОЩИПАНА! +") +
-                        String(scoreVal) + " (+" + String(creditGain) + "₵)" +
+                        String(scoreVal) + " (+" + String(creditGain) + "¤)" +
                         (comboCount_ > 1 ? (" [COMBO x" + String(comboCount_) + "]") : ""));
             PushKillFeed((killedType == E_BOSS ? "ИНДЮК ПАЛ +" : "курица ощипана +") +
                          String(scoreVal) +
@@ -8731,7 +8854,7 @@ private:
         banyaRoosterEyesText_->SetFont(font_, SF(15));
         banyaRoosterEyesText_->SetPosition(S(10), S(8));
         banyaRoosterEyesText_->SetColor(Color(0.14f, 0.08f, 0.04f, 1.0f));
-        banyaRoosterEyesText_->SetText("●");
+        banyaRoosterEyesText_->SetText("•");
 
         // Атмосферные фильтры опасности / концовок
         banyaColdWash_ = banyaSceneBox_->CreateChild<BorderImage>();
@@ -9248,7 +9371,7 @@ private:
             return;
         }
 
-        if (key >= KEY_1 && key <= KEY_5) { TriggerBanyaAction(key - KEY_1); return; }
+        if (key >= (int)KEY_1 && key <= (int)KEY_5) { TriggerBanyaAction(key - (int)KEY_1); return; }
         if (banyaSim_.riddle.active && !banyaSim_.riddle.settled) {
             if (key == KEY_Q) { AnswerBanyaRiddleUI(0); return; }
             if (key == KEY_W) { AnswerBanyaRiddleUI(1); return; }
@@ -9314,11 +9437,11 @@ private:
         int scW = banyaSceneBox_->GetWidth(), scH = banyaSceneBox_->GetHeight();
 
         int wallet = banyaFromMenu_ ? (100 + banyaBonusCredits_) : credits_;
-        String buffStr = (banyaBuffTier_ >= 2) ? "👑 КОВШ СМОТРЯЩЕГО (+50HP/+15%УР)"
-                       : (banyaBuffTier_ == 1) ? "♨ БАННЫЙ ЗАКАЛ (+25HP/+25БР)"
+        String buffStr = (banyaBuffTier_ >= 2) ? "◆ КОВШ СМОТРЯЩЕГО (+50HP/+15%УР)"
+                       : (banyaBuffTier_ == 1) ? "• БАННЫЙ ЗАКАЛ (+25HP/+25БР)"
                                                : "нет баффа";
         if (banyaBadgeText_) {
-            banyaBadgeText_->SetText("🐔 CHIKENGUN 2.3  •  КОШЕЛЁК: " + String(wallet) + "₵  •  БАФФ АРЕНЫ: " + buffStr +
+            banyaBadgeText_->SetText("CHIKENGUN 2.3  •  КОШЕЛЁК: " + String(wallet) + "¤  •  БАФФ АРЕНЫ: " + buffStr +
                                      "  •  ОТКРЫТО КОНЦОВОК: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + "/14");
         }
 
@@ -9362,7 +9485,7 @@ private:
         if (banyaRoosterBody_ && banyaRoosterEyesText_) {
             int baseX = (int)(scW * 0.61f), baseY = (int)(scH * 0.36f);
             if (banyaSim_.phase == Banya::PHASE_OVER) {
-                banyaRoosterEyesText_->SetText((banyaSim_.ending == Banya::END_WIN || banyaSim_.ending == Banya::END_STEWARD) ? "◠" : "✕");
+                banyaRoosterEyesText_->SetText((banyaSim_.ending == Banya::END_WIN || banyaSim_.ending == Banya::END_STEWARD) ? "^" : "×");
                 banyaRoosterCrown_->SetVisible(banyaSim_.ending == Banya::END_STEWARD);
                 if (banyaSim_.ending == Banya::END_FROZEN)      banyaRoosterBody_->SetColor(Color(0.68f, 0.88f, 0.98f, 1.0f));
                 else if (banyaSim_.ending == Banya::END_BURNED || banyaSim_.ending == Banya::END_FIRE || banyaSim_.ending == Banya::END_BLAST)
@@ -9375,7 +9498,7 @@ private:
                 int sway = (banyaSim_.blissRemaining > 0.0f) ? (int)(sinf(timeAcc_ * 3.0f) * S(4.0f))
                          : (banyaSim_.ventRemaining  > 0.0f) ? (int)(sinf(timeAcc_ * 22.0f) * S(2.0f)) : 0;
                 banyaRoosterBody_->SetPosition(baseX + sway, baseY);
-                banyaRoosterEyesText_->SetText(banyaSim_.blissRemaining > 0.0f ? "◡" : "●");
+                banyaRoosterEyesText_->SetText(banyaSim_.blissRemaining > 0.0f ? "v" : "•");
                 Color bodyC = (banyaSim_.temp > 100.0f) ? Color(1.0f, 0.72f, 0.64f, 1.0f)
                             : (banyaSim_.temp < 60.0f)  ? Color(0.84f, 0.91f, 0.98f, 1.0f)
                                                         : Color(0.96f, 0.91f, 0.82f, 1.0f);
@@ -9446,9 +9569,9 @@ private:
                 banyaEndTitle_->SetText(ei.title);
                 banyaEndText_->SetText(ei.text);
                 banyaEndHint_->SetText(String("Совет: ") + ei.hint);
-                String rewardLine = "Награда Чикенган: +" + String(cr) + "₵";
-                if (tier >= 2)      rewardLine += "  •  👑 БАФФ «КОВШ СМОТРЯЩЕГО» (+50 HP/Брони, +15% Урона, +35% Орбиты)!";
-                else if (tier == 1) rewardLine += "  •  ♨ БАФФ «БАННЫЙ ЗАКАЛ» (+25 HP/Брони)!";
+                String rewardLine = "Награда Чикенган: +" + String(cr) + "¤";
+                if (tier >= 2)      rewardLine += "  •  ◆ БАФФ «КОВШ СМОТРЯЩЕГО» (+50 HP/Брони, +15% Урона, +35% Орбиты)!";
+                else if (tier == 1) rewardLine += "  •  • БАФФ «БАННЫЙ ЗАКАЛ» (+25 HP/Брони)!";
                 banyaEndStats_->SetText(
                     "Продержался " + FormatBanyaClock(Min(banyaSim_.elapsed, Banya::DURATION)) + " из 3:00  •  загадок " +
                     String(banyaSim_.riddles) + "  •  очков " + String(pts) + "\n" +
@@ -9513,6 +9636,588 @@ private:
         }
 
         SyncBanyaVisuals(dt);
+    }
+
+    // =========================================================================
+    // ЛОКАЛЬНЫЕ «ЗОЛОТАЯ РУЛЕТКА [J]» И «PIXEL ARCADE [K]» В НАТИВНОМ C++ КЛИЕНТЕ
+    // =========================================================================
+
+    void ResetMiniAppUIPointers() {
+        roulettePanel_ = nullptr;
+        rouletteBalanceText_ = nullptr; rouletteWheelText_ = nullptr; rouletteResultText_ = nullptr;
+        rouletteHistText_ = nullptr; rouletteBetsText_ = nullptr; rouletteChipText_ = nullptr;
+        rouletteBtns_.Clear();
+
+        arcadePanel_ = nullptr; arcadeCanvas_ = nullptr;
+        arcadeTitleText_ = nullptr; arcadeScoreText_ = nullptr; arcadeHintText_ = nullptr; arcadeOverlayText_ = nullptr;
+        arcadeRectPool_.Clear();
+        arcadeGameTabs_.Clear();
+    }
+
+    int GetMiniAppWallet(bool fromMenu) const {
+        return fromMenu ? (100 + banyaBonusCredits_) : credits_;
+    }
+
+    void SetMiniAppWallet(bool fromMenu, int newVal) {
+        newVal = Max(0, newVal);
+        if (fromMenu) banyaBonusCredits_ = Max(-100, newVal - 100);
+        else credits_ = newVal;
+    }
+
+    void CreateRoulettePanel() {
+        if (roulettePanel_) return;
+        RefreshUIScale();
+        auto* ui = GetSubsystem<UI>();
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!ui || !gfx) return;
+        UIElement* root = ui->GetRoot();
+        int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+
+        roulettePanel_ = root->CreateChild<UIElement>("RoulettePanel");
+        roulettePanel_->SetSize(sw, sh);
+        roulettePanel_->SetPriority(710);
+
+        BorderImage* bg = roulettePanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.02f, 0.08f, 0.05f, 0.96f));
+
+        int pw = Min(sw - S(40), S(980)), ph = Min(sh - S(40), S(620));
+        int px = (sw - pw) / 2, py = (sh - ph) / 2;
+
+        BorderImage* card = roulettePanel_->CreateChild<BorderImage>();
+        card->SetPosition(px, py);
+        card->SetSize(pw, ph);
+        card->SetColor(Color(0.04f, 0.14f, 0.09f, 0.98f));
+
+        Text* hdr = roulettePanel_->CreateChild<Text>();
+        hdr->SetFont(font_, SF(24));
+        hdr->SetText("[ КАЗИК ] ЗОЛОТАЯ РУЛЕТКА — ЛОКАЛЬНЫЙ СИМУЛЯТОР");
+        hdr->SetPosition(px + S(24), py + S(16));
+        hdr->SetColor(Color(1.0f, 0.84f, 0.30f, 1.0f));
+        StyleCrispText(hdr, true);
+
+        rouletteBalanceText_ = roulettePanel_->CreateChild<Text>();
+        rouletteBalanceText_->SetFont(font_, SF(20));
+        rouletteBalanceText_->SetPosition(px + pw - S(280), py + S(18));
+        rouletteBalanceText_->SetColor(Color(0.42f, 0.96f, 0.68f, 1.0f));
+        StyleCrispText(rouletteBalanceText_);
+
+        // Секция колеса и выпавшего числа
+        BorderImage* wheelBox = roulettePanel_->CreateChild<BorderImage>();
+        wheelBox->SetPosition(px + S(24), py + S(62));
+        wheelBox->SetSize(S(380), S(240));
+        wheelBox->SetColor(Color(0.02f, 0.06f, 0.04f, 0.92f));
+
+        rouletteWheelText_ = wheelBox->CreateChild<Text>();
+        rouletteWheelText_->SetFont(font_, SF(44));
+        rouletteWheelText_->SetTextAlignment(HA_CENTER);
+        rouletteWheelText_->SetPosition(S(10), S(48));
+        rouletteWheelText_->SetWidth(S(360));
+        rouletteWheelText_->SetColor(Color(1.0f, 0.88f, 0.35f, 1.0f));
+        StyleCrispText(rouletteWheelText_, true);
+
+        rouletteResultText_ = wheelBox->CreateChild<Text>();
+        rouletteResultText_->SetFont(font_, SF(15));
+        rouletteResultText_->SetTextAlignment(HA_CENTER);
+        rouletteResultText_->SetPosition(S(14), S(130));
+        rouletteResultText_->SetWidth(S(352));
+        rouletteResultText_->SetWordwrap(true);
+        rouletteResultText_->SetColor(Color(0.86f, 0.92f, 0.88f, 1.0f));
+        StyleCrispText(rouletteResultText_);
+
+        rouletteHistText_ = wheelBox->CreateChild<Text>();
+        rouletteHistText_->SetFont(font_, SF(13));
+        rouletteHistText_->SetPosition(S(14), S(196));
+        rouletteHistText_->SetWidth(S(352));
+        rouletteHistText_->SetColor(Color(0.65f, 0.82f, 0.74f, 1.0f));
+        StyleCrispText(rouletteHistText_);
+
+        // Правая сводка текущих ставок
+        BorderImage* betBox = roulettePanel_->CreateChild<BorderImage>();
+        betBox->SetPosition(px + S(424), py + S(62));
+        betBox->SetSize(pw - S(448), S(240));
+        betBox->SetColor(Color(0.02f, 0.07f, 0.05f, 0.90f));
+
+        rouletteChipText_ = betBox->CreateChild<Text>();
+        rouletteChipText_->SetFont(font_, SF(16));
+        rouletteChipText_->SetPosition(S(16), S(14));
+        rouletteChipText_->SetColor(Color(1.0f, 0.86f, 0.36f, 1.0f));
+        StyleCrispText(rouletteChipText_);
+
+        rouletteBetsText_ = betBox->CreateChild<Text>();
+        rouletteBetsText_->SetFont(font_, SF(14));
+        rouletteBetsText_->SetPosition(S(16), S(48));
+        rouletteBetsText_->SetWidth(pw - S(480));
+        rouletteBetsText_->SetWordwrap(true);
+        rouletteBetsText_->SetColor(Color(0.84f, 0.92f, 0.88f, 1.0f));
+        StyleCrispText(rouletteBetsText_);
+
+        // Кнопки ставок и действий (индексы 0..17)
+        struct RBtnDef { const char* lbl; int r; int c; Color col; };
+        static const RBtnDef kBtns[18] = {
+            {"[1] КРАСНОЕ x2",   0, 0, Color(0.58f, 0.10f, 0.15f, 0.95f)},
+            {"[2] ЧЕРНОЕ x2",    0, 1, Color(0.10f, 0.11f, 0.14f, 0.95f)},
+            {"[3] ЧЕТНОЕ x2",    0, 2, Color(0.08f, 0.24f, 0.18f, 0.95f)},
+            {"[4] НЕЧЕТНОЕ x2",  0, 3, Color(0.08f, 0.24f, 0.18f, 0.95f)},
+            {"[5] 1..18 x2",     1, 0, Color(0.10f, 0.22f, 0.28f, 0.95f)},
+            {"[6] 19..36 x2",    1, 1, Color(0.10f, 0.22f, 0.28f, 0.95f)},
+            {"[7] 1-Я 12 x3",    1, 2, Color(0.18f, 0.22f, 0.10f, 0.95f)},
+            {"[8] 2-Я 12 x3",    1, 3, Color(0.18f, 0.22f, 0.10f, 0.95f)},
+            {"[9] 3-Я 12 x3",    2, 0, Color(0.18f, 0.22f, 0.10f, 0.95f)},
+            {"[0] ЗЕРО x36",     2, 1, Color(0.06f, 0.42f, 0.22f, 0.95f)},
+            {"[N] ЧИСЛО x36",    2, 2, Color(0.32f, 0.22f, 0.08f, 0.95f)},
+            {"ЧИСЛО +/- (Q/E)",  2, 3, Color(0.18f, 0.16f, 0.26f, 0.95f)},
+            {"ФИШКА (F)",        3, 0, Color(0.28f, 0.22f, 0.08f, 0.95f)},
+            {"[SPACE] КРУТИТЬ!", 3, 1, Color(0.75f, 0.54f, 0.12f, 0.98f)},
+            {"[R] ПОВТОР",       3, 2, Color(0.12f, 0.28f, 0.36f, 0.95f)},
+            {"[Z] ОТМЕНА",       3, 3, Color(0.28f, 0.16f, 0.14f, 0.95f)},
+            {"[C] ОЧИСТИТЬ",     4, 0, Color(0.28f, 0.12f, 0.12f, 0.95f)},
+            {"[ESC] НАЗАД",      4, 3, Color(0.18f, 0.20f, 0.24f, 0.95f)}
+        };
+        int gridX = px + S(24), gridY = py + S(318);
+        int cellW = (pw - S(48) - S(30)) / 4;
+        int cellH = S(46);
+        for (int i = 0; i < 18; ++i) {
+            BorderImage* b = roulettePanel_->CreateChild<BorderImage>();
+            b->SetPosition(gridX + kBtns[i].c * (cellW + S(10)), gridY + kBtns[i].r * (cellH + S(10)));
+            b->SetSize(cellW, cellH);
+            b->SetColor(kBtns[i].col);
+
+            Text* t = b->CreateChild<Text>();
+            t->SetFont(font_, SF(14));
+            t->SetText(kBtns[i].lbl);
+            t->SetAlignment(HA_CENTER, VA_CENTER);
+            t->SetColor(Color(0.98f, 0.96f, 0.90f, 1.0f));
+            StyleCrispText(t);
+            rouletteBtns_.Push(SharedPtr<BorderImage>(b));
+        }
+
+        Text* tip = roulettePanel_->CreateChild<Text>();
+        tip->SetFont(font_, SF(13));
+        tip->SetText("Все ставки и выигрыши идут прямо в ваш боевой баланс ¤ (сохраняется автоматически).");
+        tip->SetPosition(px + S(24), py + ph - S(30));
+        tip->SetColor(Color(0.65f, 0.85f, 0.72f, 0.92f));
+        StyleCrispText(tip);
+    }
+
+    void SyncRouletteUI() {
+        if (!roulettePanel_) return;
+        int wallet = GetMiniAppWallet(rouletteFromMenu_);
+        if (rouletteBalanceText_)
+            rouletteBalanceText_->SetText("БАЛАНС: " + String(wallet) + " ¤");
+        if (rouletteChipText_)
+            rouletteChipText_->SetText("Фишка: " + String(rouletteSim_.selectedChip) + " ¤   |   Выбр. число: " +
+                                       String(rouletteSim_.pickedNumber) + "   |   В игре: " + String(rouletteSim_.CurrentWager()) + " ¤");
+        if (rouletteWheelText_) {
+            if (rouletteSim_.spinning) {
+                int idx = ((int)(rouletteSim_.wheelDeg / (360.0f / 37.0f)) % 37 + 37) % 37;
+                rouletteWheelText_->SetText(String(Arcade::ROULETTE_ORDER[(size_t)idx]));
+                rouletteWheelText_->SetColor(Color(1.0f, 0.88f, 0.35f, 1.0f));
+            } else if (rouletteSim_.lastNumber >= 0) {
+                int n = rouletteSim_.lastNumber;
+                rouletteWheelText_->SetText(String(n));
+                rouletteWheelText_->SetColor(n == 0 ? Color(0.25f, 0.95f, 0.50f)
+                                                    : (Arcade::IsRouletteRed(n) ? Color(1.0f, 0.35f, 0.42f) : Color(0.90f, 0.92f, 0.96f)));
+            } else {
+                rouletteWheelText_->SetText("0..36");
+            }
+        }
+        if (rouletteResultText_) {
+            if (rouletteSim_.spinning) {
+                rouletteResultText_->SetText("Шарик в полёте...");
+            } else if (rouletteSim_.lastNumber >= 0) {
+                int n = rouletteSim_.lastNumber;
+                const char* col = (n == 0) ? "ЗЕРО" : (Arcade::IsRouletteRed(n) ? "КРАСНОЕ" : "ЧЕРНОЕ");
+                if (rouletteSim_.lastPayout > 0)
+                    rouletteResultText_->SetText("Выпало " + String(n) + " (" + col + ") — ВЫИГРЫШ +" + String(rouletteSim_.lastPayout) + " ¤!");
+                else
+                    rouletteResultText_->SetText("Выпало " + String(n) + " (" + col + "). Крутим ещё!");
+            } else {
+                rouletteResultText_->SetText("Сделайте ставку [1..9/0/N] и нажмите [SPACE]!");
+            }
+        }
+        if (rouletteHistText_) {
+            String h = "История: ";
+            if (rouletteSim_.history.empty()) h += "—";
+            else {
+                for (size_t i = 0; i < rouletteSim_.history.size() && i < 10; ++i) {
+                    if (i > 0) h += " ";
+                    h += String(rouletteSim_.history[i]);
+                }
+            }
+            rouletteHistText_->SetText(h);
+        }
+        if (rouletteBetsText_) {
+            if (rouletteSim_.bets.empty()) {
+                rouletteBetsText_->SetText("Ставок на столе нет.\nСпинов: " + String(rouletteSim_.spins) +
+                                           "  |  Лучший выигрыш: " + String(rouletteSim_.bestWin) + " ¤");
+            } else {
+                String txt;
+                for (size_t i = 0; i < rouletteSim_.bets.size() && i < 7; ++i) {
+                    const auto& b = rouletteSim_.bets[i];
+                    const char* nm = "СТАВКА";
+                    if (b.type == Arcade::BET_RED) nm = "КРАСНОЕ";
+                    else if (b.type == Arcade::BET_BLACK) nm = "ЧЕРНОЕ";
+                    else if (b.type == Arcade::BET_EVEN) nm = "ЧЕТНОЕ";
+                    else if (b.type == Arcade::BET_ODD) nm = "НЕЧЕТНОЕ";
+                    else if (b.type == Arcade::BET_LOW) nm = "1..18";
+                    else if (b.type == Arcade::BET_HIGH) nm = "19..36";
+                    else if (b.type == Arcade::BET_DOZ1) nm = "1-Я 12";
+                    else if (b.type == Arcade::BET_DOZ2) nm = "2-Я 12";
+                    else if (b.type == Arcade::BET_DOZ3) nm = "3-Я 12";
+                    else if (b.type == Arcade::BET_ZERO) nm = "ЗЕРО 0";
+                    else if (b.type == Arcade::BET_STRAIGHT) nm = "ЧИСЛО";
+                    txt += String(nm) + (b.type == Arcade::BET_STRAIGHT ? (" " + String(b.keyNum)) : String()) +
+                           " (" + String(b.amount) + " ¤)\n";
+                }
+                rouletteBetsText_->SetText(txt);
+            }
+        }
+    }
+
+    void OpenRoulette(bool fromMenu) {
+        rouletteFromMenu_ = fromMenu;
+        rouletteOpen_ = true;
+        rouletteSim_.rng ^= (uint32_t)(timeAcc_ * 1000.0f) ^ 0x777u;
+        if (!roulettePanel_) CreateRoulettePanel();
+        if (roulettePanel_) roulettePanel_->SetVisible(true);
+        if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
+        SetGameHudVisible(false);
+        if (auto* input = GetSubsystem<Input>()) { input->SetMouseVisible(true); isMouseVisible_ = true; }
+        SyncRouletteUI();
+        PlayUISound();
+    }
+
+    void CloseRoulette() {
+        int wallet = GetMiniAppWallet(rouletteFromMenu_);
+        rouletteSim_.ClearBets(wallet);
+        SetMiniAppWallet(rouletteFromMenu_, wallet);
+        rouletteOpen_ = false;
+        if (roulettePanel_) roulettePanel_->SetVisible(false);
+        SaveSettingsFile();
+        if (rouletteFromMenu_) {
+            ShowMainMenu(true);
+        } else {
+            SetGameHudVisible(!photoMode_);
+            if (auto* input = GetSubsystem<Input>()) { input->SetMouseVisible(false); isMouseVisible_ = false; }
+            UpdateScoreDisplay();
+        }
+    }
+
+    void TriggerRouletteAction(int idx) {
+        int wallet = GetMiniAppWallet(rouletteFromMenu_);
+        bool ok = true;
+        if (idx == 0) ok = rouletteSim_.PlaceBet(Arcade::BET_RED, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 1) ok = rouletteSim_.PlaceBet(Arcade::BET_BLACK, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 2) ok = rouletteSim_.PlaceBet(Arcade::BET_EVEN, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 3) ok = rouletteSim_.PlaceBet(Arcade::BET_ODD, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 4) ok = rouletteSim_.PlaceBet(Arcade::BET_LOW, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 5) ok = rouletteSim_.PlaceBet(Arcade::BET_HIGH, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 6) ok = rouletteSim_.PlaceBet(Arcade::BET_DOZ1, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 7) ok = rouletteSim_.PlaceBet(Arcade::BET_DOZ2, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 8) ok = rouletteSim_.PlaceBet(Arcade::BET_DOZ3, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 9) ok = rouletteSim_.PlaceBet(Arcade::BET_ZERO, 0, rouletteSim_.selectedChip, wallet);
+        else if (idx == 10) ok = rouletteSim_.PlaceBet(Arcade::BET_STRAIGHT, rouletteSim_.pickedNumber, rouletteSim_.selectedChip, wallet);
+        else if (idx == 11) { rouletteSim_.pickedNumber = (rouletteSim_.pickedNumber + 1) % 37; }
+        else if (idx == 12) {
+            static const int chips[5] = {10, 25, 50, 100, 250};
+            int cur = 0;
+            for (int i = 0; i < 5; ++i) if (chips[i] == rouletteSim_.selectedChip) cur = i;
+            rouletteSim_.selectedChip = chips[(cur + 1) % 5];
+        }
+        else if (idx == 13) ok = rouletteSim_.StartSpin();
+        else if (idx == 14) ok = rouletteSim_.Rebet(wallet);
+        else if (idx == 15) ok = rouletteSim_.UndoBet(wallet);
+        else if (idx == 16) rouletteSim_.ClearBets(wallet);
+        else if (idx == 17) { CloseRoulette(); return; }
+        SetMiniAppWallet(rouletteFromMenu_, wallet);
+        if (ok) PlayUISound(); else PlayEmptyClickSound();
+        SyncRouletteUI();
+    }
+
+    void HandleRouletteKey(int key) {
+        if (key == KEY_ESCAPE || key == KEY_J) { CloseRoulette(); return; }
+        if (key >= (int)KEY_1 && key <= (int)KEY_9) { TriggerRouletteAction(key - (int)KEY_1); return; }
+        if (key == KEY_0) { TriggerRouletteAction(9); return; }
+        if (key == KEY_N) { TriggerRouletteAction(10); return; }
+        if (key == KEY_E) { rouletteSim_.pickedNumber = (rouletteSim_.pickedNumber + 1) % 37; PlayUISound(); SyncRouletteUI(); return; }
+        if (key == KEY_Q) { rouletteSim_.pickedNumber = (rouletteSim_.pickedNumber + 36) % 37; PlayUISound(); SyncRouletteUI(); return; }
+        if (key == KEY_F) { TriggerRouletteAction(12); return; }
+        if (key == KEY_SPACE || key == KEY_RETURN) { TriggerRouletteAction(13); return; }
+        if (key == KEY_R) { TriggerRouletteAction(14); return; }
+        if (key == KEY_Z) { TriggerRouletteAction(15); return; }
+        if (key == KEY_C) { TriggerRouletteAction(16); return; }
+    }
+
+    void HandleRouletteClick() {
+        auto* input = GetSubsystem<Input>();
+        if (!input) return;
+        IntVector2 mp = input->GetMousePosition();
+        for (unsigned i = 0; i < (unsigned)rouletteBtns_.Size(); ++i) {
+            if (HitUIElement(rouletteBtns_[i].Get(), mp)) {
+                TriggerRouletteAction((int)i);
+                return;
+            }
+        }
+    }
+
+    void UpdateRouletteOverlay(float dt) {
+        int wallet = GetMiniAppWallet(rouletteFromMenu_);
+        bool settled = rouletteSim_.Step(dt, wallet);
+        SetMiniAppWallet(rouletteFromMenu_, wallet);
+        if (settled) {
+            if (rouletteSim_.lastPayout > 0) PlayBanyaSound(achievementSound_, 0.85f);
+            else PlayUISound();
+            SaveSettingsFile();
+        }
+        SyncRouletteUI();
+    }
+
+    // =========================================================================
+    // PIXEL ARCADE [K] — 4 ЛОКАЛЬНЫЕ АРКАДНЫЕ ИГРЫ НАД UI
+    // =========================================================================
+
+    void CreateArcadePanel() {
+        if (arcadePanel_) return;
+        RefreshUIScale();
+        auto* ui = GetSubsystem<UI>();
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!ui || !gfx) return;
+        UIElement* root = ui->GetRoot();
+        int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+
+        arcadePanel_ = root->CreateChild<UIElement>("ArcadePanel");
+        arcadePanel_->SetSize(sw, sh);
+        arcadePanel_->SetPriority(710);
+
+        BorderImage* bg = arcadePanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.03f, 0.02f, 0.08f, 0.96f));
+
+        int pw = Min(sw - S(40), S(860)), ph = Min(sh - S(40), S(620));
+        int px = (sw - pw) / 2, py = (sh - ph) / 2;
+
+        BorderImage* frame = arcadePanel_->CreateChild<BorderImage>();
+        frame->SetPosition(px, py);
+        frame->SetSize(pw, ph);
+        frame->SetColor(Color(0.06f, 0.05f, 0.16f, 0.98f));
+
+        arcadeTitleText_ = arcadePanel_->CreateChild<Text>();
+        arcadeTitleText_->SetFont(font_, SF(22));
+        arcadeTitleText_->SetPosition(px + S(20), py + S(14));
+        arcadeTitleText_->SetColor(Color(1.0f, 0.34f, 0.72f, 1.0f));
+        StyleCrispText(arcadeTitleText_, true);
+
+        arcadeScoreText_ = arcadePanel_->CreateChild<Text>();
+        arcadeScoreText_->SetFont(font_, SF(18));
+        arcadeScoreText_->SetPosition(px + pw - S(340), py + S(16));
+        arcadeScoreText_->SetColor(Color(0.32f, 0.96f, 0.92f, 1.0f));
+        StyleCrispText(arcadeScoreText_);
+
+        // 4 вкладки выбора игры ([1..4]) + кнопки Рестарт [R] и Назад [ESC]
+        static const char* kTabs[6] = {
+            "[1] ЗМЕЙКА", "[2] АРКАНОИД", "[3] КУРО-РАН", "[4] PONG", "[R] ЗАНОВО", "[ESC] НАЗАД"
+        };
+        int tabW = (pw - S(40) - S(25)) / 6;
+        for (int i = 0; i < 6; ++i) {
+            BorderImage* tb = arcadePanel_->CreateChild<BorderImage>();
+            tb->SetPosition(px + S(20) + i * (tabW + S(5)), py + S(52));
+            tb->SetSize(tabW, S(34));
+            tb->SetColor(Color(0.14f, 0.12f, 0.32f, 0.95f));
+            Text* tt = tb->CreateChild<Text>();
+            tt->SetFont(font_, SF(13));
+            tt->SetText(kTabs[i]);
+            tt->SetAlignment(HA_CENTER, VA_CENTER);
+            tt->SetColor(Color(0.95f, 0.95f, 1.0f, 1.0f));
+            StyleCrispText(tt);
+            arcadeGameTabs_.Push(SharedPtr<BorderImage>(tb));
+        }
+
+        // Игровое поле 480x320 масштабируем под окно
+        int cw = pw - S(40), ch = ph - S(165);
+        BorderImage* canvasBg = arcadePanel_->CreateChild<BorderImage>();
+        canvasBg->SetPosition(px + S(20), py + S(98));
+        canvasBg->SetSize(cw, ch);
+        canvasBg->SetColor(Color(0.02f, 0.02f, 0.06f, 1.0f));
+
+        arcadeCanvas_ = arcadePanel_->CreateChild<UIElement>("ArcadeCanvas");
+        arcadeCanvas_->SetPosition(px + S(20), py + S(98));
+        arcadeCanvas_->SetSize(cw, ch);
+        arcadeCanvas_->SetClipChildren(true);
+
+        arcadeOverlayText_ = arcadePanel_->CreateChild<Text>();
+        arcadeOverlayText_->SetFont(font_, SF(26));
+        arcadeOverlayText_->SetTextAlignment(HA_CENTER);
+        arcadeOverlayText_->SetPosition(px + S(40), py + S(240));
+        arcadeOverlayText_->SetWidth(pw - S(80));
+        arcadeOverlayText_->SetColor(Color(1.0f, 0.86f, 0.25f, 1.0f));
+        StyleCrispText(arcadeOverlayText_, true);
+
+        arcadeHintText_ = arcadePanel_->CreateChild<Text>();
+        arcadeHintText_->SetFont(font_, SF(14));
+        arcadeHintText_->SetPosition(px + S(20), py + ph - S(44));
+        arcadeHintText_->SetColor(Color(0.75f, 0.85f, 0.98f, 1.0f));
+        StyleCrispText(arcadeHintText_);
+    }
+
+    void SyncArcadeUI() {
+        if (!arcadePanel_ || !arcadeCanvas_) return;
+        for (unsigned i = 0; i < 4 && i < (unsigned)arcadeGameTabs_.Size(); ++i) {
+            bool act = ((int)i == (int)arcadeSim_.kind);
+            arcadeGameTabs_[i]->SetColor(act ? Color(0.86f, 0.22f, 0.58f, 0.98f) : Color(0.14f, 0.12f, 0.32f, 0.95f));
+        }
+        if (arcadeTitleText_)
+            arcadeTitleText_->SetText(String("PIXEL ARCADE: ") + Arcade::PixelArcadeSim::GameTitle(arcadeSim_.kind));
+        if (arcadeScoreText_) {
+            int hi = arcadeSim_.highScores[(size_t)arcadeSim_.kind];
+            arcadeScoreText_->SetText("СЧЕТ: " + String(arcadeSim_.score) + "  |  РЕК: " + String(hi) +
+                                      "  |  " + String(GetMiniAppWallet(arcadeFromMenu_)) + " ¤");
+        }
+        if (arcadeHintText_)
+            arcadeHintText_->SetText(String(Arcade::PixelArcadeSim::GameControls(arcadeSim_.kind)) + "  •  [R] Заново  •  [ESC] Выход");
+
+        if (arcadeOverlayText_) {
+            if (arcadeSim_.over) {
+                int bonus = Arcade::PixelArcadeSim::ComputeCreditsReward(arcadeSim_.score, arcadeSim_.won);
+                arcadeOverlayText_->SetText((arcadeSim_.won ? "ПОБЕДА! " : "ИГРА ОКОНЧЕНА! ") +
+                                            String("СЧЕТ: ") + String(arcadeSim_.score) +
+                                            (bonus > 0 ? (" (+" + String(bonus) + " ¤)") : String()) +
+                                            "\n[R] — сыграть ещё   •   [1..4] — другая игра");
+                arcadeOverlayText_->SetVisible(true);
+            } else if (arcadeSim_.paused) {
+                arcadeOverlayText_->SetText("ПАУЗА\nНажмите [SPACE] чтобы продолжить");
+                arcadeOverlayText_->SetVisible(true);
+            } else {
+                arcadeOverlayText_->SetVisible(false);
+            }
+        }
+
+        // Отрисовка виртуального кадра через пул BorderImage
+        auto rects = arcadeSim_.BuildDrawRects();
+        float sx = (float)arcadeCanvas_->GetWidth() / Arcade::PixelArcadeSim::VIEW_W;
+        float sy = (float)arcadeCanvas_->GetHeight() / Arcade::PixelArcadeSim::VIEW_H;
+        while ((unsigned)arcadeRectPool_.Size() < (unsigned)rects.size()) {
+            BorderImage* ri = arcadeCanvas_->CreateChild<BorderImage>();
+            arcadeRectPool_.Push(SharedPtr<BorderImage>(ri));
+        }
+        static const Color kPal[6] = {
+            Color(0.24f, 0.96f, 0.92f, 1.0f), // cyan
+            Color(1.00f, 0.25f, 0.65f, 1.0f), // pink
+            Color(1.00f, 0.88f, 0.22f, 1.0f), // gold
+            Color(0.24f, 0.96f, 0.48f, 1.0f), // green
+            Color(1.00f, 0.24f, 0.26f, 1.0f), // red
+            Color(0.98f, 0.98f, 1.00f, 1.0f)  // white
+        };
+        for (unsigned i = 0; i < (unsigned)arcadeRectPool_.Size(); ++i) {
+            BorderImage* ri = arcadeRectPool_[i].Get();
+            if (!ri) continue;
+            if (i < (unsigned)rects.size()) {
+                const auto& r = rects[i];
+                ri->SetVisible(true);
+                ri->SetPosition((int)(r.x * sx), (int)(r.y * sy));
+                ri->SetSize(Max(2, (int)(r.w * sx)), Max(2, (int)(r.h * sy)));
+                ri->SetColor(kPal[r.colorTag % 6u]);
+            } else {
+                ri->SetVisible(false);
+            }
+        }
+    }
+
+    void OpenArcade(bool fromMenu) {
+        arcadeFromMenu_ = fromMenu;
+        arcadeOpen_ = true;
+        arcadeSim_.rng ^= (uint32_t)(timeAcc_ * 1000.0f) ^ 0xA2Cu;
+        arcadeSim_.Reset(arcadeSim_.kind);
+        if (!arcadePanel_) CreateArcadePanel();
+        if (arcadePanel_) arcadePanel_->SetVisible(true);
+        if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
+        SetGameHudVisible(false);
+        if (auto* input = GetSubsystem<Input>()) { input->SetMouseVisible(true); isMouseVisible_ = true; }
+        SyncArcadeUI();
+        PlayUISound();
+    }
+
+    void CloseArcade() {
+        arcadeOpen_ = false;
+        if (arcadePanel_) arcadePanel_->SetVisible(false);
+        SaveSettingsFile();
+        if (arcadeFromMenu_) {
+            ShowMainMenu(true);
+        } else {
+            SetGameHudVisible(!photoMode_);
+            if (auto* input = GetSubsystem<Input>()) { input->SetMouseVisible(false); isMouseVisible_ = false; }
+            UpdateScoreDisplay();
+        }
+    }
+
+    void HandleArcadeKey(int key) {
+        if (key == KEY_ESCAPE || key == KEY_K) { CloseArcade(); return; }
+        if (key >= (int)KEY_1 && key <= (int)KEY_4) {
+            arcadeSim_.Reset((Arcade::ArcadeGameKind)(key - (int)KEY_1));
+            PlayUISound();
+            SyncArcadeUI();
+            return;
+        }
+        if (key == KEY_R) { arcadeSim_.Reset(arcadeSim_.kind); PlayUISound(); SyncArcadeUI(); return; }
+        if (key == KEY_SPACE) {
+            if (arcadeSim_.kind == Arcade::GAME_DINO && !arcadeSim_.over) {
+                // В Куро-Ране SPACE — прыжок!
+            } else {
+                arcadeSim_.paused = !arcadeSim_.paused;
+                PlayUISound();
+                SyncArcadeUI();
+                return;
+            }
+        }
+        // Повороты змейки фиксируем мгновенно по нажатию клавиши
+        if (arcadeSim_.kind == Arcade::GAME_SNAKE) {
+            if (key == KEY_LEFT || key == KEY_A) arcadeSim_.SetSnakeDir(-1, 0);
+            else if (key == KEY_RIGHT || key == KEY_D) arcadeSim_.SetSnakeDir(1, 0);
+            else if (key == KEY_UP || key == KEY_W) arcadeSim_.SetSnakeDir(0, -1);
+            else if (key == KEY_DOWN || key == KEY_S) arcadeSim_.SetSnakeDir(0, 1);
+        }
+    }
+
+    void HandleArcadeClick() {
+        auto* input = GetSubsystem<Input>();
+        if (!input) return;
+        IntVector2 mp = input->GetMousePosition();
+        for (unsigned i = 0; i < (unsigned)arcadeGameTabs_.Size(); ++i) {
+            if (HitUIElement(arcadeGameTabs_[i].Get(), mp)) {
+                if (i < 4) { arcadeSim_.Reset((Arcade::ArcadeGameKind)i); PlayUISound(); SyncArcadeUI(); }
+                else if (i == 4) { arcadeSim_.Reset(arcadeSim_.kind); PlayUISound(); SyncArcadeUI(); }
+                else if (i == 5) { CloseArcade(); }
+                return;
+            }
+        }
+    }
+
+    void UpdateArcadeOverlay(float dt) {
+        auto* input = GetSubsystem<Input>();
+        int mx = 0, my = 0;
+        bool jump = false;
+        if (input) {
+            if (input->GetKeyDown(KEY_LEFT) || input->GetKeyDown(KEY_A)) mx -= 1;
+            if (input->GetKeyDown(KEY_RIGHT) || input->GetKeyDown(KEY_D)) mx += 1;
+            if (input->GetKeyDown(KEY_UP) || input->GetKeyDown(KEY_W)) my -= 1;
+            if (input->GetKeyDown(KEY_DOWN) || input->GetKeyDown(KEY_S)) my += 1;
+            jump = input->GetKeyDown(KEY_SPACE) || input->GetKeyDown(KEY_W) || input->GetKeyDown(KEY_UP);
+        }
+        bool wasOver = arcadeSim_.over;
+        arcadeSim_.Step(dt, mx, my, jump);
+        if (!wasOver && arcadeSim_.over) {
+            int bonus = Arcade::PixelArcadeSim::ComputeCreditsReward(arcadeSim_.score, arcadeSim_.won);
+            if (bonus > 0 && !arcadeSim_.rewardClaimed) {
+                arcadeSim_.rewardClaimed = true;
+                int wallet = GetMiniAppWallet(arcadeFromMenu_) + bonus;
+                SetMiniAppWallet(arcadeFromMenu_, wallet);
+                SaveSettingsFile();
+                PlayBanyaSound(achievementSound_, 0.85f);
+            } else {
+                PlayUISound();
+            }
+        }
+        SyncArcadeUI();
     }
 };
 

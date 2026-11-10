@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Сборка CHIKENGUN 2.2 — 4K ULTRA & CYBER OVERLOAD EDITION (Urho3D C++17)
+# Сборка CHIKENGUN 2.3 — 4K ULTRA & CYBER EVOLUTION EDITION (Urho3D C++17)
 # Автоматически находит Urho3D / SDL2 / Bullet3, синхронизирует шейдеры,
 # PBR-материалы и звуки, генерирует 4K PBR текстуры (4096x4096) + 360° Skybox4K
 # + 4K Loading Art и компилирует build/MyShooter.
@@ -10,7 +10,7 @@ set -e
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 CXX="${CXX:-g++}"
-CXXFLAGS="${CXXFLAGS:--O2 -DNDEBUG}"
+CXXFLAGS="${CXXFLAGS:--O2 -DNDEBUG -Wall -Wextra}"
 TEX_SIZE="${TEX_SIZE:-4096}"
 OUT="$ROOT/build/MyShooter"
 
@@ -77,7 +77,7 @@ if [ -z "$SDL_INC" ] && [ -n "$SDL_INC2" ]; then
 fi
 
 SDL_CFLAGS="-D_REENTRANT"
-[ -n "$SDL_INC" ] && SDL_CFLAGS="-I$SDL_INC $SDL_CFLAGS"
+[ -n "$SDL_INC" ] && SDL_CFLAGS="-isystem $SDL_INC $SDL_CFLAGS"
 
 # ---- 3. Bullet3 из дерева Urho3D (если доступен) ----
 BULLET_CFLAGS=""
@@ -90,7 +90,7 @@ for d in \
 do
     [ -z "$d" ] && continue
     if [ -f "$d/Bullet/LinearMath/btIDebugDraw.h" ] || [ -f "$d/LinearMath/btIDebugDraw.h" ]; then
-        BULLET_CFLAGS="-I$d"
+        BULLET_CFLAGS="-isystem $d"
         break
     fi
 done
@@ -131,20 +131,15 @@ done
 # ---- 5. Синхронизация ресурсов (CoreData + Data + settings.ini) ----
 echo "[1/3] Синхронизация GLSL шейдеров, 4K постпроцессов, PBR материалов и звуков..."
 mkdir -p "$ROOT/build/CoreData" "$ROOT/build/Data"
-for csrc in "$ROOT/CoreData" "$ROOT/bin/CoreData" "$HOME/urho3d/bin/CoreData" "/usr/local/share/Urho3D/CoreData"; do
-    [ -d "$csrc" ] && cp -ru "$csrc"/. "$ROOT/build/CoreData"/ 2>/dev/null || true
+for csrc in "$HOME/urho3d/bin/CoreData" "/usr/local/share/Urho3D/CoreData" "$ROOT/CoreData"; do
+    [ -d "$csrc" ] && cp -rf "$csrc"/. "$ROOT/build/CoreData"/ 2>/dev/null || true
 done
-for dsrc in "$ROOT/Data" "$ROOT/bin/Data" "$HOME/urho3d/bin/Data" "/usr/local/share/Urho3D/Data"; do
-    [ -d "$dsrc" ] && cp -ru "$dsrc"/. "$ROOT/build/Data"/ 2>/dev/null || true
+for dsrc in "$HOME/urho3d/bin/Data" "/usr/local/share/Urho3D/Data" "$ROOT/Data"; do
+    [ -d "$dsrc" ] && cp -rf "$dsrc"/. "$ROOT/build/Data"/ 2>/dev/null || true
 done
-# Поверх гарантируем свежие файлы из репозитория
-[ -d "$ROOT/CoreData" ] && cp -rf "$ROOT/CoreData"/. "$ROOT/build/CoreData"/ 2>/dev/null || true
-[ -d "$ROOT/Data/Materials/Game" ] && mkdir -p "$ROOT/build/Data/Materials/Game" && cp -rf "$ROOT/Data/Materials/Game"/. "$ROOT/build/Data/Materials/Game"/ 2>/dev/null || true
-[ -d "$ROOT/Data/PostProcess" ]    && mkdir -p "$ROOT/build/Data/PostProcess"    && cp -rf "$ROOT/Data/PostProcess"/.    "$ROOT/build/Data/PostProcess"/    2>/dev/null || true
-[ -d "$ROOT/Data/Sounds" ]         && mkdir -p "$ROOT/build/Data/Sounds"         && cp -rf "$ROOT/Data/Sounds"/.         "$ROOT/build/Data/Sounds"/         2>/dev/null || true
 
 # Удаляем случайные вложенные дубли и пустые файлы (но НЕ трогаем внешнюю установку Urho3D!)
-rm -rf "$ROOT/build/Data/Data" 2>/dev/null || true
+rm -rf "$ROOT/build/Data/Data" "$ROOT/build/Data/CoreData" 2>/dev/null || true
 find "$ROOT/build/Data" -name "*.mat" ! -path "*Materials*" -delete 2>/dev/null || true
 find "$ROOT/build/Data" "$ROOT/build/CoreData" -type f -size 0 -delete 2>/dev/null || true
 [ -f "$ROOT/bin/settings.ini" ] && [ ! -f "$ROOT/build/settings.ini" ] && cp "$ROOT/bin/settings.ini" "$ROOT/build/settings.ini" || true
@@ -167,8 +162,8 @@ echo "[3/3] Компиляция src/MyApp.cpp -> build/MyShooter..."
 "$CXX" "$ROOT/src/MyApp.cpp" \
     -o "$OUT" \
     -std=c++17 $CXXFLAGS \
-    -I"$URHO_INC" \
-    -I"$URHO_INC/Urho3D/ThirdParty" \
+    -isystem "$URHO_INC" \
+    -isystem "$URHO_INC/Urho3D/ThirdParty" \
     $SDL_CFLAGS \
     $BULLET_CFLAGS \
     -L"$URHO_LIBDIR" \
@@ -179,6 +174,6 @@ echo "[3/3] Компиляция src/MyApp.cpp -> build/MyShooter..."
     -lGL -lX11 -lpthread -lrt -ldl -lm
 
 echo "================================================================"
-echo "Готово! Запускайте CHIKENGUN 2.2 [4K ULTRA EDITION]:"
+echo "Готово! Запускайте CHIKENGUN 2.3 [4K ULTRA EDITION]:"
 echo "  ./run.sh   или   ./build/MyShooter"
 echo "================================================================"

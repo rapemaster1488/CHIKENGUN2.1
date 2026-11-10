@@ -4,15 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Золотая Рулетка — ШУТОЧНЫЙ симулятор (не казино)</title>
-<link rel="preconnect" href="https://cdn.jsdelivr.net">
-<link href="https://cdn.jsdelivr.net/npm/@fontsource/montserrat@5.0.18/600.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/@fontsource/montserrat@5.0.18/700.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/@fontsource/montserrat@5.0.18/800.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/@fontsource/cormorant-garamond@5.0.19/600.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/@fontsource/cormorant-garamond@5.0.19/700.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.16/400.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.16/500.css" rel="stylesheet">
-<link href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.16/600.css" rel="stylesheet">
 <style>
 :root{
   --acc:232,194,104; --acc-lt:255,240,194;
@@ -567,6 +558,7 @@ footer .orn{color:rgba(var(--acc),.55);letter-spacing:8px;font-size:14px;margin-
   <button class="icon-btn" id="soundBtn" title="Звук" aria-label="Звук">🔊</button>
   <button class="icon-btn" id="setBtn" title="Настройки" aria-label="Настройки">⚙️</button>
   <button class="icon-btn" id="helpBtn" title="Правила" aria-label="Правила">❓</button>
+  <button class="icon-btn" id="cgBackBtn" title="Вернуться в 3D Арену" aria-label="Вернуться в 3D Арену" style="width:auto;padding:0 14px;font-size:12px;font-weight:700">← Арена</button>
 </header>
 
 <main>
@@ -1854,6 +1846,15 @@ function finishSpin(number,snapshot){
     unlock('first','Первый выигрыш');
     if(hitNumber)unlock('straight','Точное число ×36');
     if(winStreak>=3)unlock('streak3','Три выигрыша подряд');
+    try{
+      var cgBonus=Math.min(35,Math.max(5,Math.round(payout/400)));
+      var cgCur=parseInt(localStorage.getItem('cg23_credits')||'100',10);
+      var cgNext=(isFinite(cgCur)?cgCur:100)+cgBonus;
+      localStorage.setItem('cg23_credits',String(cgNext));
+      if(window.parent&&window.parent!==window){
+        window.parent.postMessage({type:'cg-casino-reward',payout:payout,number:number,creditsEarned:cgBonus,totalCredits:cgNext},'*');
+      }
+    }catch(_){}
   }else{
     setStatus('Не повезло · −'+fmt(-net),'Сектор '+number+' · '+colorName(number)+' · всё понарошку','lose');
     loseSound();toast('Ставка сгорела (в симуляции). Крутим ещё?','lose',2400);
@@ -2012,7 +2013,18 @@ function boot(){
     if(!EL.board.querySelector('.cell')){safe(buildBoard,'board-retry');safe(renderChips,'chips-retry');}
   },1200);
   bootOK=true;
-  setTimeout(function(){EL.simModal.classList.add('open')},600);
+  var cgBackEl=document.getElementById('cgBackBtn');
+  if(cgBackEl){
+    cgBackEl.addEventListener('click',function(){
+      if(window.parent&&window.parent!==window){
+        try{window.parent.postMessage({type:'cg-casino-close'},'*');}catch(_){}
+      }else{
+        location.href='index.html';
+      }
+    });
+  }
+  var isEmbed=(location.search||'').indexOf('embed=1')>=0||(window.parent&&window.parent!==window);
+  if(!isEmbed)setTimeout(function(){EL.simModal.classList.add('open')},600);
 }
 try{boot()}catch(err){
   bootOK=false;

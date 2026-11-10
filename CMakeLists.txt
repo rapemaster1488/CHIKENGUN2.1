@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(ChikenGun4K VERSION 2.2.0 LANGUAGES CXX)
+project(ChikenGun4K VERSION 2.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -61,8 +61,8 @@ if(BUILD_GAME)
         endif()
 
         add_executable(MyShooter src/MyApp.cpp)
-        target_compile_options(MyShooter PRIVATE -O2 -Wall -Wextra -Wno-unused-parameter -Wno-sign-compare)
-        target_include_directories(MyShooter PRIVATE
+        target_compile_options(MyShooter PRIVATE -O2 -Wall -Wextra)
+        target_include_directories(MyShooter SYSTEM PRIVATE
             "${URHO3D_INCLUDE_DIR}"
             "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty"
             "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/Bullet"

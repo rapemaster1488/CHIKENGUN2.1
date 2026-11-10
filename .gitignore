@@ -29,3 +29,6 @@ core.*
 # --- генерируемые текстуры (tools/gen_textures.py) ---
 bin/Data/TexturesHD/
 build/Data/TexturesHD/
+__pycache__/
+*.pyc
+
