@@ -875,20 +875,26 @@ int main(int argc, char** argv) {
 
     std::printf("[4K PBR Generator] Generating %dx%d PBR texture suite -> %s ...\n", S, S, outDir.c_str());
 
-    auto saveSet = [&](const char* name, PbrSet&& s) {
-        savePngStandalone(outDir + "/" + name + "Diffuse.png", S, S, s.diff);
-        savePngStandalone(outDir + "/" + name + "Normal.png", S, S, s.norm);
-        savePngStandalone(outDir + "/" + name + "RoughMetal.png", S, S, s.roughMetal);
-        std::printf("  [OK] %-14s (%dx%d Diffuse + Normal + RoughMetal)\n", name, S, S);
+    // A few detailed maps intentionally cap their working resolution at 2048 to
+    // keep the 4K build's memory use reasonable.  Keep the PNG dimensions in
+    // sync with the actual vector size: writing a 2048x2048 buffer with a
+    // 4096x4096 IHDR creates a truncated PNG that stb_image reports as
+    // "not enough pixels" and can crash older Urho3D resource paths.
+    auto saveSet = [&](const char* name, int textureSize, PbrSet&& s) {
+        savePngStandalone(outDir + "/" + name + "Diffuse.png", textureSize, textureSize, s.diff);
+        savePngStandalone(outDir + "/" + name + "Normal.png", textureSize, textureSize, s.norm);
+        savePngStandalone(outDir + "/" + name + "RoughMetal.png", textureSize, textureSize, s.roughMetal);
+        std::printf("  [OK] %-14s (%dx%d Diffuse + Normal + RoughMetal)\n", name, textureSize, textureSize);
     };
 
-    saveSet("StoneHD",      genStone4K(S));
-    saveSet("FloorTile",    genFloor4K(S));
-    saveSet("MetalPanel",   genMetalPanel4K(S));
-    saveSet("BrushedMetal", genBrushedMetal4K(S));
-    saveSet("CrateWood",    genCrateWood4K(S));
-    saveSet("FeatherPBR",   genFeather4K(std::min(S, 2048)));
-    saveSet("HazardMetal",  genHazardMetal4K(std::min(S, 2048)));
+    saveSet("StoneHD",      S, genStone4K(S));
+    saveSet("FloorTile",    S, genFloor4K(S));
+    saveSet("MetalPanel",   S, genMetalPanel4K(S));
+    saveSet("BrushedMetal", S, genBrushedMetal4K(S));
+    saveSet("CrateWood",    S, genCrateWood4K(S));
+    const int featherSize = std::min(S, 2048);
+    saveSet("FeatherPBR",   featherSize, genFeather4K(featherSize));
+    saveSet("HazardMetal",  featherSize, genHazardMetal4K(featherSize));
 
     int cubeS = 1024; // IBL.glsl использует cubeMapSize = 1024.0 (точные mip-уровни 0..10)
     genSkyCubemap(outDir, cubeS);
