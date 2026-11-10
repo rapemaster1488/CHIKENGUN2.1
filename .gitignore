@@ -1,5 +1,7 @@
 # --- сборка ---
 build/
+build-tests/
+build-desktop/
 bin/MyShooter
 *.o
 *.obj
