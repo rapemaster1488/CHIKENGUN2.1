@@ -1462,6 +1462,7 @@ private:
         planeModel_  = cache->GetResource<Model>("Models/Plane.mdl");
         if (!font_) {
             font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
         }
     }
@@ -1743,13 +1744,48 @@ private:
         }
 
         // --- 4K PBR материалы поверхности арены ---
-        hdStone_   = cache->GetResource<Material>("Materials/Game/StoneHD.xml");
-        hdFloor_   = cache->GetResource<Material>("Materials/Game/FloorTile.xml");
-        hdPanel_   = cache->GetResource<Material>("Materials/Game/MetalPanel.xml");
-        hdMetal_   = cache->GetResource<Material>("Materials/Game/BrushedMetal.xml");
-        hdCrate_   = cache->GetResource<Material>("Materials/Game/CrateWood.xml");
-        hdFeather_ = cache->GetResource<Material>("Materials/Game/FeatherPBR.xml");
-        hdHazard_  = cache->GetResource<Material>("Materials/Game/HazardMetal.xml");
+        // Material.xml can still be returned even when one of its image
+        // resources failed to decode.  Do not keep such a half-loaded material:
+        // older Urho3D builds may dereference its missing texture during the
+        // first render pass instead of failing gracefully.
+        auto textureSetOk = [cache](const char* diffuse, const char* normal, const char* roughMetal) {
+            const char* names[] = { diffuse, normal, roughMetal };
+            for (const char* name : names) {
+                if (!cache->GetResource<Texture2D>(String(name))) return false;
+            }
+            return true;
+        };
+        auto loadPbrMaterial = [&](const char* materialName, const char* diffuse,
+                                   const char* normal, const char* roughMetal) -> Material* {
+            Material* material = cache->GetResource<Material>(String(materialName));
+            if (!material || !textureSetOk(diffuse, normal, roughMetal)) {
+                URHO3D_LOGWARNING(String("PBR material disabled (missing/invalid texture): ") + materialName);
+                return nullptr;
+            }
+            return material;
+        };
+
+        hdStone_ = loadPbrMaterial("Materials/Game/StoneHD.xml",
+                                   "Textures/StoneHDDiffuse.png", "Textures/StoneHDNormal.png",
+                                   "Textures/StoneHDRoughMetal.png");
+        hdFloor_ = loadPbrMaterial("Materials/Game/FloorTile.xml",
+                                   "Textures/FloorTileDiffuse.png", "Textures/FloorTileNormal.png",
+                                   "Textures/FloorTileRoughMetal.png");
+        hdPanel_ = loadPbrMaterial("Materials/Game/MetalPanel.xml",
+                                   "Textures/MetalPanelDiffuse.png", "Textures/MetalPanelNormal.png",
+                                   "Textures/MetalPanelRoughMetal.png");
+        hdMetal_ = loadPbrMaterial("Materials/Game/BrushedMetal.xml",
+                                   "Textures/BrushedMetalDiffuse.png", "Textures/BrushedMetalNormal.png",
+                                   "Textures/BrushedMetalRoughMetal.png");
+        hdCrate_ = loadPbrMaterial("Materials/Game/CrateWood.xml",
+                                   "Textures/CrateWoodDiffuse.png", "Textures/CrateWoodNormal.png",
+                                   "Textures/CrateWoodRoughMetal.png");
+        hdFeather_ = loadPbrMaterial("Materials/Game/FeatherPBR.xml",
+                                     "Textures/FeatherPBRDiffuse.png", "Textures/FeatherPBRNormal.png",
+                                     "Textures/FeatherPBRRoughMetal.png");
+        hdHazard_ = loadPbrMaterial("Materials/Game/HazardMetal.xml",
+                                    "Textures/HazardMetalDiffuse.png", "Textures/HazardMetalNormal.png",
+                                    "Textures/HazardMetalRoughMetal.png");
         skyTexture_ = cache->GetResource<Texture2D>("Textures/SkyDay.png");
         EnsureSkyCubemap();
 
@@ -6785,8 +6821,12 @@ private:
         RefreshUIScale();
         auto* cache = GetSubsystem<ResourceCache>();
         if (!font_) {
-            font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
-            if (!font_) font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            // Anonymous Pro is shipped with the project.  Prefer it before the
+            // optional DejaVu fallback so a normal install does not emit a
+            // misleading "DejaVuSans.ttf not found" error on every launch.
+            font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
         }
         auto* ui = GetSubsystem<UI>();
         auto* root = ui->GetRoot();

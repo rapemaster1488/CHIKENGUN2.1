@@ -137,8 +137,11 @@ done
 for dsrc in "$ROOT/Data" "$ROOT/bin/Data" "$HOME/urho3d/bin/Data" "/usr/local/share/Urho3D/Data"; do
     [ -d "$dsrc" ] && cp -ru "$dsrc"/. "$ROOT/build/Data"/ 2>/dev/null || true
 done
-# Поверх гарантируем свежие файлы из репозитория
+# Поверх гарантируем свежие файлы из репозитория.  Нельзя использовать
+# только cp -u: после неудачной/старой сборки в build/ могут остаться битые
+# ресурсы с более новой датой, и они будут ошибочно приняты за актуальные.
 [ -d "$ROOT/CoreData" ] && cp -rf "$ROOT/CoreData"/. "$ROOT/build/CoreData"/ 2>/dev/null || true
+[ -d "$ROOT/Data" ] && cp -rf "$ROOT/Data"/. "$ROOT/build/Data"/ 2>/dev/null || true
 [ -d "$ROOT/Data/Materials/Game" ] && mkdir -p "$ROOT/build/Data/Materials/Game" && cp -rf "$ROOT/Data/Materials/Game"/. "$ROOT/build/Data/Materials/Game"/ 2>/dev/null || true
 [ -d "$ROOT/Data/PostProcess" ]    && mkdir -p "$ROOT/build/Data/PostProcess"    && cp -rf "$ROOT/Data/PostProcess"/.    "$ROOT/build/Data/PostProcess"/    2>/dev/null || true
 [ -d "$ROOT/Data/Sounds" ]         && mkdir -p "$ROOT/build/Data/Sounds"         && cp -rf "$ROOT/Data/Sounds"/.         "$ROOT/build/Data/Sounds"/         2>/dev/null || true
@@ -151,13 +154,94 @@ find "$ROOT/build/Data" "$ROOT/build/CoreData" -type f -size 0 -delete 2>/dev/nu
 
 # ---- 6. Генерация полного пакета 4K PBR текстур (4096x4096) ----
 STAMP_FILE="$ROOT/build/Data/Textures/.4k_pbr_stamp"
-CUR_STAMP=""
-[ -f "$STAMP_FILE" ] && CUR_STAMP="$(cat "$STAMP_FILE" 2>/dev/null || true)"
 
-if [ "$CUR_STAMP" != "$TEX_SIZE" ] || [ ! -f "$ROOT/build/Data/Textures/FloorTileRoughMetal.png" ] || [ ! -f "$ROOT/build/Data/Textures/Skybox4K.xml" ]; then
+# Проверяем не только stamp-файл: старые версии генератора могли записать
+# урезанные Feather/Hazard PNG с IHDR 4096x4096 и данными лишь 2048x2048.
+# Такой файл выглядит непустым, но stb_image/Urho3D сообщает "not enough pixels".
+texture_set_is_valid() {
+    local stamp=""
+    [ -f "$STAMP_FILE" ] && stamp="$(cat "$STAMP_FILE" 2>/dev/null || true)"
+    [ "$stamp" = "$TEX_SIZE" ] || return 1
+
+    local required=(
+        StoneHDDiffuse.png StoneHDNormal.png StoneHDRoughMetal.png
+        FloorTileDiffuse.png FloorTileNormal.png FloorTileRoughMetal.png
+        MetalPanelDiffuse.png MetalPanelNormal.png MetalPanelRoughMetal.png
+        BrushedMetalDiffuse.png BrushedMetalNormal.png BrushedMetalRoughMetal.png
+        CrateWoodDiffuse.png CrateWoodNormal.png CrateWoodRoughMetal.png
+        FeatherPBRDiffuse.png FeatherPBRNormal.png FeatherPBRRoughMetal.png
+        HazardMetalDiffuse.png HazardMetalNormal.png HazardMetalRoughMetal.png
+        Sky4K_PosX.png Sky4K_NegX.png Sky4K_PosY.png Sky4K_NegY.png Sky4K_PosZ.png Sky4K_NegZ.png
+        SkyDay.png LoadingBg4K.png Skybox4K.xml
+    )
+    local name
+    for name in "${required[@]}"; do
+        [ -s "$ROOT/build/Data/Textures/$name" ] || return 1
+    done
+
+    # Python is already a documented build dependency.  Validate PNG dimensions
+    # and decompressed scanline length so a corrupt cache is regenerated.
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - "$ROOT/build/Data/Textures" "$TEX_SIZE" <<'PY'
+import struct
+import sys
+import zlib
+from pathlib import Path
+
+root = Path(sys.argv[1])
+size = int(sys.argv[2])
+small = min(size, 2048)
+loading = (3840, 2160) if size >= 2048 else (1920, 1080)
+expected = {}
+for stem in ("StoneHD", "FloorTile", "MetalPanel", "BrushedMetal", "CrateWood"):
+    for suffix in ("Diffuse", "Normal", "RoughMetal"):
+        expected[f"{stem}{suffix}.png"] = (size, size)
+for stem in ("FeatherPBR", "HazardMetal"):
+    for suffix in ("Diffuse", "Normal", "RoughMetal"):
+        expected[f"{stem}{suffix}.png"] = (small, small)
+for face in ("PosX", "NegX", "PosY", "NegY", "PosZ", "NegZ"):
+    expected[f"Sky4K_{face}.png"] = (1024, 1024)
+expected["SkyDay.png"] = (1024, 1024)
+expected["LoadingBg4K.png"] = loading
+
+for name, (want_w, want_h) in expected.items():
+    data = (root / name).read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise SystemExit(f"invalid PNG signature: {name}")
+    pos = 8
+    width = height = depth = color_type = None
+    idat = bytearray()
+    while pos + 12 <= len(data):
+        length = struct.unpack(">I", data[pos:pos + 4])[0]
+        kind = data[pos + 4:pos + 8]
+        chunk = data[pos + 8:pos + 8 + length]
+        if len(chunk) != length:
+            raise SystemExit(f"truncated PNG chunk: {name}")
+        if kind == b"IHDR":
+            width, height, depth, color_type = struct.unpack(">IIBB", chunk[:10])
+        elif kind == b"IDAT":
+            idat.extend(chunk)
+        pos += 12 + length
+    if (width, height) != (want_w, want_h) or depth != 8 or color_type not in (2, 6):
+        raise SystemExit(f"unexpected PNG header: {name} ({width}x{height}, depth={depth}, type={color_type})")
+    channels = 3 if color_type == 2 else 4
+    raw = zlib.decompress(bytes(idat))
+    if len(raw) != want_h * (1 + want_w * channels):
+        raise SystemExit(f"truncated PNG pixels: {name}")
+PY
+        return $?
+    fi
+    return 0
+}
+
+if ! texture_set_is_valid; then
     echo "[2/3] Генерация 4K PBR текстур (${TEX_SIZE}x${TEX_SIZE}), IBL Skybox4K и 4K Loading Art..."
     "$CXX" -O3 -std=c++17 -pthread "$ROOT/tools/gen_textures_4k.cpp" -o "$ROOT/build/gen_textures_4k"
     "$ROOT/build/gen_textures_4k" "$ROOT/build/Data/Textures" "$TEX_SIZE"
+    if ! texture_set_is_valid; then
+        echo "ОШИБКА: генератор создал неполный или повреждённый PNG-набор." >&2
+        exit 1
+    fi
 else
     echo "[2/3] 4K PBR текстуры (${TEX_SIZE}x${TEX_SIZE}) уже актуальны."
 fi
