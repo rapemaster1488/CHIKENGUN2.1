@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import socket
 import sys
 from functools import partial
 from http import HTTPStatus
@@ -48,7 +47,14 @@ class ChikenGunHandler(SimpleHTTPRequestHandler):
     def end_headers(self) -> None:
         self.send_header("Cache-Control", "no-cache")
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Range, Content-Type")
         super().end_headers()
+
+    def do_OPTIONS(self) -> None:
+        self.send_response(HTTPStatus.NO_CONTENT)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def guess_type(self, path: str) -> str:
         _, ext = os.path.splitext(path)
@@ -76,11 +82,24 @@ class ChikenGunHandler(SimpleHTTPRequestHandler):
 
         try:
             size = os.path.getsize(path)
+            if size == 0:
+                self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                return None
             spec = range_header[6:].split(",")[0].strip()
             start_s, end_s = spec.split("-", 1)
-            start = int(start_s) if start_s else 0
-            end = int(end_s) if end_s else size - 1
-            if start < 0 or end >= size or start > end:
+            if not start_s and not end_s:
+                raise ValueError("empty byte range")
+            if not start_s:
+                suffix = int(end_s)
+                if suffix <= 0:
+                    self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
+                    return None
+                start = max(0, size - suffix)
+                end = size - 1
+            else:
+                start = int(start_s)
+                end = min(int(end_s), size - 1) if end_s else size - 1
+            if start < 0 or start >= size or start > end:
                 self.send_error(HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE)
                 return None
 
@@ -122,7 +141,7 @@ class _RangeFile:
 
 
 class ReusableThreadingHTTPServer(ThreadingHTTPServer):
-    allow_reuse_address = True
+    allow_reuse_address = os.name != "nt"
     daemon_threads = True
 
     def handle_error(self, request, client_address) -> None:
@@ -132,17 +151,22 @@ class ReusableThreadingHTTPServer(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
-def find_free_port(host: str, start_port: int, span: int = 30) -> int:
+def bind_http_server(
+    host: str, start_port: int, auto_port: bool, handler, span: int = 30
+) -> tuple[ReusableThreadingHTTPServer, int]:
+    if not auto_port:
+        srv = ReusableThreadingHTTPServer((host, start_port), handler)
+        return srv, int(srv.server_address[1])
+
     for port in range(start_port, start_port + span):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            try:
-                s.bind((host, port))
-                return port
-            except OSError:
-                continue
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((host, 0))
-        return int(s.getsockname()[1])
+        try:
+            srv = ReusableThreadingHTTPServer((host, port), handler)
+            return srv, int(srv.server_address[1])
+        except OSError:
+            continue
+
+    srv = ReusableThreadingHTTPServer((host, 0), handler)
+    return srv, int(srv.server_address[1])
 
 
 def main() -> int:
@@ -153,9 +177,8 @@ def main() -> int:
     parser.add_argument("--port-file", default="", help="Write chosen port to file once bound")
     args = parser.parse_args()
 
-    port = find_free_port(args.host, args.port) if args.auto_port else args.port
     handler = partial(ChikenGunHandler, directory=ROOT_DIR)
-    server = ReusableThreadingHTTPServer((args.host, port), handler)
+    server, port = bind_http_server(args.host, args.port, args.auto_port, handler)
 
     if args.port_file:
         with open(args.port_file, "w", encoding="utf-8") as pf:

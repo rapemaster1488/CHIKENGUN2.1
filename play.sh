@@ -54,8 +54,12 @@ open_browser() {
 }
 
 if command -v python3 >/dev/null 2>&1; then
+    if [ "$AUTO_OPEN" -eq 0 ]; then
+        exec python3 "$ROOT/tools/serve.py" --host 0.0.0.0 --port "$PORT" --auto-port
+    fi
     PORT_FILE="$(mktemp)"
-    trap 'rm -f "$PORT_FILE"' EXIT
+    SRV_PID=""
+    trap 'if [ -n "$SRV_PID" ]; then kill "$SRV_PID" 2>/dev/null || true; fi; rm -f "$PORT_FILE"' INT TERM EXIT
     python3 "$ROOT/tools/serve.py" --host 0.0.0.0 --port "$PORT" --auto-port --port-file "$PORT_FILE" &
     SRV_PID=$!
     for _ in $(seq 1 40); do
