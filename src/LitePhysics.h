@@ -26,13 +26,20 @@ inline float Dot3(const Vec3& a, const Vec3& b) {
 
 template <typename Vec3>
 inline float RaySphereT(const Vec3& o, const Vec3& d, const Vec3& c, float r) {
+    // Полная квадратичная форма: работает и для ненормализованного луча,
+    // и для старта внутри сферы (нужен дальний корень выхода).
+    const float a = Dot3(d, d);
+    if (a < 1e-12f || r < 0.0f) return -1.0f;
     Vec3 oc(o.x_ - c.x_, o.y_ - c.y_, o.z_ - c.z_);
-    float b = Dot3(oc, d);
-    float cc = Dot3(oc, oc) - r * r;
-    float disc = b * b - cc;
+    const float b = Dot3(oc, d);
+    const float cc = Dot3(oc, oc) - r * r;
+    const float disc = b * b - a * cc;
     if (disc < 0.0f) return -1.0f;
-    float t = -b - std::sqrt(disc);
-    return t > 0.0f ? t : -1.0f;
+    const float root = std::sqrt(disc);
+    const float nearT = (-b - root) / a;
+    if (nearT >= 0.0f) return nearT;
+    const float farT = (-b + root) / a;
+    return farT >= 0.0f ? farT : -1.0f;
 }
 
 template <typename Vec3>
