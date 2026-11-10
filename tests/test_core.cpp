@@ -21,6 +21,7 @@
 #include "../src/LitePhysics.h"
 #include "../src/CyberSystems.h"
 #include "../src/BanyaSim.h"
+#include "../src/CasinoSim.h"
 #include "../src/ArcadeGames.h"
 
 namespace fs = std::filesystem;
@@ -68,7 +69,7 @@ static void CheckPngFile(const fs::path& p, uint32_t expectW, uint32_t expectH) 
 }
 
 int main(int argc, char** argv) {
-    std::cout << "[test_core] 1/8 Проверка Lite::RayBoxT и HitNormalBoxT (src/LitePhysics.h)..." << std::endl;
+    std::cout << "[test_core] 1/10 Проверка Lite::RayBoxT и HitNormalBoxT (src/LitePhysics.h)..." << std::endl;
     {
         float t = Lite::RayBoxT<TestVec3>({0, 1, -5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1});
         assert(std::fabs(t - 4.0f) < 1e-4f);
@@ -79,7 +80,7 @@ int main(int argc, char** argv) {
         assert(Lite::RayBoxT<TestVec3>({0, 1,  5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
     }
 
-    std::cout << "[test_core] 2/8 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
+    std::cout << "[test_core] 2/10 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
     {
         float t1 = Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {0, 1, 10}, 1.0f);
         float t2 = Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {0, 1, 22}, 1.0f);
@@ -87,9 +88,15 @@ int main(int argc, char** argv) {
         assert(std::fabs(t2 - 21.0f) < 1e-4f);
         assert(t1 < t2);
         assert(Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {5, 1, 10}, 1.0f) < 0.0f);
+
+        // Луч может начинаться внутри коллайдера: возвращаем точку выхода,
+        // а ненормализованный direction не должен менять геометрию попадания.
+        float inside = Lite::RaySphereT<TestVec3>({0, 1, 10}, {0, 0, 2}, {0, 1, 10}, 1.0f);
+        assert(std::fabs(inside - 0.5f) < 1e-4f);
+        assert(Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 0}, {0, 1, 10}, 1.0f) < 0.0f);
     }
 
-    std::cout << "[test_core] 3/8 Проверка кинематики Грэппл-крюка [Z] и FNV-1a кэша материалов..." << std::endl;
+    std::cout << "[test_core] 3/10 Проверка кинематики Грэппл-крюка [Z] и FNV-1a кэша материалов..." << std::endl;
     {
         bool rel = false;
         TestVec3 pull = Lite::ComputeGrapplePullT<TestVec3>({0, 2, 0}, {0, 2, 20}, 28.0f, 2.0f, rel);
@@ -107,7 +114,7 @@ int main(int argc, char** argv) {
         assert(h1 == h2 && h1 != h3);
     }
 
-    std::cout << "[test_core] 4/8 Проверка систем CyberSystems.h (мутаторы, Орбита [X], перки, 14 достижений)..." << std::endl;
+    std::cout << "[test_core] 4/10 Проверка систем CyberSystems.h (мутаторы, Орбита [X], перки, 14 достижений)..." << std::endl;
     {
         assert(Cyber::PickWaveMutator(1, 42) == Cyber::MUT_STANDARD);
         assert(Cyber::PickWaveMutator(5, 17) == Cyber::MUT_GOLDRUSH);
@@ -127,7 +134,7 @@ int main(int argc, char** argv) {
         assert(Cyber::CountUnlockedAchievements(Cyber::ALL_ACHIEVEMENTS_MASK) == 14);
     }
 
-    std::cout << "[test_core] 5/8 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
+    std::cout << "[test_core] 5/10 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
     {
         TestVec3 orig(0, 2, 0);
         TestVec3 dir = TestVec3(0, -1, 1).Normalized();
@@ -148,7 +155,7 @@ int main(int argc, char** argv) {
         assert(remap[0] == 0 && remap[1] == -1 && remap[2] == 1 && remap[4] == 2);
     }
 
-    std::cout << "[test_core] 6/8 Проверка XML-парсера и наличия 27 WAV-эффектов (вкл. баню)..." << std::endl;
+    std::cout << "[test_core] 6/10 Проверка XML-парсера и наличия 27 WAV-эффектов (вкл. баню)..." << std::endl;
     {
         assert(ParseXmlIntAttr("true", 0) == 1);
         assert(ParseXmlIntAttr("ON", 0) == 1);
@@ -167,7 +174,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    std::cout << "[test_core] 7/8 Проверка симулятора «Кочет в баньке» (src/BanyaSim.h: 14 концовок + 57 загадок)..." << std::endl;
+    std::cout << "[test_core] 7/10 Проверка симулятора «Кочет в баньке» (src/BanyaSim.h: 14 концовок + 57 загадок)..." << std::endl;
     {
         // 57 уникальных загадок без повторов внутри пула и с перемешиванием вариантов
         Banya::Simulator sim(12345u);
@@ -280,45 +287,42 @@ int main(int argc, char** argv) {
         assert(Banya::ComputeCreditsReward(sim.CurrentScore(), Banya::END_STEWARD) > 200);
     }
 
-    std::cout << "[test_core] 8/8 Проверка базовых PBR текстур и генератора..." << std::endl;
-    if (fs::exists("Data/Textures/Skybox4K.xml")) {
-        CheckPngFile("Data/Textures/StoneHDDiffuse.png", 512, 512);
-        CheckPngFile("Data/Textures/Sky4K_PosZ.png", 1024, 1024);
-        CheckPngFile("Data/Textures/LoadingBg4K.png", 1920, 1080);
-    }
-    if (argc > 1 && fs::exists(argv[1])) {
-        fs::path tmpOut = fs::temp_directory_path() / "chikengun_test_tex";
-        fs::remove_all(tmpOut);
-        std::string cmd = std::string("\"") + argv[1] + "\" \"" + tmpOut.string() + "\" 256 > /dev/null";
-        int rc = std::system(cmd.c_str());
-        assert(rc == 0 && "gen_textures_4k завершился с ошибкой");
-        CheckPngFile(tmpOut / "StoneHDDiffuse.png", 256, 256);
-        CheckPngFile(tmpOut / "HazardMetalRoughMetal.png", 256, 256);
-        assert(fs::exists(tmpOut / "Skybox4K.xml"));
-        fs::remove_all(tmpOut);
-    }
-
-    std::cout << "[test_core] 9/10 Проверка Золотой Рулетки (src/ArcadeGames.h)..." << std::endl;
+    std::cout << "[test_core] 8/10 Проверка нативной виртуальной рулетки (src/CasinoSim.h: правила, выплаты, фишки)..." << std::endl;
     {
-        Arcade::RouletteSim r;
-        int wallet = 200;
-        assert(r.PlaceBet(Arcade::BET_RED, 0, 50, wallet) && wallet == 150);
-        // idx 1 в ROULETTE_ORDER = 32 (красное, чётное, 19..36, 3-я 12)
-        assert(Arcade::ROULETTE_ORDER[1] == 32 && Arcade::IsRouletteRed(32));
-        assert(r.PlaceBet(Arcade::BET_STRAIGHT, 32, 10, wallet) && wallet == 140);
-        assert(r.StartSpin(1));
-        bool done = false;
-        for (int i = 0; i < 60 && !done; ++i) done = r.Step(0.05f, wallet);
-        assert(done && r.lastNumber == 32);
-        // Выплата: 50*2 (red) + 10*36 (straight) = 100 + 360 = 460; wallet = 140 + 460 = 600
-        assert(r.lastPayout == 460 && wallet == 600 && r.spins == 1);
-        assert(r.Rebet(wallet) && r.CurrentWager() == 60 && wallet == 540);
-        assert(r.UndoBet(wallet) && wallet == 550);
-        r.ClearBets(wallet);
-        assert(wallet == 600 && r.CurrentWager() == 0);
+        Casino::Bet red{Casino::BET_RED, 25, 7};
+        assert(Casino::Wins(red, 19));
+        assert(!Casino::Wins(red, 20));
+        assert(!Casino::Wins(red, 0));
+        assert(Casino::Payout(red, 19) == 50);
+        assert(Casino::Net(red, 19) == 25);
+        assert(Casino::Net(red, 20) == -25);
+
+        Casino::Bet exact{Casino::BET_NUMBER, 10, 7};
+        assert(Casino::Wins(exact, 7));
+        assert(Casino::Payout(exact, 7) == 360);
+        assert(!Casino::Wins(exact, 8));
+
+        Casino::Bet dozen{Casino::BET_DOZEN, 10, 24};
+        assert(Casino::Wins(dozen, 24) && !Casino::Wins(dozen, 12));
+        Casino::Bet column{Casino::BET_COLUMN, 10, 2};
+        assert(Casino::Wins(column, 5) && !Casino::Wins(column, 4));
+        Casino::Bet split{Casino::BET_SPLIT, 10, 7};
+        assert(Casino::Wins(split, 7) && Casino::Wins(split, 8) && !Casino::Wins(split, 9));
+        Casino::Bet street{Casino::BET_STREET, 10, 7};
+        assert(Casino::Wins(street, 9) && !Casino::Wins(street, 10));
+        Casino::Bet corner{Casino::BET_CORNER, 10, 4};
+        assert(Casino::Wins(corner, 5) && Casino::Wins(corner, 8) && !Casino::Wins(corner, 9));
+        Casino::Bet sixline{Casino::BET_SIXLINE, 10, 7};
+        assert(Casino::Wins(sixline, 12) && !Casino::Wins(sixline, 13));
+        assert(Casino::PayoutMultiplier(Casino::BET_CORNER) == 8);
+        assert(Casino::ColorName(0) == std::string("ЗЕРО"));
+        assert(Casino::IsBlack(2) && !Casino::IsBlack(1));
+        assert(Casino::NextChipAmount(25, -1) == 10);
+        assert(Casino::NextChipAmount(25, 1) == 50);
+        assert(Casino::ClampNumber(99) == 36 && Casino::ClampNumber(-5) == 0);
     }
 
-    std::cout << "[test_core] 10/10 Проверка Pixel Arcade (src/ArcadeGames.h: Змейка, Арканоид, Дино, Pong)..." << std::endl;
+    std::cout << "[test_core] 9/10 Проверка Pixel Arcade (src/ArcadeGames.h: Змейка, Арканоид, Дино, Pong)..." << std::endl;
     {
         Arcade::PixelArcadeSim sim;
         sim.Reset(Arcade::GAME_SNAKE);
@@ -340,6 +344,24 @@ int main(int argc, char** argv) {
 
         sim.Reset(Arcade::GAME_PONG);
         assert(Arcade::PixelArcadeSim::ComputeCreditsReward(100, true) == 20);
+    }
+
+    std::cout << "[test_core] 10/10 Проверка базовых PBR текстур и генератора..." << std::endl;
+    if (fs::exists("Data/Textures/Skybox4K.xml")) {
+        CheckPngFile("Data/Textures/StoneHDDiffuse.png", 512, 512);
+        CheckPngFile("Data/Textures/Sky4K_PosZ.png", 1024, 1024);
+        CheckPngFile("Data/Textures/LoadingBg4K.png", 1920, 1080);
+    }
+    if (argc > 1 && fs::exists(argv[1])) {
+        fs::path tmpOut = fs::temp_directory_path() / "chikengun_test_tex";
+        fs::remove_all(tmpOut);
+        std::string cmd = std::string("\"") + argv[1] + "\" \"" + tmpOut.string() + "\" 256 > /dev/null";
+        int rc = std::system(cmd.c_str());
+        assert(rc == 0 && "gen_textures_4k завершился с ошибкой");
+        CheckPngFile(tmpOut / "StoneHDDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "HazardMetalRoughMetal.png", 256, 256);
+        assert(fs::exists(tmpOut / "Skybox4K.xml"));
+        fs::remove_all(tmpOut);
     }
 
     std::cout << "[test_core] ВСЕ 10 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;

@@ -12,10 +12,11 @@ add_executable(gen_textures_4k tools/gen_textures_4k.cpp)
 target_compile_options(gen_textures_4k PRIVATE -O3 -Wall -Wextra)
 target_link_libraries(gen_textures_4k PRIVATE Threads::Threads)
 
-# 2. Модульные тесты ядра (Lite-физика, рейкасты, компакция коллайдеров, парсер настроек, PNG 4K)
+# 2. Модульные тесты ядра (Lite-физика, баня, виртуальная рулетка, парсер настроек, PNG 4K)
 enable_testing()
 add_executable(test_core tests/test_core.cpp)
-target_compile_options(test_core PRIVATE -O2 -Wall -Wextra)
+# Unit tests must keep assert() active even when a release preset defines NDEBUG.
+target_compile_options(test_core PRIVATE -O2 -Wall -Wextra -UNDEBUG)
 add_test(NAME CorePhysicsAndAssets COMMAND test_core $<TARGET_FILE:gen_textures_4k>)
 
 # 3. Цель генерации 4K текстур (по умолчанию 4096x4096)
