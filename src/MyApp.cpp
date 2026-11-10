@@ -180,13 +180,32 @@ namespace GameConstants {
     constexpr float PICKUP_HEAL = 25.0f;
 }
 
+// Слои Lite-физики: единая таблица вместо разрозненных «магических» чисел.
+// Битовая маска слоя совпадает с tag, поэтому старые рейкасты остаются совместимыми.
+namespace Collision {
+    enum Tag : int {
+        STATIC = 0,
+        TARGET = 1,
+        ENEMY = 2,
+        BARREL = 3,
+        MOVING_TARGET = 4,
+        REMOVED = 7,
+    };
+    constexpr int Mask(Tag tag) { return 1 << static_cast<int>(tag); }
+    constexpr int STATIC_MASK = Mask(STATIC);
+    constexpr int TARGET_MASK = Mask(TARGET);
+    constexpr int ENEMY_MASK = Mask(ENEMY);
+    constexpr int BARREL_MASK = Mask(BARREL);
+    constexpr int MOVING_TARGET_MASK = Mask(MOVING_TARGET);
+}
+
 // ============================================================================
 // Структуры данных
 // ============================================================================
 
 struct TargetData {
     WeakPtr<Node> node_;
-    int colliderIdx_ = -1;   // Lite-коллайдер мишени (tag 1, ptr = Node*)
+    int colliderIdx_ = -1;   // Lite-коллайдер мишени (Collision::TARGET, ptr = Node*)
     float health_;
     bool isActive_;
     int scoreValue_;
@@ -353,12 +372,12 @@ private:
     // Компоненты
     // === Лёгкая физика: реестр коллайдеров уровня (см. namespace Lite) ===
     Vector<Lite::Collider> colliders_;
-    int AddBoxCollider(const Vector3& c, const Vector3& half, int tag = 0, void* ptr = nullptr) {
+    int AddBoxCollider(const Vector3& c, const Vector3& half, int tag = Collision::STATIC, void* ptr = nullptr) {
         Lite::Collider col; col.center = c; col.half = half; col.sphere = false; col.tag = tag; col.ptr = ptr;
         colliders_.Push(col);
         return (int)colliders_.Size() - 1;
     }
-    int AddSphereCollider(const Vector3& c, float r, int tag = 0, void* ptr = nullptr) {
+    int AddSphereCollider(const Vector3& c, float r, int tag = Collision::STATIC, void* ptr = nullptr) {
         Lite::Collider col; col.center = c; col.half = Vector3(r, r, r); col.sphere = true; col.tag = tag; col.ptr = ptr;
         colliders_.Push(col);
         return (int)colliders_.Size() - 1;
@@ -366,13 +385,13 @@ private:
     int colliderGarbage_ = 0;   // сколько «удалённых» записей ждёт компакции
 
     void RemoveColliderLite(int idx) {
-        if (idx >= 0 && idx < (int)colliders_.Size() && colliders_[(unsigned)idx].tag != 7) {
-            colliders_[(unsigned)idx].tag = 7;
+        if (idx >= 0 && idx < (int)colliders_.Size() && colliders_[(unsigned)idx].tag != Collision::REMOVED) {
+            colliders_[(unsigned)idx].tag = Collision::REMOVED;
             ++colliderGarbage_;
         }
     }
 
-    // Реестр коллайдеров раньше только рос: удалённые записи (tag 7) оставались в массиве
+    // Реестр коллайдеров раньше только рос: удалённые записи оставались в массиве
     // и перебирались в каждом рейкасте. Компакция пересобирает массив и чинит все индексы.
     void CompactColliders() {
         if (colliderGarbage_ <= 0) return;
@@ -381,7 +400,7 @@ private:
         Vector<int> remap;
         remap.Resize(colliders_.Size());
         for (unsigned i = 0; i < colliders_.Size(); ++i) {
-            if (colliders_[i].tag == 7) { remap[i] = -1; continue; }
+            if (colliders_[i].tag == Collision::REMOVED) { remap[i] = -1; continue; }
             remap[i] = (int)compacted.Size();
             compacted.Push(colliders_[i]);
         }
@@ -397,7 +416,12 @@ private:
         colliderGarbage_ = 0;
     }
     void MoveColliderLite(int idx, const Vector3& center) {
-        if (idx >= 0 && idx < (int)colliders_.Size()) colliders_[(unsigned)idx].center = center;
+        if (idx >= 0 && idx < (int)colliders_.Size() && colliders_[(unsigned)idx].tag != Collision::REMOVED)
+            colliders_[(unsigned)idx].center = center;
+    }
+    void ResizeColliderLite(int idx, const Vector3& half) {
+        if (idx >= 0 && idx < (int)colliders_.Size() && colliders_[(unsigned)idx].tag != Collision::REMOVED)
+            colliders_[(unsigned)idx].half = half;
     }
     Vector3 HitNormalLite(const Vector3& point, const Vector3& center, const Vector3& half) const {
         Vector3 d = point - center;
@@ -417,16 +441,16 @@ private:
         // Пол: аналитическая плоскость y = FLOOR_Y, тег 0 (статика).
         // Раньше пола не было в реестре вообще: пули уходили «сквозь» него, а ProbeGround
         // возвращал мусор и HandleMovement подставлял высоту вручную.
-        if ((tagMask & 1) && dir.y_ < -1e-6f) {
+        if ((tagMask & Collision::STATIC_MASK) && dir.y_ < -1e-6f) {
             float tFloor = (GameConstants::FLOOR_Y - origin.y_) / dir.y_;
             if (tFloor >= 0.0f && tFloor < best) {
-                best = tFloor; bestTag = 0; bestPtr = nullptr; hit = true; bestFloor = true;
+                best = tFloor; bestTag = Collision::STATIC; bestPtr = nullptr; hit = true; bestFloor = true;
             }
         }
 
         for (unsigned i = 0; i < colliders_.Size(); ++i) {
             const Lite::Collider& c = colliders_[i];
-            if (c.tag == 7 || !(tagMask & (1 << c.tag))) continue; // 7 = удалён
+            if (c.tag == Collision::REMOVED || !(tagMask & Collision::Mask(static_cast<Collision::Tag>(c.tag)))) continue; // удалён
             float t = c.sphere ? Lite::RaySphere(origin, dir, c.center, c.half.x_)
                                : Lite::RayBox(origin, dir, c.center, c.half);
             if (t >= 0.0f && t < best) {
@@ -450,7 +474,7 @@ private:
     bool IsPointFree(const Vector3& p, float radius) const {
         for (unsigned i = 0; i < colliders_.Size(); ++i) {
             const Lite::Collider& c = colliders_[i];
-            if (c.tag != 0) continue; // только статика: стены, колонны, ящики, бочки, платформы
+            if (c.tag != Collision::STATIC) continue; // только статика: стены, колонны, ящики, платформы
             float dx = p.x_ - c.center.x_, dy = p.y_ - c.center.y_, dz = p.z_ - c.center.z_;
             if (c.sphere) {
                 float r = c.half.x_ + radius;
@@ -472,7 +496,7 @@ private:
         Vector3 push = Vector3::ZERO;
         for (int i = 0; i < 4; ++i) {
             float dist = 0.0f; Vector3 hitPoint;
-            if (RaycastLite(test, dirs[i], radius + 0.1f, 1, dist, hitPoint) && dist < radius + 0.1f)
+            if (RaycastLite(test, dirs[i], radius + 0.1f, Collision::STATIC_MASK, dist, hitPoint) && dist < radius + 0.1f)
                 push -= dirs[i] * ((radius + 0.1f) - dist);
         }
         return pos + push;
@@ -695,7 +719,7 @@ private:
     SharedPtr<Material> pickupArmorMat_;
     SharedPtr<Material> pickupOverdriveMat_;
 
-    // === Взрывоопасные бочки (Hazard Barrels, tag 3 в Lite-физике) ===
+    // === Взрывоопасные бочки (Hazard Barrels, Collision::BARREL) ===
     struct ExplosiveBarrel {
         SharedPtr<Node> node_;
         SharedPtr<Node> beacon_;
@@ -1071,6 +1095,56 @@ private:
 
 public:
     MyApp(Context* context) : Application(context) {}
+
+    // Ограничители временных FX. Взрывная волна или длинная очередь могут
+    // породить сотни узлов за секунду; старые эффекты удаляем сразу, чтобы
+    // сцена и SharedPtr-реестры не росли быстрее TTL.
+    static constexpr unsigned MAX_PENDING_REMOVES = 512;
+    static constexpr unsigned MAX_TRACERS = 256;
+    static constexpr unsigned MAX_SHOCKWAVES = 96;
+    static constexpr unsigned MAX_DEBRIS = 384;
+
+    void QueuePendingRemove(Node* node, float ttl) {
+        if (!node) return;
+        if (pendingRemoves_.Size() >= MAX_PENDING_REMOVES) {
+            if (pendingRemoves_[0].node_) pendingRemoves_[0].node_->Remove();
+            pendingRemoves_.Erase(0);
+        }
+        PendingRemove pr;
+        pr.node_ = node;
+        pr.ttl_ = Max(0.02f, ttl);
+        pendingRemoves_.Push(pr);
+    }
+
+    void AddTracer(Node* node, float ttl) {
+        if (!node) return;
+        if (tracers_.Size() >= MAX_TRACERS) {
+            if (tracers_[0].node_) tracers_[0].node_->Remove();
+            tracers_.Erase(0);
+        }
+        TracerData tr;
+        tr.node_ = node;
+        tr.ttl_ = Max(0.01f, ttl);
+        tracers_.Push(tr);
+    }
+
+    void AddShockwave(const ShockwaveData& wave) {
+        if (!wave.node_) return;
+        if (shockwaves_.Size() >= MAX_SHOCKWAVES) {
+            if (shockwaves_[0].node_) shockwaves_[0].node_->Remove();
+            shockwaves_.Erase(0);
+        }
+        shockwaves_.Push(wave);
+    }
+
+    void AddDebris(const DebrisData& debris) {
+        if (!debris.node_) return;
+        if (debrisLite_.Size() >= MAX_DEBRIS) {
+            if (debrisLite_[0].node_) debrisLite_[0].node_->Remove();
+            debrisLite_.Erase(0);
+        }
+        debrisLite_.Push(debris);
+    }
 
     // =========================================================================
     // Setup() — вызывается ДО создания окна OpenGL: выставляет 4K UHD / монитор,
@@ -1934,7 +2008,7 @@ private:
             eb.exploded_ = false;
             eb.respawn_ = 0.0f;
             // tag = 3 (битовая маска 1<<3 = 8): попадают пули и взрывы + игрок не проходит сквозь бочку!
-            eb.colliderIdx_ = AddBoxCollider(bp, Vector3(0.56f, 0.88f, 0.56f), 3, bn);
+            eb.colliderIdx_ = AddBoxCollider(bp, Vector3(0.56f, 0.88f, 0.56f), Collision::BARREL, bn);
             barrels_.Push(eb);
         }
     }
@@ -2001,7 +2075,7 @@ private:
                     eb.exploded_ = false;
                     eb.hp_ = 42.0f;
                     if (eb.node_) eb.node_->SetEnabled(true);
-                    eb.colliderIdx_ = AddBoxCollider(eb.home_, Vector3(0.56f, 0.88f, 0.56f), 3, eb.node_.Get());
+                    eb.colliderIdx_ = AddBoxCollider(eb.home_, Vector3(0.56f, 0.88f, 0.56f), Collision::BARREL, eb.node_.Get());
                 }
             } else if (eb.beacon_) {
                 float p = 0.75f + 0.45f * sinf(timeAcc_ * 6.5f + (float)i * 1.3f);
@@ -2601,10 +2675,10 @@ private:
         bossModel->SetModel(boxModel_);
         bossModel->SetMaterial(targetMaterial_);
         
-        // Физика для босс-мишени: Lite-коллайдер (tag 1, ptr = узел)
+        // Физика для босс-мишени: Lite-коллайдер (Collision::TARGET, ptr = узел)
         TargetData bossData;
         bossData.node_ = bossTargetNode;
-        bossData.colliderIdx_ = AddBoxCollider(bossTargetNode->GetPosition(), Vector3(2.0f, 2.0f, 0.2f), 1, bossTargetNode);
+        bossData.colliderIdx_ = AddBoxCollider(bossTargetNode->GetPosition(), Vector3(2.0f, 2.0f, 0.2f), Collision::TARGET, bossTargetNode);
         bossData.health_ = GameConstants::TARGET_HEALTH * 3.0f;
         bossData.isActive_ = true;
         bossData.scoreValue_ = 500;
@@ -2630,7 +2704,7 @@ private:
         // Физика: Lite-коллайдер мишени
         TargetData data;
         data.node_ = targetNode;
-        data.colliderIdx_ = AddBoxCollider(position, Vector3(0.6f, 0.6f, 0.2f), 1, targetNode);
+        data.colliderIdx_ = AddBoxCollider(position, Vector3(0.6f, 0.6f, 0.2f), Collision::TARGET, targetNode);
         data.health_ = GameConstants::TARGET_HEALTH;
         data.isActive_ = true;
         data.scoreValue_ = 100;
@@ -2650,7 +2724,7 @@ private:
         MovingTargetLite mt;
         mt.node_ = targetNode;
         mt.vel_ = Vector3((float)(rand() % 5 - 2), 0, (float)(rand() % 5 - 2));
-        mt.colliderIdx_ = AddSphereCollider(startPosition, 0.5f, 4, targetNode);
+        mt.colliderIdx_ = AddSphereCollider(startPosition, 0.5f, Collision::MOVING_TARGET, targetNode);
         movingTargetsLite_.Push(mt);
 
         TargetData data;
@@ -3343,9 +3417,9 @@ private:
             BorderImage* t = ui->GetRoot()->CreateChild<BorderImage>();
             t->SetSize(sw, th); t->SetPosition(0, 0);      t->SetBlendMode(BLEND_ADD); t->SetColor(Color(1,0,0,0));
             BorderImage* b = ui->GetRoot()->CreateChild<BorderImage>();
-            b->SetSize(sw, th); b->SetPosition(0, sh-th);  t->SetBlendMode(BLEND_ADD); b->SetColor(Color(1,0,0,0));
+            b->SetSize(sw, th); b->SetPosition(0, sh-th);  b->SetBlendMode(BLEND_ADD); b->SetColor(Color(1,0,0,0));
             BorderImage* l = ui->GetRoot()->CreateChild<BorderImage>();
-            l->SetSize(th, sh); l->SetPosition(0, 0);      t->SetBlendMode(BLEND_ADD); l->SetColor(Color(1,0,0,0));
+            l->SetSize(th, sh); l->SetPosition(0, 0);      l->SetBlendMode(BLEND_ADD); l->SetColor(Color(1,0,0,0));
             BorderImage* r = ui->GetRoot()->CreateChild<BorderImage>();
             r->SetSize(th, sh); r->SetPosition(sw-th, 0);  r->SetBlendMode(BLEND_ADD); r->SetColor(Color(1,0,0,0));
             lowHealthVignette_ = t;
@@ -4574,7 +4648,9 @@ private:
         }
         pendingRemoves_ = alive;
 
-        if (colliderGarbage_ > 64) CompactColliders();
+        if (colliderGarbage_ > 64 ||
+            (colliderGarbage_ > 0 && colliderGarbage_ * 2 >= (int)colliders_.Size()))
+            CompactColliders();
 
         auto* input = GetSubsystem<Input>();
 
@@ -5107,8 +5183,8 @@ private:
 
             if (stepLen > 0.001f) {
                 float hd = 0.0f; Vector3 hp, hn; int htag = -1;
-                if (RaycastLite(g.pos_, step / stepLen, stepLen + 0.18f, 1 | 2 | 4 | 8, hd, hp, &htag, nullptr, &hn)) {
-                    if (htag == 2 || htag == 3) {
+                if (RaycastLite(g.pos_, step / stepLen, stepLen + 0.18f, Collision::STATIC_MASK | Collision::TARGET_MASK | Collision::ENEMY_MASK | Collision::BARREL_MASK, hd, hp, &htag, nullptr, &hn)) {
+                    if (htag == Collision::ENEMY || htag == Collision::BARREL) {
                         g.pos_ = hp;
                         hitEnemy = true;
                     } else {
@@ -5253,7 +5329,7 @@ private:
                     sm->SetMaterial(turretLaserMat_.Get());
                     sm->SetCastShadows(false);
                     tr->SetScale(Vector3(0.025f, 0.025f, (targetPos - muzzleOrig).Length()));
-                    tracers_.Push(TracerData{ SharedPtr<Node>(tr), 0.06f });
+                    AddTracer(tr, 0.06f);
 
                     if (turretShotSound_) PlaySfx3D(muzzleOrig, turretShotSound_, 0.52f);
                     SpawnFloatingDamage(targetPos, (int)dmg, false);
@@ -5302,7 +5378,7 @@ private:
         }
         // Также можно ударить мишень или взрывную бочку!
         float rDist = 0.0f; Vector3 rHit, rNorm; int rTag = -1; void* rPtr = nullptr;
-        if (!hitAny && RaycastLite(camPos, camDir, 2.9f, 2 | 8 | 16, rDist, rHit, &rTag, &rPtr, &rNorm)) {
+        if (!hitAny && RaycastLite(camPos, camDir, 2.9f, Collision::ENEMY_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, rDist, rHit, &rTag, &rPtr, &rNorm)) {
             CheckTargetHit(rTag, rPtr, rHit, dmg);
         }
     }
@@ -5316,7 +5392,7 @@ private:
         Vector3 start = cameraNode_->GetPosition();
         Vector3 dir = cameraNode_->GetWorldDirection();
         float hitDist = 0.0f; Vector3 hitPos, hitNorm;
-        if (RaycastLite(start, dir, 95.0f, 1 | 2 | 4 | 8 | 16, hitDist, hitPos, nullptr, nullptr, &hitNorm) && hitDist > 0.4f) {
+        if (RaycastLite(start, dir, 95.0f, Collision::STATIC_MASK | Collision::TARGET_MASK | Collision::ENEMY_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, hitDist, hitPos, nullptr, nullptr, &hitNorm) && hitDist > 0.4f) {
             laserDotNode_->SetPosition(hitPos + hitNorm * 0.03f);
             float s = Clamp(0.030f + hitDist * 0.0016f, 0.03f, 0.14f);
             laserDotNode_->SetScale(Vector3::ONE * s);
@@ -5343,7 +5419,7 @@ private:
         Vector3 dir    = cameraNode_->GetWorldDirection();
         float hitDist  = 0.0f;
         Vector3 hitPos, hitNorm;
-        if (!RaycastLite(origin, dir, 58.0f, 1 | 2 | 4 | 8 | 16, hitDist, hitPos, nullptr, nullptr, &hitNorm) || hitDist < 2.2f) {
+        if (!RaycastLite(origin, dir, 58.0f, Collision::STATIC_MASK | Collision::TARGET_MASK | Collision::ENEMY_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, hitDist, hitPos, nullptr, nullptr, &hitNorm) || hitDist < 2.2f) {
             ShowMessage("Грэппл-крюк [Z]: нет точки зацепа в пределах 58 м");
             PlayEmptyClickSound();
             return;
@@ -5418,7 +5494,7 @@ private:
         float hitDist  = 0.0f;
         Vector3 strikePos = origin + Vector3(dir.x_, 0.0f, dir.z_).Normalized() * 18.0f;
         strikePos.y_ = GameConstants::FLOOR_Y;
-        if (RaycastLite(origin, dir, 120.0f, 1 | 2 | 4 | 8 | 16, hitDist, strikePos)) {
+        if (RaycastLite(origin, dir, 120.0f, Collision::STATIC_MASK | Collision::TARGET_MASK | Collision::ENEMY_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, hitDist, strikePos)) {
             strikePos.y_ = Max(GameConstants::FLOOR_Y, strikePos.y_);
         }
 
@@ -5582,7 +5658,7 @@ private:
                 Vector3 offset(sx * 0.22f, 0.0f, sz * 0.22f);
                 float dist; Vector3 hitPoint;
                 if (RaycastLite(Vector3(feetPos.x_ + offset.x_, probeTop, feetPos.z_ + offset.z_),
-                                Vector3(0, -1, 0), probeLen, 1 | 8 | 16, dist, hitPoint)) {
+                                Vector3(0, -1, 0), probeLen, Collision::STATIC_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, dist, hitPoint)) {
                     bestY = Max(bestY, hitPoint.y_);
                 }
             }
@@ -5593,7 +5669,7 @@ private:
     bool HeadBlocked(const Vector3& feetPos) {
         float dist; Vector3 hitPoint;
         if (RaycastLite(Vector3(feetPos.x_, feetPos.y_ + 0.1f, feetPos.z_),
-                        Vector3(0, 1, 0), GameConstants::PLAYER_HEIGHT + 0.1f, 1 | 8 | 16, dist, hitPoint)) {
+                        Vector3(0, 1, 0), GameConstants::PLAYER_HEIGHT + 0.1f, Collision::STATIC_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, dist, hitPoint)) {
             return dist > 0.05f && dist < GameConstants::PLAYER_HEIGHT;
         }
         return false;
@@ -5682,7 +5758,7 @@ private:
         Vector3 push = Vector3::ZERO;
         for (int i = 0; i < 4; ++i) {
             float dist; Vector3 hitPoint;
-            if (RaycastLite(testFeet, dirs[i], radius + 0.15f, 1 | 8 | 16, dist, hitPoint)
+            if (RaycastLite(testFeet, dirs[i], radius + 0.15f, Collision::STATIC_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, dist, hitPoint)
                 && dist > 0.0f && dist < radius + 0.15f) {
                 float penetration = (radius + 0.15f) - dist;
                 push -= dirs[i] * penetration;
@@ -5949,7 +6025,7 @@ private:
         Vector3 start = cameraNode_->GetPosition();
         Vector3 dir = (Quaternion(pitch_, yaw_, 0.0f) * Vector3::FORWARD).Normalized();
         float hitDist = 0.0f; Vector3 hitPoint, hitNormal; int hitTag = -1; void* hitPtr = nullptr;
-        if (!RaycastLite(start, dir, 120.0f, 1 | 2 | 4 | 8 | 16,
+        if (!RaycastLite(start, dir, 120.0f, Collision::STATIC_MASK | Collision::TARGET_MASK | Collision::ENEMY_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK,
                          hitDist, hitPoint, &hitTag, &hitPtr, &hitNormal))
             return primaryHit;
 
@@ -5958,7 +6034,7 @@ private:
         int chained = 0;
         for (unsigned i = 0; i < enemies_.Size() && chained < 3; ++i) {
             EnemyData& enemy = enemies_[i];
-            if (!enemy.alive_ || !enemy.node_ || (hitTag == 2 && enemy.node_ == static_cast<Node*>(hitPtr))) continue;
+            if (!enemy.alive_ || !enemy.node_ || (hitTag == Collision::ENEMY && enemy.node_ == static_cast<Node*>(hitPtr))) continue;
             Vector3 enemyPoint = enemy.node_->GetPosition() + Vector3(0, 0.85f, 0);
             float dist = (enemyPoint - hitPoint).Length();
             if (dist > 7.5f) continue;
@@ -5982,12 +6058,12 @@ private:
         Vector3 dir = (spreadRot * Vector3::FORWARD).Normalized();
         Vector3 startPos = cameraNode_->GetPosition();
 
-        // Находим первую твёрдую стену/пол (tag 0 -> маска 1)
+        // Находим первую твёрдую стену/пол (Collision::STATIC)
         float maxDist = 180.0f;
         float wallDist = maxDist;
         Vector3 wallHit = startPos + dir * maxDist;
         Vector3 wallNorm = Vector3::UP;
-        if (RaycastLite(startPos, dir, maxDist, 1, wallDist, wallHit, nullptr, nullptr, &wallNorm)) {
+        if (RaycastLite(startPos, dir, maxDist, Collision::STATIC_MASK, wallDist, wallHit, nullptr, nullptr, &wallNorm)) {
             maxDist = wallDist;
             CreateImpactEffect(wallHit, wallNorm);
         }
@@ -6005,7 +6081,7 @@ private:
             sm->SetMaterial(railBeamMat_.Get());
             sm->SetCastShadows(false);
             bm->SetScale(Vector3(0.085f, 0.085f, beamLen));
-            tracers_.Push(TracerData{ SharedPtr<Node>(bm), 0.24f });
+            AddTracer(bm, 0.24f);
 
             for (float d = 5.0f; d < Min(beamLen, 55.0f); d += 7.0f) {
                 CreateShockwave(startPos + dir * d, railBeamMat_.Get(), 0.28f);
@@ -6013,12 +6089,12 @@ private:
         }
         AddCameraShake(0.14f);
 
-        // Проверяем ВСЕ динамические коллайдеры (враги tag 2, бочки tag 3, мишени tag 1/4), пересекаемые лучом до maxDist!
+        // Проверяем ВСЕ динамические коллайдеры (враги, бочки и мишени), пересекаемые лучом до maxDist!
         struct HitEntry { int tag; void* ptr; Vector3 pt; float dist; };
         Vector<HitEntry> hits;
         for (unsigned ci = 0; ci < colliders_.Size(); ++ci) {
             const Lite::Collider& c = colliders_[ci];
-            if (c.tag == 0 || c.tag == 7 || !c.ptr) continue;
+            if (c.tag == Collision::STATIC || c.tag == Collision::REMOVED || !c.ptr) continue;
             float t = c.sphere ? Lite::RaySphere(startPos, dir, c.center, c.half.x_)
                                : Lite::RayBox(startPos, dir, c.center, c.half);
             if (t >= 0.1f && t <= maxDist + 0.25f) {
@@ -6081,8 +6157,8 @@ private:
             if (len < 0.0005f) continue;
 
             float hd = 0.0f; Vector3 hp, hn; int htag = -1; void* hptr = nullptr;
-            if (RaycastLite(pos, step / len, len + 0.14f, 1 | 2 | 4 | 8 | 16, hd, hp, &htag, &hptr, &hn)) {
-                if (htag == 0 && b.bouncesLeft_ > 0) {
+            if (RaycastLite(pos, step / len, len + 0.14f, Collision::STATIC_MASK | Collision::TARGET_MASK | Collision::ENEMY_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, hd, hp, &htag, &hptr, &hn)) {
+                if (htag == Collision::STATIC && b.bouncesLeft_ > 0) {
                     // 1 энергетический рикошет от стены/пола!
                     b.bouncesLeft_--;
                     float vn = b.vel_.DotProduct(hn);
@@ -6095,7 +6171,7 @@ private:
                 }
                 player_.shotsHit_++;
                 UpdateAccuracyDisplay();
-                if (htag != 0) CheckTargetHit(htag, hptr, hp, b.damage_);
+                if (htag != Collision::STATIC) CheckTargetHit(htag, hptr, hp, b.damage_);
                 // Изумрудный плазменный мини-всплеск по соседям в радиусе 2.8 м
                 CreateShockwave(hp, plasmaOrbMat_.Get(), 0.30f);
                 for (unsigned ei = 0; ei < enemies_.Size(); ++ei) {
@@ -6131,7 +6207,7 @@ private:
         
         float hitDist = 0.0f; Vector3 hitPosition; Vector3 hitNormal; int hitTag = -1; void* hitPtr = nullptr;
         bool anyHit = RaycastLite(startPos, shootDirection, GameConstants::BULLET_RANGE,
-                                  1 | 2 | 4 | 8 | 16, hitDist, hitPosition, &hitTag, &hitPtr, &hitNormal);
+                                  Collision::STATIC_MASK | Collision::TARGET_MASK | Collision::ENEMY_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, hitDist, hitPosition, &hitTag, &hitPtr, &hitNormal);
         if (anyHit) {
             SpawnTracer(startPos + shootDirection * 0.6f, hitPosition);
             CreateImpactEffect(hitPosition, hitNormal);
@@ -6164,7 +6240,7 @@ private:
         sm->SetMaterial(tracerMat_.Get());
         sm->SetCastShadows(false);
         tr->SetScale(Vector3(0.018f, 0.018f, len));
-        tracers_.Push(TracerData{ SharedPtr<Node>(tr), 0.065f });
+        AddTracer(tr, 0.065f);
     }
 
     void UpdateTracers(float dt) {
@@ -6178,8 +6254,8 @@ private:
     }
     
     void CheckTargetHit(int hitTag, void* hitPtr, const Vector3& hitPosition, float damage) {
-        // Взрывные бочки (tag == 3, ptr == Node* бочки)
-        if (hitTag == 3 && hitPtr) {
+        // Взрывоопасные бочки (Collision::BARREL, ptr == Node* бочки)
+        if (hitTag == Collision::BARREL && hitPtr) {
             Node* bNode = static_cast<Node*>(hitPtr);
             for (unsigned bi = 0; bi < barrels_.Size(); ++bi) {
                 ExplosiveBarrel& eb = barrels_[bi];
@@ -6198,16 +6274,16 @@ private:
         }
 
         Node* hitNode = nullptr;
-        if ((hitTag == 1 || hitTag == 2 || hitTag == 4) && hitPtr)
+        if ((hitTag == Collision::TARGET || hitTag == Collision::ENEMY || hitTag == Collision::MOVING_TARGET) && hitPtr)
             hitNode = static_cast<Node*>(hitPtr);
         if (!hitNode) return;
 
-        // Роботы-курицы (tag == 2) + детектор ХЭДШОТОВ по высоте головы курицы!
-        if (hitTag == 2) {
+        // Роботы-курицы (Collision::ENEMY) + детектор ХЭДШОТОВ по высоте головы курицы!
+        if (hitTag == Collision::ENEMY) {
             for (unsigned ei = 0; ei < enemies_.Size(); ++ei) {
                 EnemyData& e = enemies_[ei];
                 if (e.alive_ && e.node_ == hitNode) {
-                    float sc = hitNode->GetScale().y_;
+                    float sc = Max(0.1f, hitNode->GetScale().y_);
                     float headThreshY = hitNode->GetPosition().y_ + 1.04f * sc;
                     bool headshot = (hitPosition.y_ >= headThreshY);
                     float finalDmg = headshot ? (damage * 2.0f) : damage;
@@ -6233,7 +6309,7 @@ private:
             return;
         }
 
-        // Мишени тира (tag == 1 или 4)
+        // Мишени тира (Collision::TARGET или Collision::MOVING_TARGET)
         for (unsigned ti = 0; ti < targets_.Size(); ++ti) {
             TargetData& target = targets_[ti];
             if (target.isActive_ && target.node_ == hitNode) {
@@ -6312,7 +6388,7 @@ private:
             if (oldest) oldest->Remove();
             decals_.Erase(0);
         }
-        PendingRemove pr; pr.node_ = d; pr.ttl_ = 12.0f; pendingRemoves_.Push(pr);
+        QueuePendingRemove(d, 12.0f);
     }
 
     // Ударная волна: кольцо, которое расширяется и исчезает (см. UpdateShockwaves)
@@ -6327,8 +6403,8 @@ private:
             Node* seg = AddPart(root, Vector3(cosf(rad), 0.0f, sinf(rad)), Vector3(0.42f, 0.05f, 0.16f), mat);
             seg->SetRotation(Quaternion(90.0f - ang, Vector3(0, 1, 0)));
         }
-        ShockwaveData sw; sw.node_ = SharedPtr<Node>(root); sw.ttl_ = ttl; sw.max_ = ttl;
-        shockwaves_.Push(sw);
+        ShockwaveData sw; sw.node_ = SharedPtr<Node>(root); sw.ttl_ = ttl; sw.max_ = Max(0.02f, ttl);
+        AddShockwave(sw);
     }
 
     void UpdateShockwaves(float dt) {
@@ -6358,7 +6434,7 @@ private:
         CreateBulletDecal(position, normal);
 
         // Автоудаление через 1 секунду
-        { PendingRemove pr; pr.node_ = effectNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr); }
+        QueuePendingRemove(effectNode, 1.0f);
     }
     
     void CreateExplosionEffect(const Vector3& position) {
@@ -6379,7 +6455,7 @@ private:
         // Ударная волна по полу (свет удаляется вместе с узлом эффекта)
         CreateShockwave(position);
 
-        { PendingRemove pr; pr.node_ = effectNode; pr.ttl_ = 2.0f; pendingRemoves_.Push(pr); }
+        QueuePendingRemove(effectNode, 2.0f);
     }
     
     void PlayMuzzleFlash() {
@@ -6480,7 +6556,7 @@ private:
         d.vel_ = right * (2.0f + (float)(rand() % 20) / 10.0f) + Vector3(0, 2.6f, 0);
         d.spin_ = Vector3(12.0f, 8.0f, 16.0f);
         d.ttl_ = 1.6f;
-        debrisLite_.Push(d);
+        AddDebris(d);
     }
 
     void PlayShootSound() {
@@ -7079,8 +7155,8 @@ private:
         Text* sHead = armoryPanel_->CreateChild<Text>();
         sHead->SetFont(font_, SF(22));
         sHead->SetText("PBR-ПОКРЫТИЯ (Q / E)");
-        wHead->SetWidth(S(420));
         sHead->SetPosition(sw / 2 + S(60), S(104));
+        sHead->SetWidth(S(420));
         sHead->SetColor(Color(0.55f, 1.0f, 0.80f, 1.0f));
         StyleCrispText(sHead);
 
@@ -7167,17 +7243,50 @@ private:
     static void XmlSetInt(XMLElement& el, const char* name, int v) {
         el.SetString(name, String(v));
     }
+    static float XmlGetFloat(const XMLElement& el, const char* name, float def, float lo, float hi) {
+        if (!el || !el.HasAttribute(name)) return def;
+        const char* raw = el.GetAttribute(name).CString();
+        char* end = nullptr;
+        float value = strtof(raw, &end);
+        if (end == raw || !std::isfinite(value)) return def;
+        return Clamp(value, lo, hi);
+    }
 
-    String SettingsPath() const {
+    String LegacySettingsPath() const {
         auto* fs = GetSubsystem<FileSystem>();
         return fs ? (fs->GetProgramDir() + "settings.ini") : String("settings.ini");
     }
 
+    String SettingsPath() const {
+        auto* fs = GetSubsystem<FileSystem>();
+        if (!fs) return String("settings.ini");
+        // Не пишем рядом с бинарником: /usr/bin и Program Files часто read-only.
+        // Старый путь остаётся в LegacySettingsPath() для бесшовной миграции.
+        String dir = fs->GetAppPreferencesDir("CHIKENGUN", "CHIKENGUN2.1");
+        if (dir.Empty()) return LegacySettingsPath();
+        return AddTrailingSlash(dir) + "settings.ini";
+    }
+
     void LoadSettingsFile() {
         auto* fs = GetSubsystem<FileSystem>();
-        if (!fs || !fs->FileExists(SettingsPath())) return;
+        if (!fs) return;
+        const String preferredPath = SettingsPath();
+        String path = preferredPath;
+        bool migrateLegacy = false;
+        // Один раз подхватываем прежний settings.ini рядом с executable.
+        if (!fs->FileExists(path)) {
+            path = LegacySettingsPath();
+            migrateLegacy = path != preferredPath;
+        }
+        if (!fs->FileExists(path)) return;
         SharedPtr<XMLFile> xml(new XMLFile(context_));
-        if (!xml->LoadFile(SettingsPath())) return;
+        if (!xml->LoadFile(path)) {
+            // Битый пользовательский файл не должен скрывать рабочий legacy-конфиг.
+            const String legacyPath = LegacySettingsPath();
+            if (path == legacyPath || !fs->FileExists(legacyPath) || !xml->LoadFile(legacyPath)) return;
+            path = legacyPath;
+            migrateLegacy = path != preferredPath;
+        }
         XMLElement rootEl = xml->GetRoot();
         if (!rootEl) return;
 
@@ -7211,10 +7320,8 @@ private:
 
         XMLElement snd = rootEl.GetChild("sound");
         if (!snd) snd = rootEl;
-        if (snd.HasAttribute("sfx"))
-            sfxVolume_ = Clamp((float)atof(snd.GetAttribute("sfx").CString()), 0.0f, 1.0f);
-        if (snd.HasAttribute("music"))
-            musicVolume_ = Clamp((float)atof(snd.GetAttribute("music").CString()), 0.0f, 1.0f);
+        sfxVolume_ = XmlGetFloat(snd, "sfx", sfxVolume_, 0.0f, 1.0f);
+        musicVolume_ = XmlGetFloat(snd, "music", musicVolume_, 0.0f, 1.0f);
 
         XMLElement prog = rootEl.GetChild("progress");
         if (!prog) prog = rootEl;
@@ -7240,6 +7347,8 @@ private:
             casinoWins_ = Max(0, XmlGetInt(prog, "casinoWins", casinoWins_));
         if (prog.HasAttribute("casinoLosses"))
             casinoLosses_ = Max(0, XmlGetInt(prog, "casinoLosses", casinoLosses_));
+
+        if (migrateLegacy) SaveSettingsFile();
     }
 
     void SaveSettingsFile() {
@@ -7281,15 +7390,27 @@ private:
         XmlSetInt(prog, "casinoBalance", casinoBalance_);
         XmlSetInt(prog, "casinoWins",    casinoWins_);
         XmlSetInt(prog, "casinoLosses",  casinoLosses_);
-        String dst = SettingsPath();
-        String tmp = dst + ".tmp";
         auto* fs = GetSubsystem<FileSystem>();
-        if (fs && xml->SaveFile(tmp)) {
+        if (!fs) return;
+
+        auto saveTo = [&](const String& dst) -> bool {
+            String dir = GetPath(dst);
+            if (!dir.Empty() && !fs->DirExists(dir)) fs->CreateDir(dir);
+            String tmp = dst + ".tmp";
+            if (!xml->SaveFile(tmp)) return false;
             if (fs->FileExists(dst)) fs->Delete(dst);
-            if (!fs->Rename(tmp, dst)) xml->SaveFile(dst);
-        } else {
-            xml->SaveFile(dst);
-        }
+            if (fs->Rename(tmp, dst)) return true;
+            // Некоторые файловые системы не разрешают rename поверх файла.
+            if (xml->SaveFile(dst)) {
+                if (fs->FileExists(tmp)) fs->Delete(tmp);
+                return true;
+            }
+            return false;
+        };
+
+        // Предпочтительно пользовательская директория; при отказе доступа
+        // оставляем совместимый fallback рядом с бинарником.
+        if (!saveTo(SettingsPath())) saveTo(LegacySettingsPath());
     }
 
     void ApplyDisplayMode() {
@@ -7909,7 +8030,7 @@ private:
                 b.hp_ = 42.0f;
                 b.respawn_ = 0.0f;
                 if (b.node_) b.node_->SetEnabled(true);
-                b.colliderIdx_ = AddBoxCollider(b.home_, Vector3(0.56f, 0.88f, 0.56f), 3, b.node_.Get());
+                b.colliderIdx_ = AddBoxCollider(b.home_, Vector3(0.56f, 0.88f, 0.56f), Collision::BARREL, b.node_.Get());
             } else {
                 b.hp_ = 42.0f;
             }
@@ -7995,9 +8116,9 @@ private:
         CreateShockwave(pos, spawnRingMat_.Get(), 0.45f);
         PlayCluck(initPos, 0.5f);
 
-        // Lite-коллайдер робота: tag 2, ptr = узел (рейкасты пуль и LOS проходят через него)
-        int colIdx = AddBoxCollider(initPos + Vector3(0, 0.85f, 0),
-                                    Vector3(0.58f, 0.85f, 0.62f) * scale, 2, rob);
+        // Lite-коллайдер робота: Collision::ENEMY, ptr = узел (рейкасты пуль и LOS проходят через него)
+        int colIdx = AddBoxCollider(initPos + Vector3(0, 0.85f * scale, 0),
+                                    Vector3(0.58f, 0.85f, 0.62f) * scale, Collision::ENEMY, rob);
 
         EnemyData e;
         e.node_ = rob;
@@ -8137,7 +8258,7 @@ private:
         dir /= dist;
         float outDist; Vector3 outPoint;
         // Битовая маска: (1<<0) статика | (1<<4) движущиеся мишени — роботы не перекрывают LOS друг другу
-        return !RaycastLite(from, dir, dist - 0.3f, (1 << 0) | (1 << 4), outDist, outPoint);
+        return !RaycastLite(from, dir, dist - 0.3f, Collision::STATIC_MASK | Collision::MOVING_TARGET_MASK, outDist, outPoint);
     }
 
     void SpawnEnemyProjectile(const Vector3& origin, const Vector3& targetCamPos, float damage) {
@@ -8201,7 +8322,7 @@ private:
                     float stepLen = step.Length();
                     if (stepLen > 0.001f) {
                         float outDist; Vector3 outPoint;
-                        if (RaycastLite(pos, step / stepLen, stepLen, (1 << 0) | (1 << 1) | (1 << 4), outDist, outPoint)) {
+                        if (RaycastLite(pos, step / stepLen, stepLen, Collision::STATIC_MASK | Collision::TARGET_MASK | Collision::MOVING_TARGET_MASK, outDist, outPoint)) {
                             CreateHitSpark(outPoint);
                             dead = true;
                         }
@@ -8544,7 +8665,7 @@ private:
                 bool blocked = false;
                 if (dist > 1.5f) {
                     float outDist; Vector3 outPoint; Vector3 outNormal;
-                    if (RaycastLite(probePos, toDir, 2.2f, (1 << 0) | (1 << 4), outDist, outPoint, nullptr, nullptr, &outNormal)) {
+                    if (RaycastLite(probePos, toDir, 2.2f, Collision::STATIC_MASK | Collision::MOVING_TARGET_MASK, outDist, outPoint, nullptr, nullptr, &outNormal)) {
                         blocked = true;
                         // Скольжение вдоль нормали препятствия + лёгкий «инстинкт стаи»
                         Vector3 slide = outNormal.CrossProduct(Vector3::UP);
@@ -8588,7 +8709,9 @@ private:
             float baseY = (e.type_ == E_DRONE) ? (3.25f + 0.55f * sinf(timeAcc_ * 2.3f + e.phase_)) : (0.06f + bob);
             Vector3 newPos(np.x_, baseY - kick, np.z_);
             n->SetPosition(newPos);
-            MoveColliderLite(e.colliderIdx_, newPos + Vector3(0, 0.85f, 0)); // центр тела курицы
+            float bodyScale = Max(0.1f, n->GetScale().y_);
+            ResizeColliderLite(e.colliderIdx_, Vector3(0.58f, 0.85f, 0.62f) * bodyScale);
+            MoveColliderLite(e.colliderIdx_, newPos + Vector3(0, 0.85f * bodyScale, 0)); // центр тела курицы
 
             if (dist > 0.5f) {
                 float yawDeg = atan2f(toCam.x_, toCam.z_) * 57.29578f;
@@ -8646,7 +8769,7 @@ private:
                     fd.vel_ = Vector3(cosf(a) * 1.6f, 1.6f + (float)(rand() % 100) / 100.0f, sinf(a) * 1.6f);
                     fd.spin_ = Vector3((float)(rand() % 400 - 200), (float)(rand() % 400 - 200), 0.0f) * 0.02f;
                     fd.ttl_ = 1.8f;
-                    debrisLite_.Push(fd);
+                    AddDebris(fd);
                 }
             }
             PlayHitSound();
@@ -8755,7 +8878,7 @@ private:
             d.spin_ = Vector3((float)(rand() % 600 - 300), (float)(rand() % 600 - 300),
                               (float)(rand() % 600 - 300)) * 0.03f;
             d.ttl_ = 3.5f;
-            debrisLite_.Push(d);
+            AddDebris(d);
         }
     }
 
@@ -8777,7 +8900,7 @@ private:
             d.vel_ = Vector3(cosf(a) * 4.0f, up, sinf(a) * 4.0f);
             d.spin_ = Vector3((float)(rand() % 400 - 200), (float)(rand() % 400 - 200), (float)(rand() % 400 - 200)) * 0.02f;
             d.ttl_ = 4.0f;
-            debrisLite_.Push(d);
+            AddDebris(d);
         }
 
         if (haveParticles_ && sparkEffect_) {
@@ -8787,7 +8910,7 @@ private:
             pe->SetEffect(sparkEffect_);
             pe->SetNumParticles(200);
             pe->SetEmitting(true);
-            PendingRemove pr2; pr2.node_ = sparks; pr2.ttl_ = 1.5f; pendingRemoves_.Push(pr2);
+            QueuePendingRemove(sparks, 1.5f);
         }
     }
 
@@ -8799,7 +8922,7 @@ private:
         emitter->SetEffect(sparkEffect_);
         emitter->SetNumParticles(100);
         emitter->SetEmitting(true);
-        PendingRemove pr; pr.node_ = sparkNode; pr.ttl_ = 1.0f; pendingRemoves_.Push(pr);
+        QueuePendingRemove(sparkNode, 1.0f);
     }
 
     // =========================================================================

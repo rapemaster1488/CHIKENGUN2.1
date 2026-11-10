@@ -87,6 +87,12 @@ int main(int argc, char** argv) {
         assert(std::fabs(t2 - 21.0f) < 1e-4f);
         assert(t1 < t2);
         assert(Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {5, 1, 10}, 1.0f) < 0.0f);
+
+        // Луч может начинаться внутри коллайдера: возвращаем точку выхода,
+        // а ненормализованный direction не должен менять геометрию попадания.
+        float inside = Lite::RaySphereT<TestVec3>({0, 1, 10}, {0, 0, 2}, {0, 1, 10}, 1.0f);
+        assert(std::fabs(inside - 0.5f) < 1e-4f);
+        assert(Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 0}, {0, 1, 10}, 1.0f) < 0.0f);
     }
 
     std::cout << "[test_core] 3/9 Проверка кинематики Грэппл-крюка [Z] и FNV-1a кэша материалов..." << std::endl;
