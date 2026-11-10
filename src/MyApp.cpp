@@ -3081,6 +3081,11 @@ private:
         SharedPtr<Viewport> vp(new Viewport(context_, scene_, camera));
         renderer->SetViewport(0, vp);
         ConfigureRenderPipeline(vp);
+
+        // The update loop starts as soon as the loading overlay is hidden.
+        // Create the first-person weapon before that happens; otherwise
+        // UpdateWeaponBob/ApplyRecoilToWeapon dereference a null weaponNode_.
+        CreateWeapon();
     }
     
     void CreateWeapon() {
@@ -5991,6 +5996,7 @@ private:
     }
     
     void UpdateWeaponBob(float dt) {
+        if (!weaponNode_) return;
         bool moving = playerVelocity_.LengthSquared() > 0.5f;
 
         if (moving && !weapon_.isReloading_ && !isAiming_ && inspectTimer_ <= 0.0f) {
@@ -6093,6 +6099,7 @@ private:
     }
     
     void ApplyRecoilToWeapon() {
+        if (!weaponNode_) return;
         Vector3 basePos = weaponNode_->GetPosition();
         Vector3 recoilOffset(-weapon_.recoilY_ * 0.01f, -weapon_.recoilX_ * 0.01f, -weapon_.recoilX_ * 0.02f);
         weaponNode_->SetPosition(basePos + recoilOffset);
