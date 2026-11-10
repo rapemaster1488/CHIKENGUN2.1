@@ -77,6 +77,14 @@ int main(int argc, char** argv) {
 
         assert(Lite::RayBoxT<TestVec3>({0, 5, -5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
         assert(Lite::RayBoxT<TestVec3>({0, 1,  5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
+
+        // Изнутри AABB нужен выход, а не нулевая дистанция до самого старта.
+        float inside = Lite::RayBoxT<TestVec3>({0, 1, 0}, {2, 0, 0}, {0, 1, 0}, {1, 1, 1});
+        assert(std::fabs(inside - 0.5f) < 1e-4f);
+        assert(Lite::RayBoxT<TestVec3>({0, 1, 0}, {0, 0, 0}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
+        // На грани луч наружу попадает в t=0, внутрь — до дальней грани.
+        assert(std::fabs(Lite::RayBoxT<TestVec3>({1, 1, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 1})) < 1e-4f);
+        assert(std::fabs(Lite::RayBoxT<TestVec3>({1, 1, 0}, {-1, 0, 0}, {0, 1, 0}, {1, 1, 1})) < 1e-4f);
     }
 
     std::cout << "[test_core] 2/9 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
