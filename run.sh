@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Быстрый запуск CHIKENGUN 2.2 [4K ULTRA EDITION]:
+# Быстрый запуск CHIKENGUN 2.5 «ПЕРО СУДЬБЫ» [4K ULTRA]:
 # если бинарник ещё не собран или исходник новее — автоматически запускает ./build.sh.
 set -e
 ROOT="$(cd "$(dirname "$0")" && pwd)"
