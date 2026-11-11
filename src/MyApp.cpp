@@ -1096,6 +1096,9 @@ private:
     SharedPtr<Node> kochMusicNode_;
     SoundSource* kochThemeSrc_ = nullptr;   // компонент временной сцены — владеется нодой
     SoundSource* splashSfxSrc_ = nullptr;
+    SharedPtr<BorderImage> splashGlow_;
+    SharedPtr<BorderImage> splashSheen_;
+    String splashFullText_;              // полный текст стадии (посимвольное открытие)
 
     // Быстрый загрузочный оверлей десантирования при входе в режим (АРЕНА / ТИР)
     bool deployActive_ = false;
@@ -7081,18 +7084,32 @@ private:
     }
 
     // =========================================================================
-    // 2.5.5 SPLASH INTRO — «koch.studios» → «powered by fall.os» → «CHICHKENCUM 2.1»
-    // Чёрный экран, неоновые надписи появляются в такт музыке. Скип: клик / Space / Enter / Esc.
+    // 2.5.6 SPLASH INTRO — «koch.studios» → «powered by fall.os» → «CHICHKENCUM 2.1»
+    // Надписи выплывают снизу (easeOutExpo), открываются посимвольно, светятся,
+    // пробегает волна-блик; CHICHKENCUM наезжает размером с тряской.
+    // Скип: клик / Space / Enter / Esc.
     // =========================================================================
     int SplashLineY(int stage) const {
         int sh = GetSubsystem<Graphics>()->GetHeight();
         return sh / 2 + (stage == 2 ? S(46) : (stage == 1 ? S(16) : S(20)));
     }
+    int SplashTextY(int stage) const {
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+        return sh / 2 - S(stage == 2 ? 62 : (stage == 1 ? 40 : 44));
+    }
+    static float EaseOutCubic(float t) {
+        float f = 1.0f - Clamp(t, 0.0f, 1.0f);
+        return 1.0f - f * f * f;
+    }
+    static float EaseOutExpo(float t) {
+        t = Clamp(t, 0.0f, 1.0f);
+        return t >= 1.0f ? 1.0f : 1.0f - powf(2.0f, -10.0f * t);
+    }
 
     void SplashEnterStage(int stage) {
         auto* cache = GetSubsystem<ResourceCache>();
         if (!cache || !splashSfxSrc_) return;
-        // koch.studios — тихий клик; fall.os — нарастание поверпапа; CHICHKENCUM — петушиный клич
+        // koch.studios — мягкий тик; fall.os — поверпап; CHICHKENCUM — петушиный клич
         const char* snd = stage == 0 ? "Sounds/UI_Select.wav"
                         : stage == 1 ? "Sounds/Powerup.wav"
                                      : "Sounds/Chicken_Boss.wav";
@@ -7108,24 +7125,23 @@ private:
         const int sw = GetSubsystem<Graphics>()->GetWidth();
         splashLine_->SetPosition(sw / 2, SplashLineY(stage));
         splashLine_->SetSize(0, Max(2, S(stage == 2 ? 4.0f : 3.0f)));
+        splashText_->SetPosition(sw / 2 - S(720), SplashTextY(stage) + S(48));   // старт ниже — выплывем вверх
         if (stage == 0) {
+            splashFullText_ = "k o c h . s t u d i o s";
             splashText_->SetFont(font_, SF(36));
-            splashText_->SetText("k o c h . s t u d i o s");
-            splashText_->SetPosition(sw / 2 - S(720), GetSubsystem<Graphics>()->GetHeight() / 2 - S(44));
-            splashText_->SetColor(Color(0.92f, 0.97f, 1.0f, 0.0f));
-            splashLine_->SetColor(Color(0.20f, 0.92f, 1.0f, 0.0f));   // неоновый циан
+            splashText_->SetText("");
+            splashText_->SetColor(Color(0.90f, 0.96f, 1.0f, 0.0f));
         } else if (stage == 1) {
+            splashFullText_ = "powered by fall.os";
             splashText_->SetFont(font_, SF(27));
-            splashText_->SetText("powered by fall.os");
-            splashText_->SetPosition(sw / 2 - S(720), GetSubsystem<Graphics>()->GetHeight() / 2 - S(40));
-            splashText_->SetColor(Color(0.68f, 0.74f, 0.86f, 0.0f));
-            splashLine_->SetColor(Color(1.0f, 0.56f, 0.16f, 0.0f));   // осенний оранжевый
+            splashText_->SetText("");
+            splashText_->SetColor(Color(0.70f, 0.76f, 0.88f, 0.0f));
         } else {
-            splashText_->SetFont(font_, SF(76));
-            splashText_->SetText("CHICHKENCUM 2.1");
-            splashText_->SetPosition(sw / 2 - S(720), GetSubsystem<Graphics>()->GetHeight() / 2 - S(62));
-            splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));     // белым → остынет в золото
-            splashLine_->SetColor(Color(1.0f, 0.36f, 0.14f, 0.0f));   // раскалённый красный
+            splashFullText_ = "CHICHKENCUM 2.1";
+            splashText_->SetFont(font_, SF(104));
+            splashText_->SetText(splashFullText_);
+            splashText_->SetPosition(sw / 2 - S(720), SplashTextY(2) + S(12));
+            splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
         }
     }
 
@@ -7148,12 +7164,33 @@ private:
         bg->SetSize(sw, sh);
         bg->SetColor(Color(0.0f, 0.0f, 0.0f, 1.0f));
 
+        // Неоновое свечение за надписью (под текстом и линией)
+        splashGlow_ = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* glowTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
+            glowTex->SetFilterMode(FILTER_TRILINEAR);
+            splashGlow_->SetTexture(glowTex);
+        }
+        splashGlow_->SetBlendMode(BLEND_ADD);
+        splashGlow_->SetColor(Color(0.18f, 0.82f, 1.0f, 0.0f));
+        {
+            const int g0 = S(880);
+            splashGlow_->SetSize(g0, g0);
+            splashGlow_->SetPosition(sw / 2 - g0 / 2, sh / 2 - g0 / 2);
+        }
+
+        // Пробегающая световая волна (деликатный блик по тексту слева направо)
+        splashSheen_ = splashPanel_->CreateChild<BorderImage>();
+        splashSheen_->SetBlendMode(BLEND_ADD);
+        splashSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+        splashSheen_->SetSize(S(150), S(64));
+        splashSheen_->SetPosition(-S(400), sh / 2 - S(32));
+
         splashText_ = splashPanel_->CreateChild<Text>();
         splashText_->SetFont(font_, SF(36));
         splashText_->SetTextAlignment(HA_CENTER);
         splashText_->SetPosition(sw / 2 - S(720), sh / 2 - S(44));
         splashText_->SetWidth(S(1440));
-        splashText_->SetColor(Color(0.92f, 0.97f, 1.0f, 0.0f));
+        splashText_->SetColor(Color(0.90f, 0.96f, 1.0f, 0.0f));
         StyleCrispText(splashText_, true);
 
         splashLine_ = splashPanel_->CreateChild<BorderImage>();
@@ -7173,7 +7210,7 @@ private:
                     kochThemeSrc_->SetGain(musicVolume_);
                     kochThemeSrc_->Play(theme);
                 } else {
-                    kochThemeSrc_ = nullptr;   // нет файла — заставка покажется немой, основная музыка вступит как обычно
+                    kochThemeSrc_ = nullptr;   // нет файла — немой показ, основная музыка вступит как обычно
                 }
             }
         }
@@ -7189,11 +7226,13 @@ private:
         if (splashPanel_) { splashPanel_->Remove(); splashPanel_ = nullptr; }
         splashText_ = nullptr;
         splashLine_ = nullptr;
+        splashGlow_ = nullptr;
+        splashSheen_ = nullptr;
+        splashFullText_ = String();
         splashActive_ = false;
         splashTimer_ = 0.0f;
         splashStage_ = 0;
-        // Музыка (kochThemeSrc_ во временной сцене) продолжает играть поверх фазы загрузки
-        // и плавно затухает вместе с экраном загрузки (блок fade в UpdateBootLoading).
+        // Музыка продолжает звучать в фазе загрузки и затухает вместе с экраном (fade в UpdateBootLoading)
     }
 
     void UpdateSplashIntro(float dt) {
@@ -7208,34 +7247,84 @@ private:
         }
         splashTimer_ += dt;
         const int sw = GetSubsystem<Graphics>()->GetWidth();
+        const int sh = GetSubsystem<Graphics>()->GetHeight();
 
         static const float kDur[3]   = { 1.30f, 1.20f, 2.55f };
-        static const float kIn[3]    = { 0.32f, 0.26f, 0.09f };
+        static const float kIn[3]    = { 0.60f, 0.55f, 0.10f };
         static const float kOutAt[3] = { 1.02f, 0.94f, 2.18f };
         static const int   kLineW[3] = { 300, 200, 840 };
 
         const int stage = splashStage_;
         const float t = splashTimer_;
-        float inT  = Clamp(t / kIn[stage], 0.0f, 1.0f);
-        float outT = Clamp((t - kOutAt[stage]) / (kDur[stage] - kOutAt[stage]), 0.0f, 1.0f);
-        float aIn  = inT * inT * (3.0f - 2.0f * inT);
-        float aOut = 1.0f - outT * outT * (3.0f - 2.0f * outT);
-        float alpha = Clamp(aIn * aOut, 0.0f, 1.0f);
+        const float inT  = Clamp(t / kIn[stage], 0.0f, 1.0f);
+        const float outT = Clamp((t - kOutAt[stage]) / (kDur[stage] - kOutAt[stage]), 0.0f, 1.0f);
+        const float alpha = Clamp(EaseOutCubic(inT) * (1.0f - EaseOutCubic(outT)), 0.0f, 1.0f);
 
-        // Базовый цвет стадии. CHICHKENCUM вспыхивает белым и остывает в золото
-        Color base = stage == 0 ? Color(0.92f, 0.97f, 1.0f, 1.0f)
-                   : stage == 1 ? Color(0.68f, 0.74f, 0.86f, 1.0f)
+        // «Выплывание»: текст поднимается на easeOutExpo + деликатное дыхание в покое
+        const float floatAmp = (float)S(stage == 2 ? 12 : 48);
+        const float floatOff = (1.0f - EaseOutExpo(Clamp(t / 1.05f, 0.0f, 1.0f))) * floatAmp;
+        const float breathe  = sinf(t * 1.9f + stage * 1.7f) * (float)S(2.5f)
+                             * Clamp((t - 0.9f) / 0.5f, 0.0f, 1.0f);
+        int drawX = sw / 2 - S(720);
+        int drawY = SplashTextY(stage) + (int)floatOff + (int)breathe;
+
+        if (stage == 2) {
+            // CHICHKENCUM: наезд размера 104→76 и затухающая тряска от удара
+            const float punch = 1.0f - EaseOutExpo(Clamp(t / 0.26f, 0.0f, 1.0f));
+            splashText_->SetFont(font_, SF((int)(76.0f + 28.0f * punch)));
+            drawX += (int)(sinf(t * 88.0f) * expf(-t * 9.5f) * (float)S(6.0f));
+        } else {
+            // Посимвольное открытие надписи
+            const float reveal = EaseOutCubic(Clamp(t / 0.80f, 0.0f, 1.0f));
+            const int n = (int)(splashFullText_.Length() * reveal + 0.49f);
+            splashText_->SetText(splashFullText_.Substring(0, n));
+        }
+
+        // Цвет текста. CHICHKENCUM вспыхивает белым и остывает в золото
+        Color base = stage == 0 ? Color(0.90f, 0.96f, 1.0f, 1.0f)
+                   : stage == 1 ? Color(0.70f, 0.76f, 0.88f, 1.0f)
                                 : Color(1.0f, 0.78f, 0.16f, 1.0f);
         if (stage == 2) {
-            float flash = Clamp(t / 0.55f, 0.0f, 1.0f);
-            flash = flash * flash * (3.0f - 2.0f * flash);
+            const float flash = EaseOutCubic(Clamp(t / 0.55f, 0.0f, 1.0f));
             base = Color(1.0f, Lerp(1.0f, 0.78f, flash), Lerp(1.0f, 0.16f, flash), 1.0f);
         }
         base.a_ = alpha;
-        if (splashText_) splashText_->SetColor(base);
+        if (splashText_) {
+            splashText_->SetColor(base);
+            splashText_->SetPosition(drawX, drawY);
+        }
+
+        // Неоновое свечение за текстом (тинт стадии + пульс)
+        if (splashGlow_) {
+            static const Color kGlow[3] = {
+                Color(0.18f, 0.82f, 1.0f, 1.0f),
+                Color(1.00f, 0.55f, 0.15f, 1.0f),
+                Color(1.00f, 0.60f, 0.12f, 1.0f)
+            };
+            const float pulse = 0.80f + 0.20f * sinf(t * 2.2f + stage * 2.1f);
+            const int gsize = S(stage == 2 ? 1180 : 860);
+            Color gc = kGlow[stage];
+            gc.a_ = alpha * 0.60f * pulse;
+            splashGlow_->SetSize(gsize, gsize);
+            splashGlow_->SetPosition(sw / 2 - gsize / 2, sh / 2 - gsize / 2 + (int)floatOff + (int)breathe);
+            splashGlow_->SetColor(gc);
+        }
+
+        // Волна-блик проскакивает слева направо в середине каждой стадии
+        if (splashSheen_) {
+            const float sweep = t - 0.68f;
+            if (sweep > 0.0f && sweep < 0.85f && alpha > 0.20f) {
+                const float k = sweep / 0.85f;
+                splashSheen_->SetPosition((int)Lerp(-S(240), sw + S(40), k), drawY - S(8));
+                Color sc(1.0f, 1.0f, 1.0f, 0.40f * alpha * sinf(3.14159265f * k));
+                splashSheen_->SetColor(sc);
+            } else {
+                splashSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            }
+        }
 
         // Неоновая линия раскрывается от центра (easeOutQuad)
-        float lineT = Clamp(t / 0.45f, 0.0f, 1.0f);
+        float lineT = Clamp(t / 0.5f, 0.0f, 1.0f);
         lineT = 1.0f - (1.0f - lineT) * (1.0f - lineT);
         const int w = (int)(S(kLineW[stage]) * lineT);
         if (splashLine_) {
