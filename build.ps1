@@ -72,39 +72,50 @@ if (-not $HasSdk -and -not $env:URHO3D_HOME) {
         if (Test-Path $UrhoSrc) { Remove-Item -Recurse -Force $UrhoSrc }
         Invoke-Checked { git clone --depth 1 --branch 1.9.0 https://github.com/urho3d/Urho3D.git $UrhoSrc } "git clone Urho3D failed"
     }
-    Invoke-Checked {
-        cmake -S $UrhoSrc -B $UrhoBld `
-            -DCMAKE_BUILD_TYPE=Release `
-            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
-            -DCMAKE_INSTALL_PREFIX="$LocalSdk" `
-            -DLIB_SUFFIX="" `
-            -DURHO3D_USE_LIB_DEB=1 `
-            -DURHO3D_LIB_TYPE=STATIC `
-            -DURHO3D_OPENGL=ON `
-            -DURHO3D_WIN32_CONSOLE=OFF `
-            -DURHO3D_C++11=ON `
-            -DURHO3D_PCH=OFF `
-            -DURHO3D_SAMPLES=OFF `
-            -DURHO3D_TOOLS=OFF `
-            -DURHO3D_LUA=OFF `
-            -DURHO3D_LUAJIT=OFF `
-            -DURHO3D_ANGELSCRIPT=OFF `
-            -DURHO3D_NETWORK=OFF `
-            -DURHO3D_DATABASE_ODBC=OFF `
-            -DURHO3D_DATABASE_SQLITE=OFF `
-            -DURHO3D_URHO2D=OFF `
-            -DURHO3D_WEBP=OFF `
-            -DURHO3D_TESTING=OFF `
-            -DURHO3D_DOCS=OFF
-    } "Urho3D CMake configure failed"
-    Invoke-Checked { cmake --build $UrhoBld --config Release --parallel $Jobs } "Urho3D build failed"
-    Invoke-Checked { cmake --install $UrhoBld --config Release } "Urho3D install failed"
+    if (Test-Path $UrhoBld) { Remove-Item -Recurse -Force $UrhoBld }
+    $UrhoCmakeArgs = @(
+        '-S', $UrhoSrc,
+        '-B', $UrhoBld,
+        '-DCMAKE_BUILD_TYPE=Release',
+        '-DCMAKE_POLICY_VERSION_MINIMUM=3.5',
+        "-DCMAKE_INSTALL_PREFIX=$LocalSdk",
+        '-DLIB_SUFFIX=',
+        '-DURHO3D_USE_LIB_DEB=1',
+        '-DURHO3D_LIB_TYPE=STATIC',
+        '-DURHO3D_OPENGL=ON',
+        '-DURHO3D_WIN32_CONSOLE=OFF',
+        '-DURHO3D_C++11=ON',
+        '-DURHO3D_PCH=OFF',
+        '-DURHO3D_SAMPLES=OFF',
+        '-DURHO3D_TOOLS=OFF',
+        '-DURHO3D_LUA=OFF',
+        '-DURHO3D_LUAJIT=OFF',
+        '-DURHO3D_ANGELSCRIPT=OFF',
+        '-DURHO3D_NETWORK=OFF',
+        '-DURHO3D_DATABASE_ODBC=OFF',
+        '-DURHO3D_DATABASE_SQLITE=OFF',
+        '-DURHO3D_URHO2D=OFF',
+        '-DURHO3D_WEBP=OFF',
+        '-DURHO3D_TESTING=OFF',
+        '-DURHO3D_DOCS=OFF'
+    )
+    Invoke-Checked { & cmake @UrhoCmakeArgs } "Urho3D CMake configure failed"
+    Invoke-Checked { & cmake --build $UrhoBld --config Release --parallel $Jobs } "Urho3D build failed"
+    Invoke-Checked { & cmake --install $UrhoBld --config Release } "Urho3D install failed"
     Remove-Item -Recurse -Force $UrhoBld -ErrorAction SilentlyContinue
 }
 
 Write-Host "[2/3] Сборка CHIKENGUN 2.5 (MyShooter.exe + gen_textures_4k + test_core)..."
-Invoke-Checked { cmake -S $Root -B $BuildDir -DBUILD_GAME=ON -DAUTO_FETCH_URHO3D=ON -DTEX_SIZE=$TexSize -DURHO3D_HOME="$LocalSdk" } "Project CMake configure failed"
-Invoke-Checked { cmake --build $BuildDir --config Release --parallel $Jobs } "Project CMake build failed"
+$ProjCmakeArgs = @(
+    '-S', $Root,
+    '-B', $BuildDir,
+    '-DBUILD_GAME=ON',
+    '-DAUTO_FETCH_URHO3D=ON',
+    "-DTEX_SIZE=$TexSize",
+    "-DURHO3D_HOME=$LocalSdk"
+)
+Invoke-Checked { & cmake @ProjCmakeArgs } "Project CMake configure failed"
+Invoke-Checked { & cmake --build $BuildDir --config Release --parallel $Jobs } "Project CMake build failed"
 
 $GenExe = @("$BuildDir\Release\gen_textures_4k.exe", "$BuildDir\gen_textures_4k.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 $AppExe = @("$BuildDir\Release\MyShooter.exe", "$BuildDir\MyShooter.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1

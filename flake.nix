@@ -104,6 +104,10 @@
               ${lib.optionalString stdenv.isDarwin ''
                 substituteInPlace cmake/Modules/UrhoCommon.cmake \
                   --replace-warn 'set (ARM_CFLAGS "''${ARM_CFLAGS} -march=armv8-a")' 'set (ARM_CFLAGS "''${ARM_CFLAGS}")'
+                substituteInPlace Source/ThirdParty/FreeType/src/gzip/ftzconf.h \
+                  --replace-warn '#if !defined(MACOS) && !defined(TARGET_OS_MAC)' '#if !defined(MACOS) && (!defined(TARGET_OS_MAC) || !defined(_MACTYPES_))'
+                substituteInPlace Source/ThirdParty/FreeType/src/gzip/zconf.h \
+                  --replace-warn '#if !defined(MACOS) && !defined(TARGET_OS_MAC)' '#if !defined(MACOS) && (!defined(TARGET_OS_MAC) || !defined(_MACTYPES_))'
                 substituteInPlace Source/Urho3D/IO/File.cpp \
                   --replace-warn 'fseeko64(' 'fseeko(' \
                   --replace-warn 'ftello64(' 'ftello(' \

@@ -354,7 +354,7 @@ if [ -z "$URHO_INC" ] || [ -z "$URHO_LIBDIR" ]; then
     fi
 
     # Патчим Urho3D 1.9.0 для совместимости с macOS Apple Silicon (arm64) и новым Apple SDK
-    if [ "$OS_NAME" = "Darwin" ] && [ ! -f "$URHO_SRC/.chikengun_apple_patched" ] && command -v python3 >/dev/null 2>&1; then
+    if [ "$OS_NAME" = "Darwin" ] && [ ! -f "$URHO_SRC/.chikengun_apple_patched_v2" ] && command -v python3 >/dev/null 2>&1; then
         python3 - "$URHO_SRC" << 'PYPATCH'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -373,6 +373,14 @@ if uc.exists():
                   'if (URHO3D_64BIT AND NOT APPLE)\n                    # aarch64 has only one valid arch so far\n                    set (ARM_CFLAGS "${ARM_CFLAGS} -march=armv8-a")')
     uc.write_text(s)
 
+for rel in ["Source/ThirdParty/FreeType/src/gzip/ftzconf.h", "Source/ThirdParty/FreeType/src/gzip/zconf.h"]:
+    p = root / rel
+    if p.exists():
+        s = p.read_text()
+        s = s.replace('#if !defined(MACOS) && !defined(TARGET_OS_MAC)',
+                      '#if !defined(MACOS) && (!defined(TARGET_OS_MAC) || !defined(_MACTYPES_))')
+        p.write_text(s)
+
 fc = root / "Source/Urho3D/IO/File.cpp"
 if fc.exists():
     s = fc.read_text()
@@ -384,16 +392,16 @@ if fc.exists():
                   '#ifdef _MSC_VER\n    return _ftelli64(stream);\n#elif defined(__APPLE__)\n    return ftello(stream);\n#else')
     s = s.replace('#ifdef _MSC_VER\n    return _ftelli64(stream);\n#else',
                   '#ifdef _MSC_VER\n    return _ftelli64(stream);\n#elif defined(__APPLE__)\n    return ftello(stream);\n#else')
-    s = s.replace('return fopen64(', 'return fopen(') if False else s
     s = s.replace('handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode]);',
                   '#ifdef __APPLE__\n    handle_ = fopen(GetNativePath(fileName).CString(), openMode[mode]);\n#else\n    handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode]);\n#endif')
     s = s.replace('handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode + 1]);',
                   '#ifdef __APPLE__\n        handle_ = fopen(GetNativePath(fileName).CString(), openMode[mode + 1]);\n#else\n        handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode + 1]);\n#endif')
     fc.write_text(s)
 
-(root / ".chikengun_apple_patched").write_text("1\n")
+(root / ".chikengun_apple_patched_v2").write_text("1\n")
 PYPATCH
     fi
+    rm -rf "$URHO_BLD"
 
     CMAKE_EXTRA_ARGS=(
         "-DLIB_SUFFIX="
