@@ -150,4 +150,49 @@ inline int NextChipAmount(int current, int direction) {
     return kChips[idx];
 }
 
+// --- «КИБЕР-СЛОТЫ 777» (перенос из веб-казино в нативный C++17) ---
+enum SlotSymbol : int {
+    SYM_CHERRY = 0,
+    SYM_ROOSTER,
+    SYM_DIAMOND,
+    SYM_STAR,
+    SYM_CROWN,
+    SYM_SEVEN,
+    SYM_COUNT
+};
+
+inline const char* SlotLabel(int sym) {
+    switch (sym) {
+        case SYM_CHERRY:  return "[ВИШНЯ]";
+        case SYM_ROOSTER: return "[КОЧЕТ]";
+        case SYM_DIAMOND: return "[АЛМАЗ]";
+        case SYM_STAR:    return "[ЗВЕЗДА]";
+        case SYM_CROWN:   return "[КОРОНА]";
+        case SYM_SEVEN:   return "[ 777 ]";
+        default:          return "[  ?  ]";
+    }
+}
+
+inline int SlotsMultiplier(int r0, int r1, int r2) {
+    if (r0 == r1 && r1 == r2) {
+        switch (r0) {
+            case SYM_SEVEN:   return 50;
+            case SYM_CROWN:   return 20;
+            case SYM_STAR:    return 12;
+            case SYM_DIAMOND: return 8;
+            case SYM_ROOSTER: return 6;
+            default:          return 4;
+        }
+    }
+    if (r0 == r1 || r1 == r2 || r0 == r2) {
+        int pairSym = (r0 == r1 || r0 == r2) ? r0 : r1;
+        return (pairSym == SYM_SEVEN || pairSym == SYM_CROWN) ? 3 : 2;
+    }
+    return 0;
+}
+
+inline int SlotsPayout(int betAmount, int r0, int r1, int r2) {
+    return std::max(0, betAmount) * SlotsMultiplier(r0, r1, r2);
+}
+
 } // namespace Casino

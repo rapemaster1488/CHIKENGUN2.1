@@ -1,35 +1,40 @@
 #!/usr/bin/env bash
-# Быстрый запуск CHIKENGUN 2.5 «ПЕРО СУДЬБЫ» [4K ULTRA]:
-# 1) С уже собранным build/MyShooter (или флагом --native при наличии Urho3D) — нативный C++17 движок;
-# 2) Если Urho3D/компилятор на машине не установлены (или передан --web) — запуск zero-dependency WebGL2 3D версии.
-set -e
+# ============================================================================
+# Единый запуск CHIKENGUN 2.5 «ПЕРО СУДЬБЫ» (Нативный C++17 / Urho3D клиент)
+# На чистой машине сам подготовит сборку (при первом запуске).
+# Флаги:
+#   --install-deps   Поставить системные пакеты сборки автоматически
+#   --4k             Пересобрать PBR текстуры в 4096x4096
+#   --rebuild        Принудительно пересобрать клиент
+# ============================================================================
+set -euo pipefail
+
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT"
 
-if [ "${1:-}" = "--web" ]; then
-    exec "$ROOT/play.sh" "$@"
-fi
+FORCE_BUILD=0
+BUILD_ARGS=()
+APP_ARGS=()
 
-FORCE_NATIVE=0
-if [ "${1:-}" = "--native" ]; then
-    FORCE_NATIVE=1
-    shift
-fi
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --install-deps|--4k)
+            BUILD_ARGS+=("$1")
+            FORCE_BUILD=1
+            shift
+            ;;
+        --rebuild)
+            FORCE_BUILD=1
+            shift
+            ;;
+        *)
+            APP_ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
 
-has_urho3d_headers() {
-    for c in "${URHO_INC:-}" "${URHO3D_HOME:-}/include" "${URHO3D_HOME:-}/build/include" \
-             "$HOME/urho3d/build/include" "$HOME/urho3d_build/include" "$HOME/urho3d-local/include" \
-             "/usr/local/include/Urho3D" "/usr/include/Urho3D"; do
-        [ -z "$c" ] && continue
-        if [ -f "$c/Urho3D/Urho3D.h" ] || [ -f "$c/Urho3D/Engine/Application.h" ] || \
-           [ -f "$c/Core/UrhoVersion.h" ] || [ -f "$c/Urho3D.h" ]; then
-            return 0
-        fi
-    done
-    return 1
-}
-
-NEED_BUILD=0
+NEED_BUILD="$FORCE_BUILD"
 if [ ! -x "$ROOT/build/MyShooter" ]; then
     NEED_BUILD=1
 else
@@ -42,13 +47,14 @@ else
 fi
 
 if [ "$NEED_BUILD" -eq 1 ]; then
-    if [ "$FORCE_NATIVE" -eq 1 ] || has_urho3d_headers; then
-        echo "[run] Бинарник отсутствует или устарел — запускаю нативную сборку..."
-        "$ROOT/build.sh"
-    else
-        echo "[run] Urho3D SDK не установлен — запускаю WebGL2 3D версию без зависимостей (./play.sh)..."
-        exec "$ROOT/play.sh" --web "$@"
-    fi
+    echo "[CHIKENGUN 2.5] Сборка / обновление нативного клиента..."
+    "$ROOT/build.sh" "${BUILD_ARGS[@]}"
 fi
 
-exec "$ROOT/build/MyShooter" "$@"
+# Пробрасываем libUrho3D.so если бинарник собран с динамическим движком
+for ld in "$ROOT/.cache/urho3d-sdk/lib" "${URHO3D_HOME:-}/lib" "${URHO3D_HOME:-}/build/lib" "$HOME/urho3d/build/lib" "$HOME/urho3d_build/lib"; do
+    [ -n "$ld" ] && [ -d "$ld" ] && export LD_LIBRARY_PATH="${ld}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+done
+
+cd "$ROOT/build"
+exec "$ROOT/build/MyShooter" "${APP_ARGS[@]}"

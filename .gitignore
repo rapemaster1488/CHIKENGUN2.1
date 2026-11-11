@@ -1,7 +1,9 @@
-# --- сборка ---
+# --- сборка и кэш Urho3D ---
 build/
-build-tests/
-build-desktop/
+build*/
+.cache/
+dist/
+release/
 bin/MyShooter
 *.o
 *.obj
@@ -28,9 +30,6 @@ core.*
 *.bundle
 *.patch
 
-# --- генерируемые текстуры (tools/gen_textures.py) ---
-bin/Data/TexturesHD/
-build/Data/TexturesHD/
+# --- кэш Python и генерируемые ассеты ---
 __pycache__/
 *.pyc
-

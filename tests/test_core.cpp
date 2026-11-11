@@ -295,7 +295,7 @@ int main(int argc, char** argv) {
         assert(Banya::ComputeCreditsReward(sim.CurrentScore(), Banya::END_STEWARD) > 200);
     }
 
-    std::cout << "[test_core] 8/10 Проверка нативной виртуальной рулетки (src/CasinoSim.h: правила, выплаты, фишки)..." << std::endl;
+    std::cout << "[test_core] 8/10 Проверка нативного казино (src/CasinoSim.h: Рулетка + Слоты 777)..." << std::endl;
     {
         Casino::Bet red{Casino::BET_RED, 25, 7};
         assert(Casino::Wins(red, 19));
@@ -328,9 +328,18 @@ int main(int argc, char** argv) {
         assert(Casino::NextChipAmount(25, -1) == 10);
         assert(Casino::NextChipAmount(25, 1) == 50);
         assert(Casino::ClampNumber(99) == 36 && Casino::ClampNumber(-5) == 0);
+
+        // Кибер-Слоты 777
+        assert(Casino::SlotsMultiplier(Casino::SYM_SEVEN, Casino::SYM_SEVEN, Casino::SYM_SEVEN) == 50);
+        assert(Casino::SlotsPayout(100, Casino::SYM_SEVEN, Casino::SYM_SEVEN, Casino::SYM_SEVEN) == 5000);
+        assert(Casino::SlotsMultiplier(Casino::SYM_CROWN, Casino::SYM_CROWN, Casino::SYM_CROWN) == 20);
+        assert(Casino::SlotsMultiplier(Casino::SYM_SEVEN, Casino::SYM_CHERRY, Casino::SYM_SEVEN) == 3);
+        assert(Casino::SlotsMultiplier(Casino::SYM_DIAMOND, Casino::SYM_CHERRY, Casino::SYM_DIAMOND) == 2);
+        assert(Casino::SlotsPayout(50, Casino::SYM_CHERRY, Casino::SYM_ROOSTER, Casino::SYM_STAR) == 0);
+        assert(std::string(Casino::SlotLabel(Casino::SYM_SEVEN)) == "[ 777 ]");
     }
 
-    std::cout << "[test_core] 9/10 Проверка Pixel Arcade (src/ArcadeGames.h: Змейка, Арканоид, Дино, Pong)..." << std::endl;
+    std::cout << "[test_core] 9/10 Проверка Pixel Arcade (src/ArcadeGames.h: все 6 игр вкл. Flappy и Тетрис)..." << std::endl;
     {
         Arcade::PixelArcadeSim sim;
         sim.Reset(Arcade::GAME_SNAKE);
@@ -352,6 +361,36 @@ int main(int argc, char** argv) {
 
         sim.Reset(Arcade::GAME_PONG);
         assert(Arcade::PixelArcadeSim::ComputeCreditsReward(100, true) == 20);
+
+        // 05. Flappy Кочет: взмах + пролёт трубы + начисление очков
+        sim.Reset(Arcade::GAME_FLAPPY);
+        float y0 = sim.flappyY;
+        sim.FlappyFlap();
+        sim.Step(0.03f, 0, 0, false);
+        assert(sim.flappyY < y0 && !sim.over);
+        sim.pipes.push_back(Arcade::PixelArcadeSim::Pipe{110.0f, 50.0f, 180.0f, false});
+        sim.flappyY = 120.0f;
+        for (int s = 0; s < 20 && !sim.over; ++s) sim.Step(0.04f, 0, 0, false);
+        assert(sim.score >= 20 && !sim.BuildDrawRects().empty());
+
+        // 06. Кибер-Тетрис: 7 фигур, сдвиг/поворот, hard drop и сжигание линии
+        sim.Reset(Arcade::GAME_TETRIS);
+        int x0 = sim.tetX;
+        sim.TetrisMove(-1);
+        assert(sim.tetX == x0 - 1);
+        sim.TetrisRotate();
+        // Заполняем нижний ряд без 2 ячеек и сбрасываем O-фигуру прямо в проём
+        sim.tetBoard.fill(0);
+        for (int x = 0; x < Arcade::PixelArcadeSim::TET_W; ++x) {
+            if (x != 4 && x != 5) sim.tetBoard[(size_t)((Arcade::PixelArcadeSim::TET_H - 1) * Arcade::PixelArcadeSim::TET_W + x)] = 1;
+            if (x != 4 && x != 5) sim.tetBoard[(size_t)((Arcade::PixelArcadeSim::TET_H - 2) * Arcade::PixelArcadeSim::TET_W + x)] = 1;
+        }
+        sim.tetCurType = 1; // O-блок 2x2
+        sim.tetRot = 0;
+        sim.tetX = 3; // биты 1,2 в 4x4 -> колонки 4 и 5
+        sim.tetY = 0;
+        sim.TetrisHardDrop();
+        assert(sim.tetLines >= 2 && sim.score >= 300 && !sim.BuildDrawRects().empty());
     }
 
     std::cout << "[test_core] 10/10 Проверка базовых PBR текстур, материалов баньки и генератора..." << std::endl;

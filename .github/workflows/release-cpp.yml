@@ -1,0 +1,46 @@
+name: Release — Portable Native Linux Package (C++17 / Urho3D)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  package-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git pkg-config python3 \
+            libsdl2-dev libgl-dev libglu1-mesa-dev libx11-dev libxrandr-dev \
+            libxi-dev libxext-dev libasound2-dev libpulse-dev libudev-dev
+
+      - name: Cache static Urho3D 1.9.0 SDK
+        id: cache-urho3d
+        uses: actions/cache@v4
+        with:
+          path: .cache/urho3d-sdk
+          key: urho3d-1.9.0-static-x86_64-v1
+
+      - name: Build native client & PBR textures
+        run: |
+          TEX_SIZE=2048 ./build.sh -j4
+
+      - name: Run C++17 core test suite
+        run: ./build.sh --tests-only
+
+      - name: Package portable tarball
+        run: ./tools/package_linux.sh
+
+      - name: Upload portable release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: CHIKENGUN-2.5-Linux-x86_64
+          path: |
+            build/release/CHIKENGUN-2.5-Linux-*.tar.gz
+            build/release/SHA256SUMS.txt

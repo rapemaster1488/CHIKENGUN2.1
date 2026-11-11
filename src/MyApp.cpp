@@ -711,13 +711,22 @@ private:
         float recoilKick_ = 0.0f;       // визуальный «откат» стрелка
         float cryoSlowTimer_ = 0.0f;    // короткое замедление от CRYO LANCE
         float cryoSlowMul_ = 1.0f;
-        // === Куриная анимация (ходьба, клевки, взмахи) ===
+        // === Куриная анимация (ходьба, клевки, взмахи, выпад клювом) ===
         WeakPtr<Node> headNode_, wingLNode_, wingRNode_, legLNode_, legRNode_, tailNode_;
         float animPhase_ = 0.0f;
         float cluckTimer_ = 5.0f;        // случайное кудахтанье в простое
+        float lungeTimer_ = 0.0f;        // выпад клювом вперёд при ударе
         bool  enraged_ = false;          // фаза ярости Мега-Индюка (<50% HP)
     };
     Vector<EnemyData> enemies_;
+    struct EnemyCorpse {
+        SharedPtr<Node> node_;
+        float age_ = 0.0f;
+        float maxAge_ = 3.5f;
+        float fallSide_ = 1.0f;
+        float startY_ = 0.06f;
+    };
+    Vector<EnemyCorpse> corpses_;
     // enemyNodes_ убран: он держал SharedPtr на уже удалённых роботов (утечка узла на каждое убийство).
     // Живыми нодами владеет сцена, EnemyData хранит WeakPtr.
     // === Lite-мишени и Lite-осколки (без Bullet) ===
@@ -928,6 +937,8 @@ private:
     SharedPtr<UIElement>   banyaPanel_, banyaSceneBox_, banyaRiddleBox_, banyaEndBox_, banyaStatsBox_;
     SharedPtr<BorderImage> banyaHeatWash_, banyaAirWash_, banyaColdWash_, banyaEndTint_;
     SharedPtr<BorderImage> banyaStoveFire_, banyaStonesGlow_, banyaVenikVis_, banyaRoosterBody_, banyaRoosterComb_, banyaRoosterCrown_;
+    SharedPtr<BorderImage> banyaThermoFill_;
+    Vector<SharedPtr<BorderImage>> banyaSnowMotes_;
     SharedPtr<Text>        banyaRoosterEyesText_;
     SharedPtr<Text>        banyaTempText_, banyaMoodText_, banyaClockText_, banyaCaptionText_, banyaBadgeText_;
     SharedPtr<BorderImage> banyaBarSteam_, banyaBarFire_, banyaBarAir_, banyaBarLife_, banyaBarTime_;
@@ -942,9 +953,10 @@ private:
     SharedPtr<Text>        banyaStatsRunText_, banyaStatsAllText_;
     SharedPtr<BorderImage> banyaStatsCloseBtn_;
 
-    // === 2.5 НАТИВНАЯ «ЗОЛОТАЯ РУЛЕТКА» [J] (src/CasinoSim.h) И PIXEL ARCADE [K] (src/ArcadeGames.h) ===
+    // === 2.5 НАТИВНОЕ КАЗИНО [J] («Золотая Рулетка» + «Кибер-Слоты 777») И PIXEL ARCADE [K] (6 игр) ===
     bool casinoOpen_ = false;
     bool casinoFromMenu_ = true;
+    bool casinoSlotsMode_ = false;
     Casino::Bet casinoBet_{};
     int casinoBalance_ = 1000;
     int casinoLastResult_ = -1;
@@ -952,9 +964,12 @@ private:
     int casinoWins_ = 0;
     int casinoLosses_ = 0;
     float casinoSpinTimer_ = 0.0f;
+    int slotReels_[3] = { Casino::SYM_SEVEN, Casino::SYM_ROOSTER, Casino::SYM_CROWN };
+    int slotPendingReels_[3] = { 0, 0, 0 };
+    Vector<int> casinoHistory_;
     SharedPtr<UIElement> casinoPanel_;
-    SharedPtr<BorderImage> casinoWheelCard_, casinoSpinButton_, casinoBetButton_, casinoChipButton_, casinoNumberButton_, casinoTopupButton_, casinoCloseButton_;
-    SharedPtr<Text> casinoTitleText_, casinoBalanceText_, casinoWheelText_, casinoBetText_, casinoResultText_, casinoStatsText_, casinoHelpText_;
+    SharedPtr<BorderImage> casinoWheelCard_, casinoSpinButton_, casinoBetButton_, casinoChipButton_, casinoNumberButton_, casinoTopupButton_, casinoCloseButton_, casinoModeButton_;
+    SharedPtr<Text> casinoTitleText_, casinoBalanceText_, casinoWheelText_, casinoBetText_, casinoResultText_, casinoStatsText_, casinoHelpText_, casinoHistoryText_;
 
     Arcade::PixelArcadeSim arcadeSim_;
     bool                   arcadeOpen_ = false;
@@ -1218,6 +1233,10 @@ public:
         for (unsigned i = 0; i < (unsigned)floatingDmgs_.Size(); ++i)
             if (floatingDmgs_[i].label_) floatingDmgs_[i].label_->Remove();
         floatingDmgs_.Clear();
+
+        for (unsigned i = 0; i < (unsigned)corpses_.Size(); ++i)
+            if (corpses_[i].node_) corpses_[i].node_->Remove();
+        corpses_.Clear();
     }
 
     // После обновления сцены удаляем записи, чьи узлы были сняты другими
@@ -1380,24 +1399,6 @@ public:
             }
             if (!coreAdded)
                 URHO3D_LOGWARNING("CoreData не найден! Убедитесь, что каталог CoreData/ находится в корне проекта или рядом с бинарником.");
-
-            // 4) Дополнительно регистрируем TexturesHD, если текстуры разложены отдельно
-            {
-                Vector<String> texHdCandidates;
-                if (!goodData.Empty())   texHdCandidates.Push(goodData + "/TexturesHD");
-                texHdCandidates.Push("./Data/TexturesHD");
-                texHdCandidates.Push("../Data/TexturesHD");
-                auto fileOk = [](const String& p) -> bool {
-                    struct stat st; return !p.Empty() && stat(p.CString(), &st) == 0;
-                };
-                for (unsigned i = 0; i < (unsigned)texHdCandidates.Size(); ++i) {
-                    if (fileOk(texHdCandidates[i] + "/StoneHDDiffuse.png")) {
-                        cache->AddResourceDir(texHdCandidates[i], 1);
-                        URHO3D_LOGINFO("TexturesHD подключён: " + texHdCandidates[i]);
-                        break;
-                    }
-                }
-            }
         }
 
         // Пользовательские настройки графики/звука (settings.ini) + 4K движок
@@ -1469,6 +1470,8 @@ private:
         planeModel_  = cache->GetResource<Model>("Models/Plane.mdl");
         if (!font_) {
             font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.sdf");
         }
     }
@@ -1752,23 +1755,26 @@ private:
             fallbackMat_ = fb.Get();
         }
 
-        // --- 4K PBR материалы поверхности арены ---
-        hdStone_   = cache->GetResource<Material>("Materials/Game/StoneHD.xml");
-        hdFloor_   = cache->GetResource<Material>("Materials/Game/FloorTile.xml");
-        hdPanel_   = cache->GetResource<Material>("Materials/Game/MetalPanel.xml");
-        hdMetal_   = cache->GetResource<Material>("Materials/Game/BrushedMetal.xml");
-        hdCrate_   = cache->GetResource<Material>("Materials/Game/CrateWood.xml");
-        hdFeather_ = cache->GetResource<Material>("Materials/Game/FeatherPBR.xml");
-        hdHazard_  = cache->GetResource<Material>("Materials/Game/HazardMetal.xml");
-        auto banyaTexReady = [cache](const char* d, const char* n, const char* r) {
-            return cache->GetResource<Texture2D>(String(d)) &&
-                   cache->GetResource<Texture2D>(String(n)) &&
-                   cache->GetResource<Texture2D>(String(r));
+        // --- 4K PBR материалы поверхности арены (проверка PNG перед активацией) ---
+        auto loadPbrMaterial = [cache](const char* materialName, const char* diffuse,
+                                       const char* normal, const char* roughMetal) -> Material* {
+            if (!cache->GetResource<Texture2D>(String(diffuse)) ||
+                !cache->GetResource<Texture2D>(String(normal)) ||
+                !cache->GetResource<Texture2D>(String(roughMetal))) {
+                URHO3D_LOGWARNING("Отсутствует или повреждена текстура PBR для " + String(materialName) + " — используем fallback-материал");
+                return nullptr;
+            }
+            return cache->GetResource<Material>(String(materialName));
         };
-        if (banyaTexReady("Textures/BanyaLogDiffuse.png", "Textures/BanyaLogNormal.png", "Textures/BanyaLogRoughMetal.png"))
-            hdBanyaLog_ = cache->GetResource<Material>("Materials/Game/BanyaLog.xml");
-        if (banyaTexReady("Textures/BanyaRoosterDiffuse.png", "Textures/BanyaRoosterNormal.png", "Textures/BanyaRoosterRoughMetal.png"))
-            hdBanyaRooster_ = cache->GetResource<Material>("Materials/Game/BanyaRooster.xml");
+        hdStone_   = loadPbrMaterial("Materials/Game/StoneHD.xml",      "Textures/StoneHDDiffuse.png",      "Textures/StoneHDNormal.png",      "Textures/StoneHDRoughMetal.png");
+        hdFloor_   = loadPbrMaterial("Materials/Game/FloorTile.xml",    "Textures/FloorTileDiffuse.png",    "Textures/FloorTileNormal.png",    "Textures/FloorTileRoughMetal.png");
+        hdPanel_   = loadPbrMaterial("Materials/Game/MetalPanel.xml",   "Textures/MetalPanelDiffuse.png",   "Textures/MetalPanelNormal.png",   "Textures/MetalPanelRoughMetal.png");
+        hdMetal_   = loadPbrMaterial("Materials/Game/BrushedMetal.xml", "Textures/BrushedMetalDiffuse.png", "Textures/BrushedMetalNormal.png", "Textures/BrushedMetalRoughMetal.png");
+        hdCrate_   = loadPbrMaterial("Materials/Game/CrateWood.xml",    "Textures/CrateWoodDiffuse.png",    "Textures/CrateWoodNormal.png",    "Textures/CrateWoodRoughMetal.png");
+        hdFeather_ = loadPbrMaterial("Materials/Game/FeatherPBR.xml",   "Textures/FeatherPBRDiffuse.png",   "Textures/FeatherPBRNormal.png",   "Textures/FeatherPBRRoughMetal.png");
+        hdHazard_  = loadPbrMaterial("Materials/Game/HazardMetal.xml",  "Textures/HazardMetalDiffuse.png",  "Textures/HazardMetalNormal.png",  "Textures/HazardMetalRoughMetal.png");
+        hdBanyaLog_ = loadPbrMaterial("Materials/Game/BanyaLog.xml",    "Textures/BanyaLogDiffuse.png",     "Textures/BanyaLogNormal.png",     "Textures/BanyaLogRoughMetal.png");
+        hdBanyaRooster_ = loadPbrMaterial("Materials/Game/BanyaRooster.xml", "Textures/BanyaRoosterDiffuse.png", "Textures/BanyaRoosterNormal.png", "Textures/BanyaRoosterRoughMetal.png");
         skyTexture_ = cache->GetResource<Texture2D>("Textures/SkyDay.png");
         EnsureSkyCubemap();
 
@@ -2480,6 +2486,7 @@ private:
 
         SharedPtr<Material> neonCyan = MakeTinted(nullptr, nullptr, Color(40, 220, 255));
         SharedPtr<Material> neonPink = MakeTinted(nullptr, nullptr, Color(255, 70, 140));
+        SharedPtr<Material> neonGold = MakeHDRGlow(Color(2.2f, 1.65f, 0.25f, 1.0f));
 
         // Универсальный «блок»: визуал + коллайдер
         auto block = [this](const Vector3& pos, const Vector3& size, Material* mat, bool collide = true) {
@@ -2494,21 +2501,27 @@ private:
             return n;
         };
 
-        // ------------------------- центральная площадь -------------------------
+        // ------------------------- центральная площадь 2.5 «ПЕРО СУДЬБЫ» ----
         // Намеренно БЕЗ высокой платформы: враги не умеют запрыгивать (у них фиксированная
         // высота и выталкивание), поэтому подиум стал бы «безопасной точкой», откуда
         // игрок безнаказанно расстреливает арену. Вместо него — открытая площадь
-        // с голограммой и четырьмя колоннами-укрытиями.
+        // с ритуальным двойным кольцом (циан + золото), 4 световыми полосами и колоннами.
         Node* plaza = scene_->CreateChild("Plaza");
         for (int ring = 0; ring < 2; ++ring) {
             Node* disc = plaza->CreateChild("Ring");
-            disc->SetPosition(Vector3(0, 0.03f + (float)ring * 0.002f, 0));
-            disc->SetScale(Vector3(9.0f - (float)ring * 3.0f, 0.03f, 9.0f - (float)ring * 3.0f));
+            disc->SetPosition(Vector3(0, 0.03f + (float)ring * 0.004f, 0));
+            disc->SetScale(Vector3(9.6f - (float)ring * 3.2f, 0.03f, 9.6f - (float)ring * 3.2f));
             StaticModel* dm = disc->CreateComponent<StaticModel>();
             dm->SetModel(cylModel_ ? cylModel_ : boxModel_);
-            dm->SetMaterial(ring == 0 ? neonCyan.Get() : neonPink.Get());
+            dm->SetMaterial(ring == 0 ? neonCyan.Get() : neonGold.Get());
             dm->SetCastShadows(false);
         }
+        // Четыре неоновые взлётные полосы от центра по сторонам света
+        block(Vector3( 8.5f, 0.03f, 0.0f), Vector3(7.0f, 0.02f, 0.35f), neonCyan.Get(), false);
+        block(Vector3(-8.5f, 0.03f, 0.0f), Vector3(7.0f, 0.02f, 0.35f), neonCyan.Get(), false);
+        block(Vector3(0.0f, 0.03f,  8.5f), Vector3(0.35f, 0.02f, 7.0f), neonGold.Get(), false);
+        block(Vector3(0.0f, 0.03f, -8.5f), Vector3(0.35f, 0.02f, 7.0f), neonGold.Get(), false);
+
         // Колонны-укрытия: 4 штуки по диагоналям, с неоновым поясом
         for (int i = 0; i < 4; ++i) {
             float ang = 45.0f + (float)i * 90.0f;
@@ -2518,6 +2531,17 @@ private:
             block(cp + Vector3(0, 2.4f, 0), Vector3(1.9f, 0.14f, 1.9f),
                   (i % 2) ? neonPink.Get() : neonCyan.Get(), false);
             block(cp + Vector3(0, -2.4f, 0), Vector3(1.9f, 0.14f, 1.9f), neonCyan.Get(), false);
+        }
+
+        // Четыре жёлтых hazard-ежа на ближних диагоналях (перенос из 2.5 «Перо Судьбы»)
+        const Vector3 hazards[] = {
+            Vector3( 15.0f, 0.7f,  15.0f), Vector3(-15.0f, 0.7f,  15.0f),
+            Vector3( 15.0f, 0.7f, -15.0f), Vector3(-15.0f, 0.7f, -15.0f)
+        };
+        for (const auto& hpos : hazards) {
+            Material* hMat = hdHazard_ ? hdHazard_ : metalMaterial_;
+            block(hpos, Vector3(1.4f, 1.4f, 1.4f), hMat, true);
+            block(hpos + Vector3(0.0f, 0.78f, 0.0f), Vector3(1.52f, 0.14f, 1.52f), neonGold.Get(), false);
         }
 
         // ------------------------- кольцо укрытий -----------------------------
@@ -2610,12 +2634,14 @@ private:
                 (i % 2) ? neonCyan.Get() : neonPink.Get());
         }
 
-        // --- Трубы по стенам: три уровня, два цвета ---
+        // --- Трубы по стенам: три уровня, два цвета + жёлтые вентили 2.5 ---
+        SharedPtr<Material> neonGold = MakeHDRGlow(Color(2.1f, 1.65f, 0.25f, 1.0f));
         const float wallX[] = { -half + 2.0f, half - 2.0f };
         for (float wx : wallX) {
             for (int lvl = 0; lvl < 3; ++lvl) {
+                float py = 2.0f + (float)lvl * 1.2f;
                 Node* pipe = scene_->CreateChild("Pipe");
-                pipe->SetPosition(Vector3(wx, 2.0f + (float)lvl * 1.2f, 0));
+                pipe->SetPosition(Vector3(wx, py, 0));
                 pipe->SetScale(Vector3(0.35f, half - 4.0f, 0.35f));
                 // цилиндр по умолчанию вертикальный: кладём на бок
                 pipe->SetRotation(Quaternion(90.0f, Vector3(1, 0, 0)));
@@ -2624,6 +2650,26 @@ private:
                 pm->SetMaterial((lvl % 2) ? metalMaterial_ : (hdPanel_ ? hdPanel_ : metalMaterial_));
                 pm->SetCastShadows(false);
             }
+            for (int vz = -24; vz <= 24; vz += 24) {
+                box(nullptr, Vector3(wx + (wx > 0 ? -0.35f : 0.35f), 3.2f, (float)vz),
+                    Vector3(0.35f, 0.65f, 0.65f), hdHazard_ ? hdHazard_ : neonGold.Get());
+            }
+        }
+
+        // --- Две неоновые арки-ворота на северном/южном подходах (z = ±40) ---
+        for (int s = -1; s <= 1; s += 2) {
+            float gz = (float)s * 40.0f;
+            Material* archCol = (s < 0) ? neonCyan.Get() : neonPink.Get();
+            Node* pL = box(nullptr, Vector3(-5.2f, 3.0f, gz), Vector3(0.95f, 6.0f, 0.95f), hdPanel_ ? hdPanel_ : metalMaterial_);
+            Node* pR = box(nullptr, Vector3( 5.2f, 3.0f, gz), Vector3(0.95f, 6.0f, 0.95f), hdPanel_ ? hdPanel_ : metalMaterial_);
+            (void)pL; (void)pR;
+            AddBoxCollider(Vector3(-5.2f, 3.0f, gz), Vector3(0.5f, 3.0f, 0.5f));
+            AddBoxCollider(Vector3( 5.2f, 3.0f, gz), Vector3(0.5f, 3.0f, 0.5f));
+            box(nullptr, Vector3(0.0f, 6.2f, gz), Vector3(11.6f, 0.72f, 1.05f), hdPanel_ ? hdPanel_ : metalMaterial_);
+            box(nullptr, Vector3(0.0f, 5.75f, gz), Vector3(10.6f, 0.16f, 1.18f), archCol);
+            // Антенные маяки сверху
+            box(nullptr, Vector3(-5.2f, 6.9f, gz), Vector3(0.24f, 1.1f, 0.24f), neonGold.Get());
+            box(nullptr, Vector3( 5.2f, 6.9f, gz), Vector3(0.24f, 1.1f, 0.24f), neonGold.Get());
         }
 
         // --- Голограмма над центром: ядро + 3 вращающихся кольца ---
@@ -3535,6 +3581,7 @@ private:
         weapon_.reserveAmmo_ = reserveAmmo_[type];
         BuildWeaponModel(type);
         UpdateAmmoDisplay();
+        UpdateCrosshairColor();
         if (weaponNameText_) weaponNameText_->SetText(String(def.name) + " | " + String(SKIN_DEFS[currentSkin_].name));
     }
 
@@ -3741,6 +3788,20 @@ private:
         crosshairRight_->SetSize(len, th);
         crosshairRight_->SetPosition(cx + S(5.0f), cy - th / 2);
         crosshairRight_->SetColor(Color(0.25f, 1.0f, 0.72f, 0.85f));
+        UpdateCrosshairColor();
+    }
+
+    void UpdateCrosshairColor() {
+        Color wc = NormByteColor(WEAPON_DEFS[Clamp(currentWeapon_, 0, WEAPON_COUNT - 1)].tint);
+        // Делаем оттенок перекрестия ярким и читаемым на любой стене
+        Color hi(Clamp(wc.r_ * 0.65f + 0.38f, 0.25f, 1.0f),
+                 Clamp(wc.g_ * 0.65f + 0.38f, 0.25f, 1.0f),
+                 Clamp(wc.b_ * 0.65f + 0.38f, 0.25f, 1.0f), 0.92f);
+        if (crosshairCenter_) crosshairCenter_->SetColor(Color(hi.r_, hi.g_, hi.b_, 0.98f));
+        if (crosshairTop_)    crosshairTop_->SetColor(hi);
+        if (crosshairBottom_) crosshairBottom_->SetColor(hi);
+        if (crosshairLeft_)   crosshairLeft_->SetColor(hi);
+        if (crosshairRight_)  crosshairRight_->SetColor(hi);
     }
 
     void CreateRadar() {
@@ -4250,20 +4311,31 @@ private:
     }
 
     void UpdateAmmoDisplay() {
+        float reloadDur = Max(0.05f, WEAPON_DEFS[currentWeapon_].reloadTime);
+        float reloadProg = weapon_.isReloading_
+            ? Clamp(1.0f - weapon_.reloadTimer_ / reloadDur, 0.0f, 1.0f)
+            : 0.0f;
         if (ammoText_) {
             String ammoStr = "ПАТРОНЫ: " + String(weapon_.currentAmmo_) + " / " + String(weapon_.reserveAmmo_);
-            if (weapon_.isReloading_) ammoStr += "  [ПЕРЕЗАРЯДКА]";
+            if (weapon_.isReloading_)
+                ammoStr += "  [ПЕРЕЗАРЯДКА " + String((int)lroundf(reloadProg * 100.0f)) + "%]";
             ammoText_->SetText(ammoStr);
-            ammoText_->SetColor(weapon_.currentAmmo_ <= 5 ? Color(1.0f, 0.22f, 0.20f, 1.0f)
-                                                          : Color(1.0f, 0.90f, 0.25f, 1.0f));
+            ammoText_->SetColor(weapon_.isReloading_ ? Color(0.32f, 0.96f, 0.90f, 1.0f)
+                                : weapon_.currentAmmo_ <= 5 ? Color(1.0f, 0.22f, 0.20f, 1.0f)
+                                                            : Color(1.0f, 0.90f, 0.25f, 1.0f));
         }
         if (hudAmmoBarFill_) {
-            float ratio = WEAPON_DEFS[currentWeapon_].magSize > 0
-                        ? Clamp((float)weapon_.currentAmmo_ / (float)WEAPON_DEFS[currentWeapon_].magSize, 0.0f, 1.0f)
-                        : 0.0f;
-            hudAmmoBarFill_->SetSize((int)(S(HUD_BAR_W) * ratio), S(10.0f));
-            hudAmmoBarFill_->SetColor(ratio < 0.25f ? Color(1.0f, 0.25f, 0.2f, 1.0f)
-                                                    : Color(1.0f, 0.85f, 0.25f, 1.0f));
+            if (weapon_.isReloading_) {
+                hudAmmoBarFill_->SetSize((int)(S(HUD_BAR_W) * reloadProg), S(10.0f));
+                hudAmmoBarFill_->SetColor(Color(0.24f, 0.96f, 0.86f, 1.0f));
+            } else {
+                float ratio = WEAPON_DEFS[currentWeapon_].magSize > 0
+                            ? Clamp((float)weapon_.currentAmmo_ / (float)WEAPON_DEFS[currentWeapon_].magSize, 0.0f, 1.0f)
+                            : 0.0f;
+                hudAmmoBarFill_->SetSize((int)(S(HUD_BAR_W) * ratio), S(10.0f));
+                hudAmmoBarFill_->SetColor(ratio < 0.25f ? Color(1.0f, 0.25f, 0.2f, 1.0f)
+                                                        : Color(1.0f, 0.85f, 0.25f, 1.0f));
+            }
         }
     }
     
@@ -4327,7 +4399,10 @@ private:
             if (comboCount_ > 1) s += "  |  КОМБО x" + String(comboCount_);
             s += "\nРЕКОРД: " + String(highScore_) + "  |  ◆ " + String(CountUnlockedAchievements()) + "/" + String(Cyber::TOTAL_ACHIEVEMENTS);
             if (gameMode_ == MODE_ARENA) {
-                s += "  |  ВОЛНА " + String(waveNum_);
+                int aliveEnemies = 0;
+                for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i)
+                    if (enemies_[i].alive_) ++aliveEnemies;
+                s += "  |  ВОЛНА " + String(waveNum_) + "  •  ОСТАЛОСЬ: " + String(aliveEnemies);
                 if (activeMutator_ != Cyber::MUT_STANDARD)
                     s += " [" + String(Cyber::GetMutatorInfo(activeMutator_).name) + "]";
             }
@@ -4423,7 +4498,7 @@ private:
                 "ТАКТИКА, БАНЬКА СМОТРЯЩЕГО [P] И ПЕРКИ\n"
                 "  • [P] «КОЧЕТ В БАНЬКЕ»: продержись 3 минуты и разгадай загадки смотрящего (14 концовок, 57 загадок)!\n"
                 "    Выход с зачётом даёт кредиты (¤) и бафф «Банный закал» (+25 HP/Брони) или «Ковш Смотрящего» (+50 HP, +15% урона)!\n"
-                "  • [J] «ЗОЛОТАЯ РУЛЕТКА» и [K] «PIXEL ARCADE» (4 миниигры) работают прямо внутри клиента.\n"
+                "  • [J] «КАЗИНО» (Золотая рулетка + Кибер-слоты 777) и [K] «PIXEL ARCADE» (6 миниигр) работают внутри клиента.\n"
                 "  • [8] RAILGUN прошивает всех! [9] PLASMA рикошетит. [0] ARC CANNON цепляет стаю.\n"
                 "  • CRYO LANCE вращает охлаждающие кольца, ION SAW крутит энергетический диск.\n"
                 "  • Встань на ДЖАМП-ПЛАТФОРМУ или зацепись крюком [Z] для аэро-фрагов с высоты!\n"
@@ -4688,9 +4763,10 @@ private:
         perkShopPanel_ = nullptr; perkShopBody_ = nullptr;
         casinoPanel_ = nullptr; casinoWheelCard_ = nullptr; casinoSpinButton_ = nullptr;
         casinoBetButton_ = nullptr; casinoChipButton_ = nullptr; casinoNumberButton_ = nullptr;
-        casinoTopupButton_ = nullptr; casinoCloseButton_ = nullptr;
+        casinoTopupButton_ = nullptr; casinoCloseButton_ = nullptr; casinoModeButton_ = nullptr;
         casinoTitleText_ = nullptr; casinoBalanceText_ = nullptr; casinoWheelText_ = nullptr;
-        casinoBetText_ = nullptr; casinoResultText_ = nullptr; casinoStatsText_ = nullptr; casinoHelpText_ = nullptr;
+        casinoBetText_ = nullptr; casinoResultText_ = nullptr; casinoStatsText_ = nullptr;
+        casinoHelpText_ = nullptr; casinoHistoryText_ = nullptr;
         ResetBanyaUIPointers();
         ResetMiniAppUIPointers();
 
@@ -4853,6 +4929,7 @@ private:
             float rofMul = (1.0f + 0.12f * (float)perkRofLvl_) * (overdriveTimer_ > 0.0f ? 1.6f : 1.0f);
             weapon_.reloadTimer_ -= dt * rofMul;
             if (weapon_.reloadTimer_ <= 0) CompleteReload();
+            else UpdateAmmoDisplay();
         }
         
         if (weapon_.fireTimer_ > 0) weapon_.fireTimer_ -= dt;
@@ -4927,6 +5004,7 @@ private:
         }
 
         if (!inMenu_) {
+            UpdateCorpses(dt);
             if (gameMode_ == MODE_ARENA) {
                 UpdateEnemies(dt);
                 int aliveCount = 0;
@@ -6892,6 +6970,8 @@ private:
         auto* cache = GetSubsystem<ResourceCache>();
         if (!font_) {
             font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.sdf");
         }
         auto* ui = GetSubsystem<UI>();
@@ -7884,8 +7964,8 @@ private:
             "ПОЛИГОН (тир 4K)",
             "КИБЕР-АРЕНА (волны + босс)",
             "КОЧЕТ В БАНЬКЕ (парная) [P]",
-            "ЗОЛОТАЯ РУЛЕТКА (казик) [J]",
-            "PIXEL ARCADE (миниигры) [K]",
+            "КАЗИНО (рулетка + 777) [J]",
+            "PIXEL ARCADE (6 миниигр) [K]",
             "НАСТРОЙКИ 4K ULTRA",
             "ВЫХОД"
         };
@@ -8036,8 +8116,8 @@ private:
             "ПОЛИГОН (тир 4K)",
             "КИБЕР-АРЕНА (волны + босс)",
             "КОЧЕТ В БАНЬКЕ (парная) [P]",
-            "ЗОЛОТАЯ РУЛЕТКА (казик) [J]",
-            "PIXEL ARCADE (миниигры) [K]",
+            "КАЗИНО (рулетка + 777) [J]",
+            "PIXEL ARCADE (6 миниигр) [K]",
             "НАСТРОЙКИ 4K ULTRA",
             "ВЫХОД"
         };
@@ -8964,7 +9044,7 @@ private:
                 }
                 break;
             }
-            default: { // E_MELEE — идёт к игроку, обходя препятствия рейкастом
+            default: { // E_MELEE — петляет волной при сближении + обход препятствий + выпад клювом
                 Vector3 probePos = p + Vector3(0, 0.6f, 0);
                 bool blocked = false;
                 if (dist > 1.5f) {
@@ -8978,10 +9058,15 @@ private:
                             move = slide.Normalized() * effSpd * (sinf(e.strafePhase_) > 0 ? 1.0f : -1.0f);
                     }
                 }
-                if (!blocked) move = toDir * effSpd;
-                if (dist < 1.4f && e.attackTimer_ <= 0.0f) {
+                if (!blocked) {
+                    Vector3 strafe(-toDir.z_, 0.0f, toDir.x_);
+                    float weave = (dist > 2.4f) ? 0.36f * sinf(e.strafePhase_ * 0.9f) : 0.0f;
+                    move = (toDir + strafe * weave) * effSpd;
+                }
+                if (dist < 1.45f && e.attackTimer_ <= 0.0f) {
                     e.attackTimer_ = 1.0f;
                     e.recoilKick_ = 0.2f;
+                    e.lungeTimer_ = 0.26f;
                     DamagePlayer(10.0f);
                     AddCameraShake(0.12f);
                 }
@@ -9029,24 +9114,50 @@ private:
                 PlayCluck(p, 0.30f);
             }
 
-            // === Куриная анимация: походка, клевки головой, взмахи крыльями ===
+            // === Куриная анимация: походка, выпад клювом, взмахи крыльями ===
+            if (e.lungeTimer_ > 0.0f) e.lungeTimer_ = Max(0.0f, e.lungeTimer_ - dt);
             {
                 float speedNow = Vector3(move.x_, 0.0f, move.z_).Length();
                 e.animPhase_ += dt * (3.2f + speedNow * 3.4f);
                 float walk = sinf(e.animPhase_);
+                float lungeAmt = e.lungeTimer_ > 0.0f ? sinf((e.lungeTimer_ / 0.26f) * 3.1415926f) : 0.0f;
                 if (Node* head = e.headNode_.Get()) {
-                    head->SetPosition(Vector3(0.0f, CH_HEAD_Y + 0.05f * walk, CH_HEAD_Z + 0.05f * fabsf(walk)));
-                    head->SetRotation(Quaternion(7.0f * walk, Vector3(1, 0, 0)));
+                    head->SetPosition(Vector3(0.0f, CH_HEAD_Y + 0.05f * walk - 0.08f * lungeAmt,
+                                              CH_HEAD_Z + 0.05f * fabsf(walk) + 0.32f * lungeAmt));
+                    head->SetRotation(Quaternion(7.0f * walk + 26.0f * lungeAmt, Vector3(1, 0, 0)));
                 }
                 if (Node* l = e.legLNode_.Get()) l->SetRotation(Quaternion( 30.0f * walk, Vector3(1, 0, 0)));
                 if (Node* r = e.legRNode_.Get()) r->SetRotation(Quaternion(-30.0f * walk, Vector3(1, 0, 0)));
                 // Крылья: мелкая дрожь на месте, широкий взмах на бегу/рывке
-                float flap = 6.0f + 30.0f * Max(0.0f, walk) * (speedNow > 0.8f ? 1.0f : 0.3f);
+                float flap = 6.0f + 30.0f * Max(0.0f, walk) * (speedNow > 0.8f ? 1.0f : 0.3f) + 25.0f * lungeAmt;
                 if (Node* wl = e.wingLNode_.Get()) wl->SetRotation(Quaternion( 18.0f + flap, Vector3(0, 0, 1)));
                 if (Node* wr = e.wingRNode_.Get()) wr->SetRotation(Quaternion(-18.0f - flap, Vector3(0, 0, 1)));
                 if (Node* tail = e.tailNode_.Get())
                     tail->SetRotation(Quaternion(8.0f * sinf(e.animPhase_ * 0.45f), Vector3(0, 1, 0)));
             }
+        }
+    }
+
+    void UpdateCorpses(float dt) {
+        for (unsigned i = corpses_.Size(); i-- > 0; ) {
+            EnemyCorpse& c = corpses_[i];
+            Node* n = c.node_.Get();
+            if (!n || !n->GetScene()) { corpses_.Erase(i); continue; }
+            c.age_ += dt;
+            if (c.age_ >= c.maxAge_) {
+                n->Remove();
+                corpses_.Erase(i);
+                continue;
+            }
+            float fallT = Clamp(c.age_ / 0.42f, 0.0f, 1.0f);
+            float ease = 1.0f - (1.0f - fallT) * (1.0f - fallT);
+            float sinkT = c.age_ > (c.maxAge_ - 0.70f)
+                ? Clamp((c.age_ - (c.maxAge_ - 0.70f)) / 0.70f, 0.0f, 1.0f) : 0.0f;
+            Vector3 p = n->GetPosition();
+            float y = Lerp(c.startY_, 0.24f, ease) - sinkT * 0.95f;
+            n->SetPosition(Vector3(p.x_, y, p.z_));
+            n->SetRotation(Quaternion(c.fallSide_ * 88.0f * ease, Vector3(0, 0, 1)) *
+                           Quaternion(22.0f * c.fallSide_ * ease, Vector3(1, 0, 0)));
         }
     }
 
@@ -9091,7 +9202,23 @@ private:
                 PlaySfx3D(deathPos, killedType == E_BOSS ? bossRoarSound_ : squawkSound_, 0.85f);
                 CreateDebrisBurst(deathPos);
                 PlayExplosionAt(deathPos);
-                n->Remove();
+                RemoveColliderLite(e.colliderIdx_);
+                e.colliderIdx_ = -1;
+                if (killedType == E_KAMIKAZE) {
+                    n->Remove();
+                } else {
+                    if ((unsigned)corpses_.Size() >= 24u) {
+                        if (corpses_[0].node_) corpses_[0].node_->Remove();
+                        corpses_.Erase(0);
+                    }
+                    EnemyCorpse cp;
+                    cp.node_ = SharedPtr<Node>(n);
+                    cp.age_ = 0.0f;
+                    cp.maxAge_ = 3.5f;
+                    cp.fallSide_ = (rand() % 2 == 0) ? 1.0f : -1.0f;
+                    cp.startY_ = deathPos.y_;
+                    corpses_.Push(cp);
+                }
             }
 
             const Cyber::MutatorInfo& mut = Cyber::GetMutatorInfo(activeMutator_);
@@ -9245,50 +9372,90 @@ private:
     }
 
     // =========================================================================
-    // НАТИВНАЯ «ЗОЛОТАЯ РУЛЕТКА» (только виртуальные фишки)
+    // НАТИВНОЕ КАЗИНО [J]: «ЗОЛОТАЯ РУЛЕТКА» + «КИБЕР-СЛОТЫ 777»
     // =========================================================================
 
     void UpdateCasinoVisuals() {
         if (!casinoPanel_) return;
+        if (casinoTitleText_)
+            casinoTitleText_->SetText(casinoSlotsMode_ ? "КИБЕР-СЛОТЫ 777" : "ЗОЛОТАЯ РУЛЕТКА");
         if (casinoBalanceText_)
             casinoBalanceText_->SetText("ФИШКИ: " + String(casinoBalance_) + " ¤");
         if (casinoBetText_) {
-            String bet = String(Casino::BetName(casinoBet_.type));
-            if (casinoBet_.type >= Casino::BET_NUMBER)
-                bet += " " + String(casinoBet_.number);
-            casinoBetText_->SetText("СТАВКА: " + bet + "  •  " + String(casinoBet_.amount) + " ¤");
+            if (casinoSlotsMode_) {
+                casinoBetText_->SetText("СТАВКА НА СПИН: " + String(casinoBet_.amount) + " ¤   •   3×777 = ×50  |  ПАРА = ×2..×3");
+            } else {
+                String bet = String(Casino::BetName(casinoBet_.type));
+                if (casinoBet_.type >= Casino::BET_NUMBER)
+                    bet += " " + String(casinoBet_.number);
+                casinoBetText_->SetText("СТАВКА: " + bet + "  •  " + String(casinoBet_.amount) + " ¤");
+            }
         }
         if (casinoStatsText_)
             casinoStatsText_->SetText("ПОБЕДЫ: " + String(casinoWins_) + "   ПОРАЖЕНИЯ: " + String(casinoLosses_));
+
+        if (casinoHistoryText_) {
+            if (casinoSlotsMode_) {
+                casinoHistoryText_->SetText("СЛОТЫ: [777]=×50  •  [КОРОНА]=×20  •  [ЗВЕЗДА]=×12  •  [АЛМАЗ]=×8  •  ПАРА=×2..3");
+            } else if (casinoHistory_.Empty()) {
+                casinoHistoryText_->SetText("ИСТОРИЯ СПИНОВ: пока пусто");
+            } else {
+                String hist = "ИСТОРИЯ: ";
+                for (int i = (int)casinoHistory_.Size() - 1; i >= 0; --i) {
+                    int n = casinoHistory_[(unsigned)i];
+                    const char* tag = (n == 0) ? "З" : (Casino::IsRed(n) ? "К" : "Ч");
+                    hist += "[" + String(n) + tag + "] ";
+                }
+                casinoHistoryText_->SetText(hist);
+            }
+        }
+
         if (casinoResultText_) {
             if (casinoSpinTimer_ > 0.0f) {
-                casinoResultText_->SetText("Шарик в полёте… ставка уже на столе");
+                casinoResultText_->SetText(casinoSlotsMode_ ? "Барабаны крутятся… ловим три семёрки!"
+                                                            : "Шарик в полёте… ставка уже на столе");
                 casinoResultText_->SetColor(Color(1.0f, 0.84f, 0.35f, 1.0f));
-            } else if (casinoLastResult_ >= 0) {
+            } else if (!casinoSlotsMode_ && casinoLastResult_ >= 0) {
                 casinoResultText_->SetText("Выпало: " + String(casinoLastResult_) + " • " + String(Casino::ColorName(casinoLastResult_)));
                 casinoResultText_->SetColor(casinoLastResult_ == 0 ? Color(0.35f, 1.0f, 0.62f, 1.0f)
                     : Casino::IsRed(casinoLastResult_) ? Color(1.0f, 0.42f, 0.42f, 1.0f)
                                                         : Color(0.72f, 0.80f, 0.88f, 1.0f));
-            } else {
+            } else if (!casinoSlotsMode_) {
                 casinoResultText_->SetText("Сделайте виртуальную ставку и нажмите ПРОКРУТИТЬ");
                 casinoResultText_->SetColor(Color(0.72f, 0.80f, 0.88f, 1.0f));
             }
         }
 
         if (casinoWheelText_) {
-            static const int kWheelPreview[18] = { 0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23 };
-            int offset = casinoSpinTimer_ > 0.0f ? ((int)(timeAcc_ * 18.0f) % 18) : 0;
-            String wheel = "*  ";
-            for (int i = 0; i < 9; ++i) {
-                if (i > 0) wheel += "  •  ";
-                int n = kWheelPreview[(offset + i) % 18];
-                wheel += String(n);
+            if (casinoSlotsMode_) {
+                int r0 = slotReels_[0], r1 = slotReels_[1], r2 = slotReels_[2];
+                if (casinoSpinTimer_ > 0.0f) {
+                    int tick = (int)(timeAcc_ * 20.0f);
+                    r0 = (casinoSpinTimer_ > 0.9f) ? ((tick + 0) % Casino::SYM_COUNT) : slotPendingReels_[0];
+                    r1 = (casinoSpinTimer_ > 0.45f) ? ((tick + 2) % Casino::SYM_COUNT) : slotPendingReels_[1];
+                    r2 = ((tick + 4) % Casino::SYM_COUNT);
+                }
+                casinoWheelText_->SetText(String(Casino::SlotLabel(r0)) + "   |   " +
+                                          String(Casino::SlotLabel(r1)) + "   |   " +
+                                          String(Casino::SlotLabel(r2)));
+            } else {
+                static const int kWheelPreview[18] = { 0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23 };
+                int offset = casinoSpinTimer_ > 0.0f ? ((int)(timeAcc_ * 18.0f) % 18) : 0;
+                String wheel = "*  ";
+                for (int i = 0; i < 9; ++i) {
+                    if (i > 0) wheel += "  •  ";
+                    int n = kWheelPreview[(offset + i) % 18];
+                    wheel += String(n);
+                }
+                casinoWheelText_->SetText(wheel);
             }
-            casinoWheelText_->SetText(wheel);
         }
         if (casinoSpinButton_)
             casinoSpinButton_->SetColor(casinoSpinTimer_ > 0.0f ? Color(0.22f, 0.22f, 0.24f, 0.96f)
                                                                     : Color(0.64f, 0.38f, 0.08f, 0.98f));
+        if (casinoModeButton_)
+            casinoModeButton_->SetColor(casinoSlotsMode_ ? Color(0.48f, 0.14f, 0.46f, 0.98f)
+                                                         : Color(0.14f, 0.36f, 0.22f, 0.98f));
     }
 
     void CreateCasinoPanel() {
@@ -9332,14 +9499,16 @@ private:
         casinoTitleText_->SetFont(font_, SF(38));
         casinoTitleText_->SetText("ЗОЛОТАЯ РУЛЕТКА");
         casinoTitleText_->SetTextAlignment(HA_CENTER);
-        casinoTitleText_->SetPosition(cx + S(30), cy + S(28));
+        casinoTitleText_->SetPosition(cx + S(30), cy + S(24));
         casinoTitleText_->SetWidth(cw - S(60));
         casinoTitleText_->SetColor(Color(1.0f, 0.82f, 0.28f, 1.0f));
         StyleCrispText(casinoTitleText_.Get(), true);
 
+        casinoModeButton_ = SharedPtr<BorderImage>(makeButton(cx + cw - S(260), cy + S(26), S(224), S(40), "[TAB] РУЛЕТКА / СЛОТЫ 777", Color(0.14f, 0.36f, 0.22f, 0.98f)));
+
         casinoBalanceText_ = casinoPanel_->CreateChild<Text>();
         casinoBalanceText_->SetFont(font_, SF(24));
-        casinoBalanceText_->SetPosition(cx + S(34), cy + S(92));
+        casinoBalanceText_->SetPosition(cx + S(34), cy + S(82));
         casinoBalanceText_->SetWidth(cw - S(68));
         casinoBalanceText_->SetTextAlignment(HA_CENTER);
         casinoBalanceText_->SetColor(Color(0.65f, 1.0f, 0.75f, 1.0f));
@@ -9348,15 +9517,23 @@ private:
         casinoWheelText_ = casinoPanel_->CreateChild<Text>();
         casinoWheelText_->SetFont(font_, SF(27));
         casinoWheelText_->SetTextAlignment(HA_CENTER);
-        casinoWheelText_->SetPosition(cx + S(50), cy + S(150));
+        casinoWheelText_->SetPosition(cx + S(50), cy + S(136));
         casinoWheelText_->SetWidth(cw - S(100));
         casinoWheelText_->SetColor(Color(1.0f, 0.90f, 0.48f, 1.0f));
         StyleCrispText(casinoWheelText_, true);
 
+        casinoHistoryText_ = casinoPanel_->CreateChild<Text>();
+        casinoHistoryText_->SetFont(font_, SF(15));
+        casinoHistoryText_->SetTextAlignment(HA_CENTER);
+        casinoHistoryText_->SetPosition(cx + S(40), cy + S(186));
+        casinoHistoryText_->SetWidth(cw - S(80));
+        casinoHistoryText_->SetColor(Color(0.75f, 0.88f, 0.82f, 0.95f));
+        StyleCrispText(casinoHistoryText_);
+
         casinoResultText_ = casinoPanel_->CreateChild<Text>();
         casinoResultText_->SetFont(font_, SF(18));
         casinoResultText_->SetTextAlignment(HA_CENTER);
-        casinoResultText_->SetPosition(cx + S(55), cy + S(218));
+        casinoResultText_->SetPosition(cx + S(55), cy + S(224));
         casinoResultText_->SetWidth(cw - S(110));
         casinoResultText_->SetColor(Color(0.72f, 0.80f, 0.88f, 1.0f));
         StyleCrispText(casinoResultText_);
@@ -9375,7 +9552,7 @@ private:
         casinoChipButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42) + bw + gap, row1, bw, bh, "РАЗМЕР ФИШКИ [A/D]", Color(0.10f, 0.20f, 0.30f, 0.98f)));
         casinoNumberButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42) + (bw + gap) * 2, row1, bw, bh, "ЧИСЛО [W/S]", Color(0.16f, 0.25f, 0.14f, 0.98f)));
 
-        casinoSpinButton_ = SharedPtr<BorderImage>(makeButton(cx + S(190), cy + S(390), cw - S(380), S(58), "ПРОКРУТИТЬ РУЛЕТКУ [ENTER / SPACE]", Color(0.64f, 0.38f, 0.08f, 0.98f)));
+        casinoSpinButton_ = SharedPtr<BorderImage>(makeButton(cx + S(190), cy + S(390), cw - S(380), S(58), "КРУТИТЬ БАРАБАН [ENTER / SPACE]", Color(0.64f, 0.38f, 0.08f, 0.98f)));
         casinoTopupButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42), cy + S(470), bw, bh, "+5000 ФИШЕК", Color(0.12f, 0.32f, 0.22f, 0.98f)));
         casinoCloseButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42) + bw + gap, cy + S(470), bw * 2 + gap, bh, "НАЗАД В ГЛАВНОЕ МЕНЮ [ESC]", Color(0.16f, 0.16f, 0.20f, 0.98f)));
 
@@ -9389,8 +9566,8 @@ private:
 
         casinoHelpText_ = casinoPanel_->CreateChild<Text>();
         casinoHelpText_->SetFont(font_, SF(14));
-        casinoHelpText_->SetText("Q/E — тип ставки   •   A/D — размер фишки   •   W/S — число 0..36   •   R — случайное число\n"
-                                 "Прямые ставки: ×2   •   дюжина/колонка: ×3   •   сплит/стрит/корнер/сикс-лайн: ×18/×12/×8/×6   •   число: ×36");
+        casinoHelpText_->SetText("TAB — Рулетка / Слоты 777  •  Q/E — ставка  •  A/D — размер фишки  •  W/S — число 0..36\n"
+                                 "Рулетка: до ×36   •   Кибер-Слоты 777: пара ×2..3, три символа ×4..×20, джекпот 777 = ×50");
         casinoHelpText_->SetTextAlignment(HA_CENTER);
         casinoHelpText_->SetPosition(cx + S(30), cy + S(570));
         casinoHelpText_->SetWidth(cw - S(60));
@@ -9442,14 +9619,45 @@ private:
             return;
         }
         casinoBalance_ -= casinoBet_.amount;
-        casinoPendingResult_ = rand() % 37;
-        casinoSpinTimer_ = 2.8f;
+        if (casinoSlotsMode_) {
+            for (int r = 0; r < 3; ++r)
+                slotPendingReels_[r] = rand() % Casino::SYM_COUNT;
+            casinoSpinTimer_ = 1.6f;
+        } else {
+            casinoPendingResult_ = rand() % 37;
+            casinoSpinTimer_ = 2.8f;
+        }
         PlayUISound();
         UpdateCasinoVisuals();
     }
 
     void FinishCasinoSpin() {
+        if (casinoSlotsMode_) {
+            for (int r = 0; r < 3; ++r) slotReels_[r] = slotPendingReels_[r];
+            int payout = Casino::SlotsPayout(casinoBet_.amount, slotReels_[0], slotReels_[1], slotReels_[2]);
+            if (payout > 0) {
+                casinoBalance_ += payout;
+                ++casinoWins_;
+                casinoResultText_->SetText(
+                    (slotReels_[0] == Casino::SYM_SEVEN && slotReels_[1] == Casino::SYM_SEVEN && slotReels_[2] == Casino::SYM_SEVEN)
+                        ? ("ДЖЕКПОТ 777!! +" + String(payout) + " ¤")
+                        : ("ПОБЕДА НА СЛОТАХ! +" + String(payout) + " ¤"));
+                casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
+            } else {
+                ++casinoLosses_;
+                casinoResultText_->SetText("Мимо линии — крути ещё! Всё понарошку");
+                casinoResultText_->SetColor(Color(1.0f, 0.40f, 0.42f, 1.0f));
+            }
+            SaveSettingsFile();
+            PlayUISound();
+            UpdateCasinoVisuals();
+            return;
+        }
         casinoLastResult_ = casinoPendingResult_;
+        if (casinoLastResult_ >= 0) {
+            if ((unsigned)casinoHistory_.Size() >= 10u) casinoHistory_.Erase(0);
+            casinoHistory_.Push(casinoLastResult_);
+        }
         int payout = Casino::Payout(casinoBet_, casinoLastResult_);
         if (payout > 0) {
             casinoBalance_ += payout;
@@ -9479,6 +9687,12 @@ private:
     void HandleCasinoKey(int key) {
         if (casinoSpinTimer_ > 0.0f) return;
         if (key == KEY_ESCAPE || key == KEY_J) { CloseCasino(); return; }
+        if (key == KEY_TAB) {
+            casinoSlotsMode_ = !casinoSlotsMode_;
+            PlayUISound();
+            UpdateCasinoVisuals();
+            return;
+        }
         if (key == KEY_RETURN || key == KEY_SPACE) { StartCasinoSpin(); return; }
         if (key == KEY_Q || key == KEY_LEFT) {
             int t = (static_cast<int>(casinoBet_.type) + Casino::BET_COUNT - 1) % Casino::BET_COUNT;
@@ -9515,6 +9729,10 @@ private:
         auto* input = GetSubsystem<Input>();
         if (!input || casinoSpinTimer_ > 0.0f) return;
         IntVector2 mp = input->GetMousePosition();
+        if (HitUIElement(casinoModeButton_.Get(), mp)) {
+            casinoSlotsMode_ = !casinoSlotsMode_;
+            PlayUISound(); UpdateCasinoVisuals(); return;
+        }
         if (HitUIElement(casinoSpinButton_.Get(), mp)) { StartCasinoSpin(); return; }
         if (HitUIElement(casinoBetButton_.Get(), mp)) {
             int t = (static_cast<int>(casinoBet_.type) + 1) % Casino::BET_COUNT;
@@ -9538,10 +9756,12 @@ private:
 
     void ResetBanyaUIPointers() {
         banyaParticles_.Clear();
+        banyaSnowMotes_.Clear();
         banyaPanel_ = nullptr; banyaSceneBox_ = nullptr;
         banyaRiddleBox_ = nullptr; banyaEndBox_ = nullptr; banyaStatsBox_ = nullptr;
         banyaHeatWash_ = nullptr; banyaAirWash_ = nullptr; banyaColdWash_ = nullptr; banyaEndTint_ = nullptr;
         banyaStoveFire_ = nullptr; banyaStonesGlow_ = nullptr; banyaVenikVis_ = nullptr;
+        banyaThermoFill_ = nullptr;
         banyaRoosterBody_ = nullptr; banyaRoosterComb_ = nullptr; banyaRoosterCrown_ = nullptr;
         banyaRoosterEyesText_ = nullptr;
         banyaTempText_ = nullptr; banyaMoodText_ = nullptr; banyaClockText_ = nullptr;
@@ -9686,6 +9906,29 @@ private:
         winGlass->SetPosition(S(6), S(6));
         winGlass->SetSize(winFrame->GetWidth() - S(12), winFrame->GetHeight() - S(12));
         winGlass->SetColor(Color(0.72f, 0.86f, 0.94f, 1.0f));
+        winGlass->SetClipChildren(true);
+        banyaSnowMotes_.Clear();
+        for (int sf = 0; sf < 8; ++sf) {
+            BorderImage* mote = winGlass->CreateChild<BorderImage>();
+            int sz = Max(2, S(3 + (sf % 3)));
+            mote->SetSize(sz, sz);
+            mote->SetColor(Color(0.96f, 0.99f, 1.0f, 0.82f));
+            mote->SetPosition((sf * winGlass->GetWidth()) / 8, (sf * 29) % Max(16, winGlass->GetHeight()));
+            banyaSnowMotes_.Push(SharedPtr<BorderImage>(mote));
+        }
+
+        // Настенный градусник пара между окном и печью
+        BorderImage* thermoFrame = banyaSceneBox_->CreateChild<BorderImage>();
+        thermoFrame->SetPosition((int)(scW * 0.705f), (int)(scH * 0.16f));
+        thermoFrame->SetSize(S(18), (int)(scH * 0.24f));
+        thermoFrame->SetColor(Color(0.24f, 0.14f, 0.07f, 0.95f));
+        BorderImage* thermoTrack = thermoFrame->CreateChild<BorderImage>();
+        thermoTrack->SetPosition(S(5), S(6));
+        thermoTrack->SetSize(S(8), thermoFrame->GetHeight() - S(12));
+        thermoTrack->SetColor(Color(0.09f, 0.06f, 0.04f, 0.95f));
+        banyaThermoFill_ = thermoTrack->CreateChild<BorderImage>();
+        banyaThermoFill_->SetSize(S(8), S(20));
+        banyaThermoFill_->SetColor(Color(0.95f, 0.35f, 0.16f, 1.0f));
 
         // Каменная печь слева + труба + топка + камни
         BorderImage* pipe = banyaSceneBox_->CreateChild<BorderImage>();
@@ -10380,6 +10623,27 @@ private:
         setBar(banyaBarLife_.Get(),  banyaSim_.life / 100.0f, S(126));
         setBar(banyaBarTime_.Get(),  banyaSim_.left / Banya::DURATION, S(154));
 
+        // Настенный термометр + падающие снежинки за окном
+        if (banyaThermoFill_ && banyaThermoFill_->GetParent()) {
+            int fullH = banyaThermoFill_->GetParent()->GetHeight();
+            float tr = Clamp((banyaSim_.temp - 40.0f) / 85.0f, 0.06f, 1.0f);
+            int fillH = Clamp((int)(fullH * tr), 2, fullH);
+            banyaThermoFill_->SetPosition(0, fullH - fillH);
+            banyaThermoFill_->SetSize(banyaThermoFill_->GetWidth(), fillH);
+            banyaThermoFill_->SetColor(banyaSim_.temp > 98.0f ? Color(1.0f, 0.25f, 0.15f, 1.0f)
+                                     : banyaSim_.temp < 62.0f ? Color(0.32f, 0.78f, 1.0f, 1.0f)
+                                                              : Color(0.98f, 0.62f, 0.20f, 1.0f));
+        }
+        for (unsigned i = 0; i < (unsigned)banyaSnowMotes_.Size(); ++i) {
+            BorderImage* m = banyaSnowMotes_[i].Get();
+            if (!m || !m->GetParent()) continue;
+            int gw = Max(16, m->GetParent()->GetWidth());
+            int gh = Max(16, m->GetParent()->GetHeight());
+            float fy = fmodf(timeAcc_ * (18.0f + (float)(i % 3) * 9.0f) + (float)i * 23.0f, (float)gh);
+            int fx = (int)(((float)i + 0.5f) * (float)gw / (float)banyaSnowMotes_.Size() + sinf(timeAcc_ * 1.4f + (float)i) * 5.0f);
+            m->SetPosition(Clamp(fx, 0, gw - m->GetWidth()), (int)fy);
+        }
+
         // Свечение печи и камней от температуры
         if (banyaStonesGlow_) {
             float hot = Clamp((banyaSim_.temp - 80.0f) / 32.0f, 0.0f, 1.0f);
@@ -10615,18 +10879,19 @@ private:
         arcadeScoreText_->SetColor(Color(0.32f, 0.96f, 0.92f, 1.0f));
         StyleCrispText(arcadeScoreText_);
 
-        // 4 вкладки выбора игры ([1..4]) + кнопки Рестарт [R] и Назад [ESC]
-        static const char* kTabs[6] = {
-            "[1] ЗМЕЙКА", "[2] АРКАНОИД", "[3] КУРО-РАН", "[4] PONG", "[R] ЗАНОВО", "[ESC] НАЗАД"
+        // 6 вкладок выбора игры ([1..6]) + кнопки Рестарт [R] и Назад [ESC]
+        static const char* kTabs[8] = {
+            "[1] ЗМЕЙКА", "[2] АРКАНОИД", "[3] КУРО-РАН", "[4] PONG",
+            "[5] FLAPPY", "[6] ТЕТРИС", "[R] ЗАНОВО", "[ESC] НАЗАД"
         };
-        int tabW = (pw - S(40) - S(25)) / 6;
-        for (int i = 0; i < 6; ++i) {
+        int tabW = (pw - S(40) - S(35)) / 8;
+        for (int i = 0; i < 8; ++i) {
             BorderImage* tb = arcadePanel_->CreateChild<BorderImage>();
             tb->SetPosition(px + S(20) + i * (tabW + S(5)), py + S(52));
             tb->SetSize(tabW, S(34));
             tb->SetColor(Color(0.14f, 0.12f, 0.32f, 0.95f));
             Text* tt = tb->CreateChild<Text>();
-            tt->SetFont(font_, SF(13));
+            tt->SetFont(font_, SF(12));
             tt->SetText(kTabs[i]);
             tt->SetAlignment(HA_CENTER, VA_CENTER);
             tt->SetColor(Color(0.95f, 0.95f, 1.0f, 1.0f));
@@ -10663,7 +10928,7 @@ private:
 
     void SyncArcadeUI() {
         if (!arcadePanel_ || !arcadeCanvas_) return;
-        for (unsigned i = 0; i < 4 && i < (unsigned)arcadeGameTabs_.Size(); ++i) {
+        for (unsigned i = 0; i < 6u && i < (unsigned)arcadeGameTabs_.Size(); ++i) {
             bool act = ((int)i == (int)arcadeSim_.kind);
             arcadeGameTabs_[i]->SetColor(act ? Color(0.86f, 0.22f, 0.58f, 0.98f) : Color(0.14f, 0.12f, 0.32f, 0.95f));
         }
@@ -10675,7 +10940,7 @@ private:
                                       "  |  " + String(GetMiniAppWallet(arcadeFromMenu_)) + " ¤");
         }
         if (arcadeHintText_)
-            arcadeHintText_->SetText(String(Arcade::PixelArcadeSim::GameControls(arcadeSim_.kind)) + "  •  [R] Заново  •  [ESC] Выход");
+            arcadeHintText_->SetText(String(Arcade::PixelArcadeSim::GameControls(arcadeSim_.kind)) + "  •  [1..6] Игра  •  [R] Заново  •  [ESC] Выход");
 
         if (arcadeOverlayText_) {
             if (arcadeSim_.over) {
@@ -10683,7 +10948,7 @@ private:
                 arcadeOverlayText_->SetText((arcadeSim_.won ? "ПОБЕДА! " : "ИГРА ОКОНЧЕНА! ") +
                                             String("СЧЕТ: ") + String(arcadeSim_.score) +
                                             (bonus > 0 ? (" (+" + String(bonus) + " ¤)") : String()) +
-                                            "\n[R] — сыграть ещё   •   [1..4] — другая игра");
+                                            "\n[R] — сыграть ещё   •   [1..6] — другая игра");
                 arcadeOverlayText_->SetVisible(true);
             } else if (arcadeSim_.paused) {
                 arcadeOverlayText_->SetText("ПАУЗА\nНажмите [SPACE] чтобы продолжить");
@@ -10753,7 +11018,7 @@ private:
 
     void HandleArcadeKey(int key) {
         if (key == KEY_ESCAPE || key == KEY_K) { CloseArcade(); return; }
-        if (key >= (int)KEY_1 && key <= (int)KEY_4) {
+        if (key >= (int)KEY_1 && key <= (int)KEY_6) {
             arcadeSim_.Reset((Arcade::ArcadeGameKind)(key - (int)KEY_1));
             PlayUISound();
             SyncArcadeUI();
@@ -10763,12 +11028,32 @@ private:
         if (key == KEY_SPACE) {
             if (arcadeSim_.kind == Arcade::GAME_DINO && !arcadeSim_.over) {
                 // В Куро-Ране SPACE — прыжок!
+            } else if (arcadeSim_.kind == Arcade::GAME_FLAPPY && !arcadeSim_.over) {
+                arcadeSim_.FlappyFlap();
+                return;
+            } else if (arcadeSim_.kind == Arcade::GAME_TETRIS && !arcadeSim_.over && !arcadeSim_.paused) {
+                arcadeSim_.TetrisHardDrop();
+                PlayUISound();
+                SyncArcadeUI();
+                return;
             } else {
                 arcadeSim_.paused = !arcadeSim_.paused;
                 PlayUISound();
                 SyncArcadeUI();
                 return;
             }
+        }
+        if (arcadeSim_.kind == Arcade::GAME_FLAPPY && !arcadeSim_.over) {
+            if (key == KEY_W || key == KEY_UP) {
+                arcadeSim_.FlappyFlap();
+                return;
+            }
+        }
+        // Дискретные ходы в Кибер-Тетрисе
+        if (arcadeSim_.kind == Arcade::GAME_TETRIS) {
+            if (key == KEY_LEFT || key == KEY_A) { arcadeSim_.TetrisMove(-1); SyncArcadeUI(); return; }
+            if (key == KEY_RIGHT || key == KEY_D) { arcadeSim_.TetrisMove(1); SyncArcadeUI(); return; }
+            if (key == KEY_UP || key == KEY_W) { arcadeSim_.TetrisRotate(); PlayUISound(); SyncArcadeUI(); return; }
         }
         // Повороты змейки фиксируем мгновенно по нажатию клавиши
         if (arcadeSim_.kind == Arcade::GAME_SNAKE) {
@@ -10785,11 +11070,14 @@ private:
         IntVector2 mp = input->GetMousePosition();
         for (unsigned i = 0; i < (unsigned)arcadeGameTabs_.Size(); ++i) {
             if (HitUIElement(arcadeGameTabs_[i].Get(), mp)) {
-                if (i < 4) { arcadeSim_.Reset((Arcade::ArcadeGameKind)i); PlayUISound(); SyncArcadeUI(); }
-                else if (i == 4) { arcadeSim_.Reset(arcadeSim_.kind); PlayUISound(); SyncArcadeUI(); }
-                else if (i == 5) { CloseArcade(); }
+                if (i < 6u) { arcadeSim_.Reset((Arcade::ArcadeGameKind)i); PlayUISound(); SyncArcadeUI(); }
+                else if (i == 6u) { arcadeSim_.Reset(arcadeSim_.kind); PlayUISound(); SyncArcadeUI(); }
+                else if (i == 7u) { CloseArcade(); }
                 return;
             }
+        }
+        if (arcadeSim_.kind == Arcade::GAME_FLAPPY && HitUIElement(arcadeCanvas_.Get(), mp)) {
+            arcadeSim_.FlappyFlap();
         }
     }
 
