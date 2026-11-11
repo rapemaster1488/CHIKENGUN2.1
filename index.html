@@ -45,11 +45,11 @@
   }
   @keyframes scanDrift { from { transform: translateY(0); } to { transform: translateY(100px); } }
   .boot-scanband {
-    position: absolute; left: 0; right: 0; height: 140px; z-index: 1; pointer-events: none;
+    position: absolute; left: 0; right: 0; top: 0; height: 140px; z-index: 1; pointer-events: none; will-change: transform;
     background: linear-gradient(180deg, transparent, rgba(46,242,255,0.16) 42%, rgba(255,255,255,0.30) 50%, rgba(46,242,255,0.16) 58%, transparent);
     filter: blur(1px); animation: scanBand 4.6s cubic-bezier(0.45,0,0.25,1) infinite;
   }
-  @keyframes scanBand { 0% { top: -22%; opacity: 0; } 12% { opacity: 1; } 55% { opacity: 1; } 100% { top: 122%; opacity: 0; } }
+  @keyframes scanBand { 0% { transform: translateY(-180px); opacity: 0; } 12% { opacity: 1; } 55% { opacity: 1; } 100% { transform: translateY(115vh); opacity: 0; } }
 
   /* гекс-сетка фона */
   .boot-fx-grid {
@@ -364,6 +364,11 @@
     border: 10px solid transparent; border-top-color: rgba(255, 64, 80, 0.95);
     clip-path: polygon(16% 0, 84% 0, 71% 30%, 29% 30%);
     filter: blur(0.6px) drop-shadow(0 0 14px rgba(255, 64, 80, 0.8)); }
+  /* 2.5: экран фатальной ошибки движка (WebGL2 недоступен и т.п.) */
+  #bootFatal { position: fixed; inset: 0; z-index: 300; display: flex; align-items: center; justify-content: center; background: rgba(2, 6, 14, 0.94); }
+  .boot-fatal-box { max-width: 600px; background: rgba(12, 20, 38, 0.96); border: 1px solid #ff3b4e; border-radius: 12px; padding: 26px 30px; color: #ffd9de; font-size: 14px; line-height: 1.65; box-shadow: 0 0 60px rgba(255, 59, 78, 0.25); text-align: center; }
+  .boot-fatal-box h2 { color: #ff3b4e; font-size: 22px; margin-bottom: 12px; letter-spacing: 0.05em; }
+  .boot-fatal-hint { color: #9fb9d8; font-size: 13px; margin-top: 10px; }
   /* 2.5: блик по открытым достижениям */
   .sfx-btn.ach-on { position: relative; overflow: hidden; }
   .sfx-btn.ach-on::after { content: ""; position: absolute; top: -25%; bottom: -25%; left: -70px; width: 46px; pointer-events: none;
@@ -1015,6 +1020,20 @@
 
   let engine = null;
   let lastWepIdx = -1, dmgDirT = null;
+  function showBootError(msg) {
+    const esc = String(msg || "неизвестная ошибка").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    try {
+      const bs = document.getElementById("bootScreen");
+      if (bs) bs.style.display = "none";
+      const d = document.createElement("div");
+      d.id = "bootFatal";
+      d.innerHTML = `<div class="boot-fatal-box"><h2>⚠ ДВИЖОК НЕ ЗАПУСТИЛСЯ</h2>
+        <p>${esc}</p>
+        <p class="boot-fatal-hint">Обычно это отсутствие WebGL2 или запрет аппаратного ускорения.<br>
+        Попробуй: <b>Ctrl+F5</b> (полный рефреш) • «Использовать аппаратное ускорение» в настройках браузера • открыть в <b>Chrome / Edge / Firefox</b> • F12 → Console, чтобы увидеть ошибку.</p></div>`;
+      document.body.appendChild(d);
+    } catch (_) {}
+  }
   function refreshPerks() {
     if (!engine) return;
     const S = engine.state;
@@ -1030,6 +1049,7 @@
     });
   }
   function buyPerk(i) {
+    if (!engine) return;
     const S = engine.state, lvl = S.perks[i], cost = 75 + lvl * 65;
     if (lvl >= 5 || S.credits < cost) { playSfx("EmptyClick.wav", 0.6); return; }
     S.credits -= cost; S.perks[i]++;
@@ -1114,7 +1134,8 @@
     if (sensValLabel) sensValLabel.textContent = pct + "%";
   }
 
-  engine = window.StartChikenGunWebGL2({
+  try {
+    engine = window.StartChikenGunWebGL2({
     playSfx, pushFeed, showBanner, showToast, cycleMusic,
     isPlaying: () => playing,
     isPerkModalOpen: () => document.getElementById("perkModal").classList.contains("open"),
@@ -1123,7 +1144,7 @@
     exitArenaToMenu: () => {
       playing = false;
       document.body.classList.remove("playing");
-      renderAchievements(engine.state.achiev);
+      renderAchievements(engine ? engine.state.achiev : 0);
       refreshBanyaMenuStatus();
     },
     onSensChange: syncSensUI,
@@ -1274,9 +1295,18 @@
       radarCtx.fillText("T-SCAN 1.3", 6, 140); radarCtx.globalAlpha = 1;
     }
   });
+  } catch (bootErr) {
+    engine = null;
+    console.error("[CHIKENGUN] движок не запустился:", bootErr);
+    showBootError((bootErr && bootErr.message) ? bootErr.message : String(bootErr));
+  }
 
-  renderAchievements(engine.state.achiev);
-  refreshBanyaMenuStatus();
+  if (engine) {
+    renderAchievements(engine.state.achiev);
+    refreshBanyaMenuStatus();
+  } else {
+    renderAchievements(0);
+  }
 
   document.querySelectorAll(".tab-btn[data-tab]").forEach(btn => {
     btn.addEventListener("click", () => switchTab(btn.dataset.tab));
@@ -1286,6 +1316,7 @@
     const d = ev.data;
     if (!d || typeof d !== "object") return;
     if (d.type === "cg-banya-reward") {
+      if (!engine) return;                    // движок не поднялся — нечего награждать
       engine.applyBanyaReward(d);
       renderAchievements(engine.state.achiev);
       refreshBanyaMenuStatus();
@@ -1299,10 +1330,10 @@
   });
 
   const glCanvas = document.getElementById("glCanvas");
-  syncSensUI(engine.state.sensMul || 1.0);
+  if (engine) syncSensUI(engine.state.sensMul || 1.0);
   if (sensSlider) {
     sensSlider.addEventListener("input", () => {
-      engine.setSensitivity(Number(sensSlider.value) / 100, false);
+      if (engine) engine.setSensitivity(Number(sensSlider.value) / 100, false);
     });
   }
 
@@ -1324,24 +1355,25 @@
   });
 
   document.getElementById("startArenaBtn").onclick = () => {
+    if (!engine) { showBootError("Движок не загрузился — играть не во что. Смотри консоль (F12)."); return; }
     playing = true; document.body.classList.add("playing");
     engine.requestLockSmart();
     if (musicIdx === -1) cycleMusic();
   };
   document.getElementById("openBanyaMenuBtn").onclick = openBanyaView;
   glCanvas.addEventListener("click", () => {
-    if (playing && !document.pointerLockElement && !document.getElementById("perkModal").classList.contains("open"))
+    if (engine && playing && !document.pointerLockElement && !document.getElementById("perkModal").classList.contains("open"))
       engine.requestLockSmart();
   });
   document.addEventListener("pointerlockchange", () => {
     if (!document.pointerLockElement && !document.getElementById("perkModal").classList.contains("open")) {
       playing = false; document.body.classList.remove("playing");
-      renderAchievements(engine.state.achiev);
+      renderAchievements(engine ? engine.state.achiev : 0);
     }
   });
   document.getElementById("closePerkBtn").onclick = togglePerkModal;
   document.getElementById("perkMenuBtn").onclick = togglePerkModal;
-  document.getElementById("atmMenuBtn").onclick = () => engine.cycleAtmosphere();
+  document.getElementById("atmMenuBtn").onclick = () => { if (engine) engine.cycleAtmosphere(); };
   document.getElementById("musicMenuBtn").onclick = cycleMusic;
 })();
 </script>
