@@ -84,6 +84,7 @@
 #include <Urho3D/UI/UI.h>
 #include <Urho3D/UI/UIElement.h>
 #include <Urho3D/UI/BorderImage.h>
+#include <Urho3D/UI/Sprite.h>
 #include <Urho3D/UI/Text.h>
 #include <Urho3D/UI/Font.h>
 
@@ -1103,6 +1104,17 @@ private:
     Vector<SharedPtr<Text>> splashGlyphs_;         // посимвольно: ни одного скачка
     Vector<Vector2> splashGlyphBase_;              // абсолютные базовые позиции глифов
     Vector<i32> splashGlyphIndex_;                 // исходные индексы глифов (волна задержки)
+    // Падающие осенние листья (интро + загрузочный экран) и ударная волна
+    struct SplashLeaf {
+        float x, y, speed, sway, phase, rot, rotSpeed, size, alpha;
+        int tintIdx;
+    };
+    Vector<SharedPtr<Sprite>> splashLeaves_;
+    Vector<SplashLeaf> splashLeafAnim_;
+    Vector<SharedPtr<Sprite>> loadingLeaves_;
+    Vector<SplashLeaf> loadingLeafAnim_;
+    SharedPtr<BorderImage> splashRing_;
+    float splashRingT_ = -1.0f;
 
     // Быстрый загрузочный оверлей десантирования при входе в режим (АРЕНА / ТИР)
     bool deployActive_ = false;
@@ -6833,6 +6845,18 @@ private:
             loadingBgImg_->SetColor(Color(0.015f, 0.025f, 0.055f, 1.0f));
         }
 
+        // Виньетка поверх 4K-арта (тёмные углы, как в кино)
+        BorderImage* loadVig = loadingPanel_->CreateChild<BorderImage>("LoadingVignette");
+        if (Texture2D* vigTex = cache->GetResource<Texture2D>("Textures/SplashVignette.png")) {
+            vigTex->SetFilterMode(FILTER_TRILINEAR);
+            loadVig->SetTexture(vigTex);
+        }
+        loadVig->SetSize(sw, sh);
+        loadVig->SetColor(Color(1.0f, 1.0f, 1.0f, 0.88f));
+
+        // Опавшие листья на загрузочном экране
+        SpawnLeaves(loadingPanel_, loadingLeaves_, loadingLeafAnim_, 12, sw, sh, true);
+
         // 2) Кинематографические letterbox-полосы сверху и снизу + центральная стеклянная карточка
         BorderImage* topBar = loadingPanel_->CreateChild<BorderImage>();
         topBar->SetPosition(0, 0);
@@ -7000,6 +7024,9 @@ private:
     // чтобы игрок видел настоящую плавную загрузку без зависания окна!
     void UpdateBootLoading(float dt) {
         bootStageTimer_ += dt;
+        UpdateLeaves(dt, loadingLeaves_, loadingLeafAnim_,
+                     GetSubsystem<Graphics>()->GetWidth(),
+                     GetSubsystem<Graphics>()->GetHeight(), 0.9f);
         if (loadingTitleText_) {
             float p = 0.86f + 0.14f * sinf(timeAcc_ * 3.5f);
             loadingTitleText_->SetColor(Color(1.0f, 0.86f * p, 0.25f * p, 1.0f));
@@ -7074,6 +7101,8 @@ private:
             loadingPanel_->Remove();
             loadingPanel_ = nullptr;
         }
+        loadingLeaves_.Clear();
+        loadingLeafAnim_.Clear();
         loadingBgImg_ = nullptr;
         loadingTitleText_ = nullptr;
         loadingSubText_ = nullptr;
@@ -7181,6 +7210,7 @@ private:
         } else {
             splashFullText_ = "CHICHKENCUM 2.1";
             ClearSplashGlyphs();
+            splashRingT_ = 0.0f;   // ударная волна!
             if (splashText_) {
                 splashText_->SetVisible(true);
                 splashText_->SetFont(font_, SF(96));
@@ -7190,6 +7220,65 @@ private:
                 splashText_->SetWidth(sw);
                 splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
             }
+        }
+    }
+
+    // Опавшие листья: медленно падают, покачиваясь, с вращением
+    void SpawnLeaves(UIElement* parent, Vector<SharedPtr<Sprite>>& out,
+                     Vector<SplashLeaf>& anim, int count, int sw, int sh, bool scatterY) {
+        out.Clear();
+        anim.Clear();
+        auto* cache = GetSubsystem<ResourceCache>();
+        if (!parent) return;
+        Texture2D* tex = cache ? cache->GetResource<Texture2D>("Textures/SplashLeaf.png") : nullptr;
+        for (int i = 0; i < count; ++i) {
+            SplashLeaf L;
+            L.x = (float)(rand() % sw);
+            L.y = scatterY ? (float)(rand() % sh) : -(float)(30 + rand() % 220);
+            L.speed = 24.0f + (float)(rand() % 36);          // 24..60 px/s — задумчиво
+            L.sway = 26.0f + (float)(rand() % 40);
+            L.phase = (float)(rand() % 1000) / 1000.0f * 6.2831853f;
+            L.rot = (float)(rand() % 360);
+            L.rotSpeed = ((rand() % 2) ? 1.0f : -1.0f) * (16.0f + (float)(rand() % 38));
+            L.size = (float)S(17 + rand() % 15);
+            L.alpha = 0.55f + (float)(rand() % 40) / 100.0f;  // 0.55..0.95
+            L.tintIdx = rand() % 3;
+            SharedPtr<Sprite> leaf(parent->CreateChild<Sprite>());
+            if (tex) { leaf->SetTexture(tex); leaf->SetFullImageRect(); }
+            leaf->SetSize((int)L.size, (int)L.size);
+            leaf->SetHotSpot((int)L.size / 2, (int)L.size / 2);
+            leaf->SetPosition(L.x, L.y);
+            leaf->SetRotation(L.rot);
+            leaf->SetColor(Color(1.0f, 0.6f, 0.2f, 0.0f));
+            out.Push(leaf);
+            anim.Push(L);
+        }
+    }
+
+    void UpdateLeaves(float dt, Vector<SharedPtr<Sprite>>& leaves,
+                      Vector<SplashLeaf>& anim, int sw, int sh, float alphaMul) {
+        static const Color kTints[3] = {
+            Color(1.00f, 0.53f, 0.15f, 1.0f),   // рыжий
+            Color(0.96f, 0.70f, 0.17f, 1.0f),   // янтарь
+            Color(0.80f, 0.30f, 0.17f, 1.0f),   // багряный
+        };
+        for (unsigned i = 0; i < leaves.Size(); ++i) {
+            SplashLeaf& L = anim[i];
+            L.y += L.speed * dt;
+            L.phase += dt * 1.05f;
+            L.rot += L.rotSpeed * dt;
+            if (L.y > sh + 48.0f) {
+                L.y = -(float)(36 + rand() % 140);
+                L.x = (float)(rand() % sw);
+            }
+            if (L.x < -60.0f) L.x = (float)sw + 40.0f;
+            else if (L.x > sw + 60.0f) L.x = -40.0f;
+            const float swayX = sinf(L.phase) * L.sway;
+            Color tint = kTints[L.tintIdx];
+            tint.a_ = L.alpha * alphaMul;
+            leaves[i]->SetPosition(L.x + swayX, L.y);
+            leaves[i]->SetRotation(L.rot);
+            leaves[i]->SetColor(tint);
         }
     }
 
@@ -7208,9 +7297,22 @@ private:
         splashPanel_->SetSize(sw, sh);
         splashPanel_->SetPriority(1200);   // поверх загрузочного экрана (1000)
 
+        // Почти чёрный, но сквозь него дышит 4K-арт загрузочного экрана
         BorderImage* bg = splashPanel_->CreateChild<BorderImage>();
         bg->SetSize(sw, sh);
-        bg->SetColor(Color(0.0f, 0.0f, 0.0f, 1.0f));
+        bg->SetColor(Color(0.004f, 0.010f, 0.026f, 0.86f));
+
+        // Виньетка — киношные тёмные углы
+        BorderImage* vig = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* vigTex = cache->GetResource<Texture2D>("Textures/SplashVignette.png")) {
+            vigTex->SetFilterMode(FILTER_TRILINEAR);
+            vig->SetTexture(vigTex);
+        }
+        vig->SetSize(sw, sh);
+        vig->SetColor(Color(1.0f, 1.0f, 1.0f, 0.85f));
+
+        // Опавшие листья за надписью
+        SpawnLeaves(splashPanel_, splashLeaves_, splashLeafAnim_, 15, sw, sh, true);
 
         // Неоновое свечение за надписью (под текстом и линией)
         splashGlow_ = splashPanel_->CreateChild<BorderImage>();
@@ -7236,6 +7338,18 @@ private:
         splashSheen_->SetColor(Color(1.0f, 0.94f, 0.78f, 0.0f));
         splashSheen_->SetSize(S(190), S(46));
         splashSheen_->SetPosition(-S(400), sh / 2 - S(24));
+
+        // Ударная волна на «CHICHKENCUM 2.1» (additive кольцо)
+        splashRing_ = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* ringTex = cache->GetResource<Texture2D>("Textures/SplashRing.png")) {
+            ringTex->SetFilterMode(FILTER_TRILINEAR);
+            splashRing_->SetTexture(ringTex);
+        }
+        splashRing_->SetBlendMode(BLEND_ADD);
+        splashRing_->SetColor(Color(1.0f, 0.84f, 0.35f, 0.0f));
+        splashRing_->SetSize(S(90), S(90));
+        splashRing_->SetPosition(sw / 2 - S(45), sh / 2 - S(45));
+        splashRingT_ = -1.0f;
 
         // Скрытый измеритель ширины (нужны точные позиции глифов)
         splashMeasure_ = splashPanel_->CreateChild<Text>();
@@ -7286,6 +7400,10 @@ private:
         if (splashPanel_) { splashPanel_->Remove(); splashPanel_ = nullptr; }
         splashText_ = nullptr;
         splashMeasure_ = nullptr;
+        splashLeaves_.Clear();
+        splashLeafAnim_.Clear();
+        splashRing_ = nullptr;
+        splashRingT_ = -1.0f;
         splashGlyphs_.Clear();
         splashGlyphBase_.Clear();
         splashGlyphIndex_.Clear();
@@ -7359,6 +7477,25 @@ private:
             Color sc = base; sc.a_ = globalAlpha;
             splashText_->SetColor(sc);
             splashText_->SetPosition(0, SplashTextY(2) + S(14) + (int)floatOff + (int)breathe);
+        }
+
+        // ---- опавшие листья медленно падают за надписью
+        UpdateLeaves(dt, splashLeaves_, splashLeafAnim_, sw, sh, 0.5f + 0.5f * globalAlpha);
+
+        // ---- ударная волна от SLAM-а CHICHKENCUM
+        if (splashRing_ && splashRingT_ >= 0.0f) {
+            splashRingT_ += dt;
+            const float k = Clamp(splashRingT_ / 0.75f, 0.0f, 1.0f);
+            const float ease = 1.0f - powf(1.0f - k, 3.0f);
+            const int size = (int)(S(90) + (S(760) - S(90)) * ease);
+            splashRing_->SetPosition(sw / 2 - size / 2, sh / 2 - size / 2 + (int)(floatOff * 0.5f));
+            splashRing_->SetSize(size, size);
+            Color rc(1.0f, 0.84f, 0.35f, (1.0f - k) * 0.85f);
+            splashRing_->SetColor(rc);
+            if (k >= 1.0f) {
+                splashRingT_ = -1.0f;
+                splashRing_->SetColor(Color(1.0f, 0.84f, 0.35f, 0.0f));
+            }
         }
 
         // ---- неоновое свечение за текстом (тинт стадии + мягкий пульс)
