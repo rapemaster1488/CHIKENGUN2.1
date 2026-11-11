@@ -84,6 +84,7 @@
 #include <Urho3D/UI/UI.h>
 #include <Urho3D/UI/UIElement.h>
 #include <Urho3D/UI/BorderImage.h>
+#include <Urho3D/UI/Sprite.h>
 #include <Urho3D/UI/Text.h>
 #include <Urho3D/UI/Font.h>
 
@@ -1099,6 +1100,21 @@ private:
     SharedPtr<BorderImage> splashGlow_;
     SharedPtr<BorderImage> splashSheen_;
     String splashFullText_;              // полный текст стадии (посимвольное открытие)
+    SharedPtr<Text> splashMeasure_;               // скрытый измеритель ширины строки
+    Vector<SharedPtr<Text>> splashGlyphs_;         // посимвольно: ни одного скачка
+    Vector<Vector2> splashGlyphBase_;              // абсолютные базовые позиции глифов
+    Vector<i32> splashGlyphIndex_;                 // исходные индексы глифов (волна задержки)
+    // Падающие осенние листья (интро + загрузочный экран) и ударная волна
+    struct SplashLeaf {
+        float x, y, speed, sway, phase, rot, rotSpeed, size, alpha;
+        int tintIdx;
+    };
+    Vector<SharedPtr<Sprite>> splashLeaves_;
+    Vector<SplashLeaf> splashLeafAnim_;
+    Vector<SharedPtr<Sprite>> loadingLeaves_;
+    Vector<SplashLeaf> loadingLeafAnim_;
+    SharedPtr<BorderImage> splashRing_;
+    float splashRingT_ = -1.0f;
 
     // Быстрый загрузочный оверлей десантирования при входе в режим (АРЕНА / ТИР)
     bool deployActive_ = false;
@@ -6829,6 +6845,18 @@ private:
             loadingBgImg_->SetColor(Color(0.015f, 0.025f, 0.055f, 1.0f));
         }
 
+        // Виньетка поверх 4K-арта (тёмные углы, как в кино)
+        BorderImage* loadVig = loadingPanel_->CreateChild<BorderImage>("LoadingVignette");
+        if (Texture2D* vigTex = cache->GetResource<Texture2D>("Textures/SplashVignette.png")) {
+            vigTex->SetFilterMode(FILTER_TRILINEAR);
+            loadVig->SetTexture(vigTex);
+        }
+        loadVig->SetSize(sw, sh);
+        loadVig->SetColor(Color(1.0f, 1.0f, 1.0f, 0.88f));
+
+        // Опавшие листья на загрузочном экране
+        SpawnLeaves(loadingPanel_, loadingLeaves_, loadingLeafAnim_, 12, sw, sh, true);
+
         // 2) Кинематографические letterbox-полосы сверху и снизу + центральная стеклянная карточка
         BorderImage* topBar = loadingPanel_->CreateChild<BorderImage>();
         topBar->SetPosition(0, 0);
@@ -6996,6 +7024,9 @@ private:
     // чтобы игрок видел настоящую плавную загрузку без зависания окна!
     void UpdateBootLoading(float dt) {
         bootStageTimer_ += dt;
+        UpdateLeaves(dt, loadingLeaves_, loadingLeafAnim_,
+                     GetSubsystem<Graphics>()->GetWidth(),
+                     GetSubsystem<Graphics>()->GetHeight(), 0.9f);
         if (loadingTitleText_) {
             float p = 0.86f + 0.14f * sinf(timeAcc_ * 3.5f);
             loadingTitleText_->SetColor(Color(1.0f, 0.86f * p, 0.25f * p, 1.0f));
@@ -7070,6 +7101,8 @@ private:
             loadingPanel_->Remove();
             loadingPanel_ = nullptr;
         }
+        loadingLeaves_.Clear();
+        loadingLeafAnim_.Clear();
         loadingBgImg_ = nullptr;
         loadingTitleText_ = nullptr;
         loadingSubText_ = nullptr;
@@ -7085,8 +7118,9 @@ private:
 
     // =========================================================================
     // 2.5.6 SPLASH INTRO — «koch.studios» → «powered by fall.os» → «CHICHKENCUM 2.1»
-    // Надписи выплывают снизу (easeOutExpo), открываются посимвольно, светятся,
-    // пробегает волна-блик; CHICHKENCUM наезжает размером с тряской.
+    // Надписи выплывают снизу (easeOutExpo), открываются СИМВОЛ ЗА СИМВОЛОМ
+    // (независимый Text на букву — никакой «печатающейся» перецентровки),
+    // неоновый glow-ореол, пробегающая световая волна-блик, CHICHKENCUM наезжает размером.
     // Скип: клик / Space / Enter / Esc.
     // =========================================================================
     int SplashLineY(int stage) const {
@@ -7120,28 +7154,131 @@ private:
         }
     }
 
+    void ClearSplashGlyphs() {
+        for (unsigned i = 0; i < splashGlyphs_.Size(); ++i) {
+            if (splashGlyphs_[i]) splashGlyphs_[i]->Remove();
+        }
+        splashGlyphs_.Clear();
+        splashGlyphBase_.Clear();
+        splashGlyphIndex_.Clear();
+    }
+
+    // Разметка глифов: скрытый «измеритель» даёт точные позиции без перецентровки
+    void BuildSplashGlyphs(int stage, int sw) {
+        ClearSplashGlyphs();
+        if (!splashMeasure_ || !splashPanel_) return;
+        const int fs = stage == 0 ? SF(36) : SF(27);
+        splashMeasure_->SetFont(font_, fs);
+        splashMeasure_->SetText(splashFullText_);
+        const int n = (int)splashFullText_.Length();
+        if (n <= 0) return;
+        const Vector2 lastPos = splashMeasure_->GetCharPosition(n - 1);
+        const Vector2 lastSize = splashMeasure_->GetCharSize(n - 1);
+        const float totalW = lastPos.x_ + lastSize.x_;
+        const float x0 = sw * 0.5f - totalW * 0.5f;
+        const float baseY = (float)SplashTextY(stage);
+        for (int i = 0; i < n; ++i) {
+            const char c = splashFullText_[i];
+            if (c == ' ') continue;   // пробел — пустое место, буквы и так стоят ровно
+            SharedPtr<Text> glyph(splashPanel_->CreateChild<Text>());
+            glyph->SetFont(font_, fs);
+            glyph->SetTextAlignment(HA_LEFT);
+            glyph->SetText(splashFullText_.Substring(i, 1));
+            glyph->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            const Vector2 pos = splashMeasure_->GetCharPosition(i);
+            glyph->SetPosition((int)(x0 + pos.x_), (int)baseY);
+            StyleCrispText(glyph, true);
+            splashGlyphs_.Push(glyph);
+            splashGlyphBase_.Push(Vector2(x0 + pos.x_, baseY));
+            splashGlyphIndex_.Push(i);   // исходный индекс — для волны задержки
+        }
+    }
+
     void ConfigureSplashStage(int stage) {
-        if (!splashText_ || !splashLine_) return;
+        if (!splashLine_) return;
         const int sw = GetSubsystem<Graphics>()->GetWidth();
         splashLine_->SetPosition(sw / 2, SplashLineY(stage));
         splashLine_->SetSize(0, Max(2, S(stage == 2 ? 4.0f : 3.0f)));
-        splashText_->SetPosition(sw / 2 - S(720), SplashTextY(stage) + S(48));   // старт ниже — выплывем вверх
         if (stage == 0) {
             splashFullText_ = "k o c h . s t u d i o s";
-            splashText_->SetFont(font_, SF(36));
-            splashText_->SetText("");
-            splashText_->SetColor(Color(0.90f, 0.96f, 1.0f, 0.0f));
+            if (splashText_) splashText_->SetVisible(false);
+            BuildSplashGlyphs(0, sw);
         } else if (stage == 1) {
             splashFullText_ = "powered by fall.os";
-            splashText_->SetFont(font_, SF(27));
-            splashText_->SetText("");
-            splashText_->SetColor(Color(0.70f, 0.76f, 0.88f, 0.0f));
+            if (splashText_) splashText_->SetVisible(false);
+            BuildSplashGlyphs(1, sw);
         } else {
             splashFullText_ = "CHICHKENCUM 2.1";
-            splashText_->SetFont(font_, SF(104));
-            splashText_->SetText(splashFullText_);
-            splashText_->SetPosition(sw / 2 - S(720), SplashTextY(2) + S(12));
-            splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            ClearSplashGlyphs();
+            splashRingT_ = 0.0f;   // ударная волна!
+            if (splashText_) {
+                splashText_->SetVisible(true);
+                splashText_->SetFont(font_, SF(96));
+                splashText_->SetTextAlignment(HA_CENTER);
+                splashText_->SetText(splashFullText_);
+                splashText_->SetPosition(0, SplashTextY(2) + S(14));
+                splashText_->SetWidth(sw);
+                splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            }
+        }
+    }
+
+    // Опавшие листья: медленно падают, покачиваясь, с вращением
+    void SpawnLeaves(UIElement* parent, Vector<SharedPtr<Sprite>>& out,
+                     Vector<SplashLeaf>& anim, int count, int sw, int sh, bool scatterY) {
+        out.Clear();
+        anim.Clear();
+        auto* cache = GetSubsystem<ResourceCache>();
+        if (!parent) return;
+        Texture2D* tex = cache ? cache->GetResource<Texture2D>("Textures/SplashLeaf.png") : nullptr;
+        for (int i = 0; i < count; ++i) {
+            SplashLeaf L;
+            L.x = (float)(rand() % sw);
+            L.y = scatterY ? (float)(rand() % sh) : -(float)(30 + rand() % 220);
+            L.speed = 24.0f + (float)(rand() % 36);          // 24..60 px/s — задумчиво
+            L.sway = 26.0f + (float)(rand() % 40);
+            L.phase = (float)(rand() % 1000) / 1000.0f * 6.2831853f;
+            L.rot = (float)(rand() % 360);
+            L.rotSpeed = ((rand() % 2) ? 1.0f : -1.0f) * (16.0f + (float)(rand() % 38));
+            L.size = (float)S(17 + rand() % 15);
+            L.alpha = 0.55f + (float)(rand() % 40) / 100.0f;  // 0.55..0.95
+            L.tintIdx = rand() % 3;
+            SharedPtr<Sprite> leaf(parent->CreateChild<Sprite>());
+            if (tex) { leaf->SetTexture(tex); leaf->SetFullImageRect(); }
+            leaf->SetSize((int)L.size, (int)L.size);
+            leaf->SetHotSpot((int)L.size / 2, (int)L.size / 2);
+            leaf->SetPosition(L.x, L.y);
+            leaf->SetRotation(L.rot);
+            leaf->SetColor(Color(1.0f, 0.6f, 0.2f, 0.0f));
+            out.Push(leaf);
+            anim.Push(L);
+        }
+    }
+
+    void UpdateLeaves(float dt, Vector<SharedPtr<Sprite>>& leaves,
+                      Vector<SplashLeaf>& anim, int sw, int sh, float alphaMul) {
+        static const Color kTints[3] = {
+            Color(1.00f, 0.53f, 0.15f, 1.0f),   // рыжий
+            Color(0.96f, 0.70f, 0.17f, 1.0f),   // янтарь
+            Color(0.80f, 0.30f, 0.17f, 1.0f),   // багряный
+        };
+        for (unsigned i = 0; i < leaves.Size(); ++i) {
+            SplashLeaf& L = anim[i];
+            L.y += L.speed * dt;
+            L.phase += dt * 1.05f;
+            L.rot += L.rotSpeed * dt;
+            if (L.y > sh + 48.0f) {
+                L.y = -(float)(36 + rand() % 140);
+                L.x = (float)(rand() % sw);
+            }
+            if (L.x < -60.0f) L.x = (float)sw + 40.0f;
+            else if (L.x > sw + 60.0f) L.x = -40.0f;
+            const float swayX = sinf(L.phase) * L.sway;
+            Color tint = kTints[L.tintIdx];
+            tint.a_ = L.alpha * alphaMul;
+            leaves[i]->SetPosition(L.x + swayX, L.y);
+            leaves[i]->SetRotation(L.rot);
+            leaves[i]->SetColor(tint);
         }
     }
 
@@ -7160,9 +7297,22 @@ private:
         splashPanel_->SetSize(sw, sh);
         splashPanel_->SetPriority(1200);   // поверх загрузочного экрана (1000)
 
+        // Почти чёрный, но сквозь него дышит 4K-арт загрузочного экрана
         BorderImage* bg = splashPanel_->CreateChild<BorderImage>();
         bg->SetSize(sw, sh);
-        bg->SetColor(Color(0.0f, 0.0f, 0.0f, 1.0f));
+        bg->SetColor(Color(0.004f, 0.010f, 0.026f, 0.86f));
+
+        // Виньетка — киношные тёмные углы
+        BorderImage* vig = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* vigTex = cache->GetResource<Texture2D>("Textures/SplashVignette.png")) {
+            vigTex->SetFilterMode(FILTER_TRILINEAR);
+            vig->SetTexture(vigTex);
+        }
+        vig->SetSize(sw, sh);
+        vig->SetColor(Color(1.0f, 1.0f, 1.0f, 0.85f));
+
+        // Опавшие листья за надписью
+        SpawnLeaves(splashPanel_, splashLeaves_, splashLeafAnim_, 15, sw, sh, true);
 
         // Неоновое свечение за надписью (под текстом и линией)
         splashGlow_ = splashPanel_->CreateChild<BorderImage>();
@@ -7178,19 +7328,43 @@ private:
             splashGlow_->SetPosition(sw / 2 - g0 / 2, sh / 2 - g0 / 2);
         }
 
-        // Пробегающая световая волна (деликатный блик по тексту слева направо)
+        // Пробегающая световая волна (мягкая золотая полоска по тексту)
         splashSheen_ = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* sheenTex = cache->GetResource<Texture2D>("Textures/SplashSheen.png")) {
+            sheenTex->SetFilterMode(FILTER_TRILINEAR);
+            splashSheen_->SetTexture(sheenTex);
+        }
         splashSheen_->SetBlendMode(BLEND_ADD);
-        splashSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
-        splashSheen_->SetSize(S(150), S(64));
-        splashSheen_->SetPosition(-S(400), sh / 2 - S(32));
+        splashSheen_->SetColor(Color(1.0f, 0.94f, 0.78f, 0.0f));
+        splashSheen_->SetSize(S(190), S(46));
+        splashSheen_->SetPosition(-S(400), sh / 2 - S(24));
+
+        // Ударная волна на «CHICHKENCUM 2.1» (additive кольцо)
+        splashRing_ = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* ringTex = cache->GetResource<Texture2D>("Textures/SplashRing.png")) {
+            ringTex->SetFilterMode(FILTER_TRILINEAR);
+            splashRing_->SetTexture(ringTex);
+        }
+        splashRing_->SetBlendMode(BLEND_ADD);
+        splashRing_->SetColor(Color(1.0f, 0.84f, 0.35f, 0.0f));
+        splashRing_->SetSize(S(90), S(90));
+        splashRing_->SetPosition(sw / 2 - S(45), sh / 2 - S(45));
+        splashRingT_ = -1.0f;
+
+        // Скрытый измеритель ширины (нужны точные позиции глифов)
+        splashMeasure_ = splashPanel_->CreateChild<Text>();
+        splashMeasure_->SetVisible(false);
+        splashMeasure_->SetFont(font_, SF(36));
+        splashMeasure_->SetTextAlignment(HA_LEFT);
+        splashMeasure_->SetPosition(0, -S(500));
 
         splashText_ = splashPanel_->CreateChild<Text>();
-        splashText_->SetFont(font_, SF(36));
+        splashText_->SetFont(font_, SF(96));
         splashText_->SetTextAlignment(HA_CENTER);
-        splashText_->SetPosition(sw / 2 - S(720), sh / 2 - S(44));
-        splashText_->SetWidth(S(1440));
-        splashText_->SetColor(Color(0.90f, 0.96f, 1.0f, 0.0f));
+        splashText_->SetPosition(0, sh / 2 - S(62));
+        splashText_->SetWidth(sw);
+        splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+        splashText_->SetVisible(false);
         StyleCrispText(splashText_, true);
 
         splashLine_ = splashPanel_->CreateChild<BorderImage>();
@@ -7225,6 +7399,14 @@ private:
     void EndSplashIntro() {
         if (splashPanel_) { splashPanel_->Remove(); splashPanel_ = nullptr; }
         splashText_ = nullptr;
+        splashMeasure_ = nullptr;
+        splashLeaves_.Clear();
+        splashLeafAnim_.Clear();
+        splashRing_ = nullptr;
+        splashRingT_ = -1.0f;
+        splashGlyphs_.Clear();
+        splashGlyphBase_.Clear();
+        splashGlyphIndex_.Clear();
         splashLine_ = nullptr;
         splashGlow_ = nullptr;
         splashSheen_ = nullptr;
@@ -7249,91 +7431,116 @@ private:
         const int sw = GetSubsystem<Graphics>()->GetWidth();
         const int sh = GetSubsystem<Graphics>()->GetHeight();
 
-        static const float kDur[3]   = { 1.30f, 1.20f, 2.55f };
-        static const float kIn[3]    = { 0.60f, 0.55f, 0.10f };
-        static const float kOutAt[3] = { 1.02f, 0.94f, 2.18f };
-        static const int   kLineW[3] = { 300, 200, 840 };
+        static const float kDur[3]   = { 1.15f, 1.10f, 2.30f };
+        static const float kOutAt[3] = { 0.88f, 0.84f, 2.00f };
+        static const int   kLineW[3] = { 300, 210, 840 };
 
         const int stage = splashStage_;
         const float t = splashTimer_;
-        const float inT  = Clamp(t / kIn[stage], 0.0f, 1.0f);
         const float outT = Clamp((t - kOutAt[stage]) / (kDur[stage] - kOutAt[stage]), 0.0f, 1.0f);
-        const float alpha = Clamp(EaseOutCubic(inT) * (1.0f - EaseOutCubic(outT)), 0.0f, 1.0f);
+        const float fadeOut = 1.0f - EaseOutCubic(outT);
+        const float globalAlpha = Clamp(fadeOut, 0.0f, 1.0f);
 
-        // «Выплывание»: текст поднимается на easeOutExpo + деликатное дыхание в покое
-        const float floatAmp = (float)S(stage == 2 ? 12 : 48);
-        const float floatOff = (1.0f - EaseOutExpo(Clamp(t / 1.05f, 0.0f, 1.0f))) * floatAmp;
-        const float breathe  = sinf(t * 1.9f + stage * 1.7f) * (float)S(2.5f)
-                             * Clamp((t - 0.9f) / 0.5f, 0.0f, 1.0f);
-        int drawX = sw / 2 - S(720);
-        int drawY = SplashTextY(stage) + (int)floatOff + (int)breathe;
+        const float floatAmp = (float)S(stage == 2 ? 12 : 46);
+        const float floatOff = (1.0f - EaseOutExpo(Clamp(t / 1.00f, 0.0f, 1.0f))) * floatAmp;
+        const float breathe  = sinf(t * 1.7f + stage * 1.7f) * (float)S(2.0f)
+                             * Clamp((t - 0.85f) / 0.5f, 0.0f, 1.0f);
 
-        if (stage == 2) {
-            // CHICHKENCUM: наезд размера 104→76 и затухающая тряска от удара
-            const float punch = 1.0f - EaseOutExpo(Clamp(t / 0.26f, 0.0f, 1.0f));
-            splashText_->SetFont(font_, SF((int)(76.0f + 28.0f * punch)));
-            drawX += (int)(sinf(t * 88.0f) * expf(-t * 9.5f) * (float)S(6.0f));
-        } else {
-            // Посимвольное открытие надписи
-            const float reveal = EaseOutCubic(Clamp(t / 0.80f, 0.0f, 1.0f));
-            const int n = (int)(splashFullText_.Length() * reveal + 0.49f);
-            splashText_->SetText(splashFullText_.Substring(0, n));
-        }
-
-        // Цвет текста. CHICHKENCUM вспыхивает белым и остывает в золото
+        // ---- базовый цвет по стадии (CHICHKENCUM вспыхивает белым и остывает в золото)
         Color base = stage == 0 ? Color(0.90f, 0.96f, 1.0f, 1.0f)
-                   : stage == 1 ? Color(0.70f, 0.76f, 0.88f, 1.0f)
+                   : stage == 1 ? Color(0.74f, 0.80f, 0.92f, 1.0f)
                                 : Color(1.0f, 0.78f, 0.16f, 1.0f);
         if (stage == 2) {
-            const float flash = EaseOutCubic(Clamp(t / 0.55f, 0.0f, 1.0f));
+            const float flash = EaseOutCubic(Clamp(t / 0.60f, 0.0f, 1.0f));
             base = Color(1.0f, Lerp(1.0f, 0.78f, flash), Lerp(1.0f, 0.16f, flash), 1.0f);
         }
-        base.a_ = alpha;
-        if (splashText_) {
-            splashText_->SetColor(base);
-            splashText_->SetPosition(drawX, drawY);
+
+        if (stage < 2) {
+            // ---- посимвольное выплывание: каждый глиф — свой element, задержка волной
+            const float fsFloat = (float)S(stage == 0 ? 30 : 24);
+            for (unsigned i = 0; i < splashGlyphs_.Size(); ++i) {
+                SharedPtr<Text>& glyph = splashGlyphs_[i];
+                if (!glyph) continue;
+                const float delay = 0.10f + splashGlyphIndex_[i] * 0.042f;
+                const float lt = Clamp((t - delay) / 0.55f, 0.0f, 1.0f);
+                const float ease = EaseOutCubic(lt);
+                const float alpha = ease * globalAlpha;
+                Color gc = base; gc.a_ = alpha;
+                glyph->SetColor(gc);
+                glyph->SetPosition((int)splashGlyphBase_[i].x_,
+                                   (int)(splashGlyphBase_[i].y_ + (1.0f - EaseOutExpo(lt)) * fsFloat + breathe));
+            }
+        } else if (splashText_) {
+            // ---- CHICHKENCUM 2.1: наезд размера без единой тряски, только свет
+            const float punch = 1.0f - EaseOutExpo(Clamp(t / 0.30f, 0.0f, 1.0f));
+            splashText_->SetFont(font_, SF((int)(76.0f + 20.0f * punch)));
+            Color sc = base; sc.a_ = globalAlpha;
+            splashText_->SetColor(sc);
+            splashText_->SetPosition(0, SplashTextY(2) + S(14) + (int)floatOff + (int)breathe);
         }
 
-        // Неоновое свечение за текстом (тинт стадии + пульс)
+        // ---- опавшие листья медленно падают за надписью
+        UpdateLeaves(dt, splashLeaves_, splashLeafAnim_, sw, sh, 0.5f + 0.5f * globalAlpha);
+
+        // ---- ударная волна от SLAM-а CHICHKENCUM
+        if (splashRing_ && splashRingT_ >= 0.0f) {
+            splashRingT_ += dt;
+            const float k = Clamp(splashRingT_ / 0.75f, 0.0f, 1.0f);
+            const float ease = 1.0f - powf(1.0f - k, 3.0f);
+            const int size = (int)(S(90) + (S(760) - S(90)) * ease);
+            splashRing_->SetPosition(sw / 2 - size / 2, sh / 2 - size / 2 + (int)(floatOff * 0.5f));
+            splashRing_->SetSize(size, size);
+            Color rc(1.0f, 0.84f, 0.35f, (1.0f - k) * 0.85f);
+            splashRing_->SetColor(rc);
+            if (k >= 1.0f) {
+                splashRingT_ = -1.0f;
+                splashRing_->SetColor(Color(1.0f, 0.84f, 0.35f, 0.0f));
+            }
+        }
+
+        // ---- неоновое свечение за текстом (тинт стадии + мягкий пульс)
         if (splashGlow_) {
             static const Color kGlow[3] = {
-                Color(0.18f, 0.82f, 1.0f, 1.0f),
-                Color(1.00f, 0.55f, 0.15f, 1.0f),
-                Color(1.00f, 0.60f, 0.12f, 1.0f)
+                Color(0.16f, 0.80f, 1.00f, 1.0f),
+                Color(0.95f, 0.52f, 0.16f, 1.0f),
+                Color(1.00f, 0.58f, 0.12f, 1.0f)
             };
-            const float pulse = 0.80f + 0.20f * sinf(t * 2.2f + stage * 2.1f);
-            const int gsize = S(stage == 2 ? 1180 : 860);
+            const float glowIn = EaseOutCubic(Clamp(t / 0.7f, 0.0f, 1.0f));
+            const float pulse = 0.78f + 0.22f * sinf(t * 1.9f + stage * 2.3f);
+            const int gsize = S(stage == 2 ? 1150 : 840);
             Color gc = kGlow[stage];
-            gc.a_ = alpha * 0.60f * pulse;
+            gc.a_ = glowIn * globalAlpha * 0.46f * pulse;
             splashGlow_->SetSize(gsize, gsize);
             splashGlow_->SetPosition(sw / 2 - gsize / 2, sh / 2 - gsize / 2 + (int)floatOff + (int)breathe);
             splashGlow_->SetColor(gc);
         }
 
-        // Волна-блик проскакивает слева направо в середине каждой стадии
+        // ---- волна-блик: узкий блик пробегает по строке слева направо
         if (splashSheen_) {
-            const float sweep = t - 0.68f;
-            if (sweep > 0.0f && sweep < 0.85f && alpha > 0.20f) {
-                const float k = sweep / 0.85f;
-                splashSheen_->SetPosition((int)Lerp(-S(240), sw + S(40), k), drawY - S(8));
-                Color sc(1.0f, 1.0f, 1.0f, 0.40f * alpha * sinf(3.14159265f * k));
+            const float sweep = t - 0.55f;
+            if (sweep > 0.0f && sweep < 0.80f) {
+                const float k = sweep / 0.80f;
+                const float easeK = k < 0.5f ? 2.0f * k * k : 1.0f - powf(-2.0f * k + 2.0f, 2.0f) / 2.0f;   // easeInOutQuad
+                splashSheen_->SetPosition((int)Lerp(sw * 0.5f - S(460), sw * 0.5f + S(300), easeK),
+                                          SplashTextY(stage) + (int)floatOff - S(2));
+                Color sc(1.0f, 0.93f, 0.78f, 0.52f * globalAlpha * sinf(3.14159265f * k));
                 splashSheen_->SetColor(sc);
             } else {
-                splashSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+                splashSheen_->SetColor(Color(1.0f, 0.93f, 0.78f, 0.0f));
             }
         }
 
-        // Неоновая линия раскрывается от центра (easeOutQuad)
-        float lineT = Clamp(t / 0.5f, 0.0f, 1.0f);
-        lineT = 1.0f - (1.0f - lineT) * (1.0f - lineT);
+        // ---- неоновая линия раскрывается от центра (с небольшой задержкой)
+        float lineT = Clamp((t - 0.14f) / 0.55f, 0.0f, 1.0f);
+        lineT = 1.0f - (1.0f - lineT) * (1.0f - lineT);   // easeOutQuad
         const int w = (int)(S(kLineW[stage]) * lineT);
         if (splashLine_) {
             splashLine_->SetPosition(sw / 2 - w / 2, SplashLineY(stage));
             splashLine_->SetSize(Max(0, w), Max(2, S(stage == 2 ? 4.0f : 3.0f)));
-            Color lc = stage == 0 ? Color(0.20f, 0.92f, 1.0f, 1.0f)
-                     : stage == 1 ? Color(1.0f, 0.56f, 0.16f, 1.0f)
-                                  : Color(1.0f, 0.36f, 0.14f, 1.0f);
-            lc.a_ = 0.95f * alpha;
+            Color lc = stage == 0 ? Color(0.20f, 0.92f, 1.00f, 1.0f)
+                     : stage == 1 ? Color(1.00f, 0.58f, 0.18f, 1.0f)
+                                  : Color(1.00f, 0.72f, 0.22f, 1.0f);
+            lc.a_ = 0.92f * EaseOutCubic(Clamp(t / 0.45f, 0.0f, 1.0f)) * globalAlpha;
             splashLine_->SetColor(lc);
         }
 
