@@ -4,6 +4,8 @@ build*/
 .cache/
 dist/
 release/
+result
+result-*
 bin/MyShooter
 *.o
 *.obj

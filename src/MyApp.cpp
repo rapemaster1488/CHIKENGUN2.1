@@ -11,12 +11,19 @@
 // 7. Добавлена система стрельбы с рейкастами
 // ============================================================================
 
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#endif
+
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
-#include <unistd.h> // readlink для поиска CoreData рядом с бинарником
-#include <sys/stat.h> // stat()/S_ISDIR для проверки папок ресурсов
 #include <cstring>    // strlen для программной техники
 
 // ВАЖНО: Urho3D/Math/Vector3.h подключается ДО всего остального, иначе
@@ -1137,6 +1144,25 @@ private:
     Vector<SharedPtr<Text>> loadingCheckRows_;
     Vector<String> loadSteps_;
 
+    // === 2.5.6 SPLASH INTRO: koch.studios -> powered by fall.os -> CHICHKENCUM 2.1 ===
+    bool splashActive_ = false;
+    int splashStage_ = 0;
+    float splashTimer_ = 0.0f;
+    SharedPtr<UIElement> splashPanel_;
+    SharedPtr<Text> splashText_;
+    SharedPtr<BorderImage> splashLine_;
+    SharedPtr<Scene> splashScene_;
+    SharedPtr<Node> kochMusicNode_;
+    SoundSource* kochThemeSrc_ = nullptr;   // компонент временной сцены — владеется нодой
+    SoundSource* splashSfxSrc_ = nullptr;
+    SharedPtr<BorderImage> splashGlow_;
+    SharedPtr<BorderImage> splashSheen_;
+    String splashFullText_;                 // полный текст стадии (посимвольное открытие)
+    SharedPtr<Text> splashMeasure_;         // скрытый измеритель ширины строки
+    Vector<SharedPtr<Text>> splashGlyphs_;  // посимвольно: ни одного скачка
+    Vector<Vector2> splashGlyphBase_;       // абсолютные базовые позиции глифов
+    Vector<int> splashGlyphIndex_;          // исходные индексы глифов (волна задержки)
+
     // Быстрый загрузочный оверлей десантирования при входе в режим (АРЕНА / ТИР)
     bool deployActive_ = false;
     float deployTimer_ = 0.0f;
@@ -1268,8 +1294,23 @@ public:
     void Setup() override {
         LoadSettingsFile();
 
-        if (!engineParameters_.Contains(EP_RESOURCE_PREFIX_PATHS))
-            engineParameters_[EP_RESOURCE_PREFIX_PATHS] = ".;..;bin;../bin";
+        if (!engineParameters_.Contains(EP_RESOURCE_PREFIX_PATHS)) {
+            String prefixes = ".;..;bin;../bin";
+            if (auto* fs = GetSubsystem<FileSystem>()) {
+                String progDir = fs->GetProgramDir();
+                while (progDir.Length() > 1 && (progDir.Back() == '/' || progDir.Back() == '\\'))
+                    progDir.Resize(progDir.Length() - 1);
+                if (!progDir.Empty()) {
+                    prefixes = progDir + ";" + progDir + "/..;" + progDir + "/../share/chikengun;" +
+                               progDir + "/../Resources;" + prefixes;
+                }
+            }
+            if (const char* envPrefix = std::getenv("CHIKENGUN_RESOURCE_PREFIX_PATHS")) {
+                if (envPrefix[0] != '\0')
+                    prefixes = String(envPrefix) + ";" + prefixes;
+            }
+            engineParameters_[EP_RESOURCE_PREFIX_PATHS] = prefixes;
+        }
 
         engineParameters_[EP_WINDOW_TITLE] = "CHIKENGUN 2.5 — ПЕРО СУДЬБЫ (4K ULTRA)";
         engineParameters_[EP_HIGH_DPI] = true;
@@ -1336,20 +1377,17 @@ public:
         // затем добавляем CoreData как отдельный префикс.
         {
             ResourceCache* cache = GetSubsystem<ResourceCache>();
-            // Директория исполняемого файла
+            FileSystem* fs = GetSubsystem<FileSystem>();
+            // Директория исполняемого файла (кроссплатформенно через Urho3D FileSystem:
+            // Win32 GetModuleFileName / macOS _NSGetExecutablePath / Linux /proc/self/exe)
             String exeDir;
-            {
-                char link[4096];
-                ssize_t n = readlink("/proc/self/exe", link, sizeof(link) - 1);
-                if (n > 0) {
-                    link[n] = '\0';
-                    String exePath(link);
-                    exeDir = exePath.Substring(0, exePath.FindLast('/'));
-                }
+            if (fs) {
+                exeDir = fs->GetProgramDir();
+                while (exeDir.Length() > 1 && (exeDir.Back() == '/' || exeDir.Back() == '\\'))
+                    exeDir.Resize(exeDir.Length() - 1);
             }
-            auto dirOk = [](const String& p) -> bool {
-                struct stat st;
-                return !p.Empty() && stat(p.CString(), &st) == 0 && S_ISDIR(st.st_mode);
+            auto dirOk = [fs](const String& p) -> bool {
+                return fs && !p.Empty() && fs->DirExists(p);
             };
 
             // 1) Корректный абсолютный путь к Data/ (проверяем наличие Materials и Fonts,
@@ -1358,10 +1396,17 @@ public:
                 return dirOk(p) && dirOk(p + "/Materials") && dirOk(p + "/Fonts");
             };
             String goodData;
-            if (dataDirOk(exeDir + "/Data"))               goodData = exeDir + "/Data";        // build/Data
-            else if (dataDirOk(exeDir + "/../Data"))       goodData = exeDir + "/../Data";     // ../Data от build/
-            else if (dataDirOk("./Data"))                  goodData = "./Data";               // запуск из корня
-            else if (dataDirOk("../Data"))                 goodData = "../Data";              // запуск из build/
+            if (const char* envData = std::getenv("CHIKENGUN_DATA_DIR")) {
+                if (dataDirOk(String(envData))) goodData = String(envData);
+            }
+            if (goodData.Empty() && !exeDir.Empty()) {
+                if (dataDirOk(exeDir + "/Data"))                        goodData = exeDir + "/Data";
+                else if (dataDirOk(exeDir + "/../Data"))                goodData = exeDir + "/../Data";
+                else if (dataDirOk(exeDir + "/../share/chikengun/Data")) goodData = exeDir + "/../share/chikengun/Data";
+                else if (dataDirOk(exeDir + "/../Resources/Data"))      goodData = exeDir + "/../Resources/Data";
+            }
+            if (goodData.Empty() && dataDirOk("./Data"))                  goodData = "./Data";
+            else if (goodData.Empty() && dataDirOk("../Data"))            goodData = "../Data";
 
             // 2) Ставим правильный Data ПЕРВЫМ префиксом.
             //    Методы Get/SetResourcePrefixPaths в этой сборке private —
@@ -1379,11 +1424,16 @@ public:
                 cache->AddResourceDir(exeDir + "/Data", 0);
             }
 
-            // 3) CoreData: ищем в корне, рядом с exe и в parent-каталогах
+            // 3) CoreData: ищем через env, рядом с exe, в Nix/FHS share, macOS bundle и parent-каталогах
             Vector<String> coreCandidates;
+            if (const char* envCore = std::getenv("CHIKENGUN_COREDATA_DIR")) {
+                if (envCore[0] != '\0') coreCandidates.Push(String(envCore));
+            }
             if (!exeDir.Empty()) {
                 coreCandidates.Push(exeDir + "/CoreData");
                 coreCandidates.Push(exeDir + "/../CoreData");
+                coreCandidates.Push(exeDir + "/../share/chikengun/CoreData");
+                coreCandidates.Push(exeDir + "/../Resources/CoreData");
             }
             if (!goodData.Empty())   coreCandidates.Push(goodData + "/CoreData");
             coreCandidates.Push("./CoreData");
@@ -1419,6 +1469,9 @@ public:
         loadProgress_ = 0.02f;
         loadTargetProgress_ = 0.12f;
         bootStageTimer_ = 0.0f;
+
+        // 2.5.6: эпичная интро-заставка koch.studios -> powered by fall.os -> CHICHKENCUM 2.1
+        CreateSplashIntro();
     }
 
 private:
@@ -1533,7 +1586,7 @@ private:
 
     void StartMusicPlayback() {
         auto* cache = GetSubsystem<ResourceCache>();
-        if (!cache || !cameraNode_ || musicSource_) return;
+        if (!cache || !cameraNode_ || musicSource_ || kochThemeSrc_) return;
         Sound* music = cache->GetResource<Sound>("Music/Game_Theme_Loop.ogg");
         if (music) {
             music->SetLooped(true);
@@ -4832,7 +4885,8 @@ private:
 
         // Пошаговая 4K-загрузка игры с живой отрисовкой прогресс-бара на GPU
         if (loadingScreenActive_) {
-            UpdateBootLoading(dt);
+            if (splashActive_) UpdateSplashIntro(dt);
+            else               UpdateBootLoading(dt);
             return;
         }
 
@@ -7235,6 +7289,7 @@ private:
         if (loadingFadeAlpha_ > 0.0f) {
             loadingFadeAlpha_ -= dt;
             float a = Clamp(loadingFadeAlpha_ / 0.42f, 0.0f, 1.0f);
+            if (kochThemeSrc_) kochThemeSrc_->SetGain(musicVolume_ * a * a);
             if (loadingPanel_) loadingPanel_->SetOpacity(a * a);
             if (loadingFadeAlpha_ <= 0.0f) {
                 HideLoadingScreen();
@@ -7245,6 +7300,12 @@ private:
     }
 
     void HideLoadingScreen() {
+        // Останавливаем интро-тему «koch.studios» и включаем основную петлю арены
+        if (kochThemeSrc_) { kochThemeSrc_->Stop(); kochThemeSrc_ = nullptr; }
+        splashSfxSrc_ = nullptr;
+        kochMusicNode_ = nullptr;
+        splashScene_ = nullptr;
+        StartMusicPlayback();
         if (loadingPanel_) {
             loadingPanel_->Remove();
             loadingPanel_ = nullptr;
@@ -7260,6 +7321,326 @@ private:
         loadingBarFill_ = nullptr;
         loadingBarShimmer_ = nullptr;
         loadingScreenActive_ = false;
+    }
+
+    // =========================================================================
+    // 2.5.6 SPLASH INTRO — «koch.studios» -> «powered by fall.os» -> «CHICHKENCUM 2.1»
+    // Посимвольный выплывающий рендер без перецентровки (скрытый измеритель +
+    // отдельный Text на каждую букву), неоновый ореол, блик и наезд 96->76 pt.
+    // Скип: клик / Space / Enter / Esc.
+    // =========================================================================
+    int SplashLineY(int stage) const {
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+        return sh / 2 + (stage == 2 ? S(46) : (stage == 1 ? S(16) : S(20)));
+    }
+    int SplashTextY(int stage) const {
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+        return sh / 2 - S(stage == 2 ? 62 : (stage == 1 ? 40 : 44));
+    }
+    static float EaseOutCubic(float t) {
+        float f = 1.0f - Clamp(t, 0.0f, 1.0f);
+        return 1.0f - f * f * f;
+    }
+    static float EaseOutExpo(float t) {
+        t = Clamp(t, 0.0f, 1.0f);
+        return t >= 1.0f ? 1.0f : 1.0f - powf(2.0f, -10.0f * t);
+    }
+
+    void SplashEnterStage(int stage) {
+        auto* cache = GetSubsystem<ResourceCache>();
+        if (!cache || !splashSfxSrc_) return;
+        const char* snd = stage == 0 ? "Sounds/UI_Select.wav"
+                        : stage == 1 ? "Sounds/Powerup.wav"
+                                     : "Sounds/Chicken_Boss.wav";
+        Sound* s = cache->GetResource<Sound>(snd);
+        if (!s && stage == 2) s = cache->GetResource<Sound>("Sounds/RoosterBoss.wav");
+        if (s) {
+            splashSfxSrc_->Stop();
+            splashSfxSrc_->SetGain(stage == 2 ? 0.9f : 0.7f);
+            splashSfxSrc_->Play(s);
+        }
+    }
+
+    void ClearSplashGlyphs() {
+        for (unsigned i = 0; i < (unsigned)splashGlyphs_.Size(); ++i) {
+            if (splashGlyphs_[i]) splashGlyphs_[i]->Remove();
+        }
+        splashGlyphs_.Clear();
+        splashGlyphBase_.Clear();
+        splashGlyphIndex_.Clear();
+    }
+
+    void BuildSplashGlyphs(int stage, int sw) {
+        ClearSplashGlyphs();
+        if (!splashMeasure_ || !splashPanel_) return;
+        const int fs = stage == 0 ? SF(36) : SF(27);
+        splashMeasure_->SetFont(font_, fs);
+        splashMeasure_->SetText(splashFullText_);
+        const int n = (int)splashFullText_.Length();
+        if (n <= 0) return;
+        const Vector2 lastPos = splashMeasure_->GetCharPosition(n - 1);
+        const Vector2 lastSize = splashMeasure_->GetCharSize(n - 1);
+        const float totalW = lastPos.x_ + lastSize.x_;
+        const float x0 = sw * 0.5f - totalW * 0.5f;
+        const float baseY = (float)SplashTextY(stage);
+        for (int i = 0; i < n; ++i) {
+            const char c = splashFullText_[i];
+            if (c == ' ') continue;
+            SharedPtr<Text> glyph(splashPanel_->CreateChild<Text>());
+            glyph->SetFont(font_, fs);
+            glyph->SetTextAlignment(HA_LEFT);
+            glyph->SetText(splashFullText_.Substring(i, 1));
+            glyph->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            const Vector2 pos = splashMeasure_->GetCharPosition(i);
+            glyph->SetPosition((int)(x0 + pos.x_), (int)baseY);
+            StyleCrispText(glyph, true);
+            splashGlyphs_.Push(glyph);
+            splashGlyphBase_.Push(Vector2(x0 + pos.x_, baseY));
+            splashGlyphIndex_.Push(i);
+        }
+    }
+
+    void ConfigureSplashStage(int stage) {
+        if (!splashLine_) return;
+        const int sw = GetSubsystem<Graphics>()->GetWidth();
+        splashLine_->SetPosition(sw / 2, SplashLineY(stage));
+        splashLine_->SetSize(0, Max(2, S(stage == 2 ? 4.0f : 3.0f)));
+        if (stage == 0) {
+            splashFullText_ = "k o c h . s t u d i o s";
+            if (splashText_) splashText_->SetVisible(false);
+            BuildSplashGlyphs(0, sw);
+        } else if (stage == 1) {
+            splashFullText_ = "powered by fall.os";
+            if (splashText_) splashText_->SetVisible(false);
+            BuildSplashGlyphs(1, sw);
+        } else {
+            splashFullText_ = "CHICHKENCUM 2.1";
+            ClearSplashGlyphs();
+            if (splashText_) {
+                splashText_->SetVisible(true);
+                splashText_->SetFont(font_, SF(96));
+                splashText_->SetTextAlignment(HA_CENTER);
+                splashText_->SetText(splashFullText_);
+                splashText_->SetPosition(0, SplashTextY(2) + S(14));
+                splashText_->SetWidth(sw);
+                splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            }
+        }
+    }
+
+    void CreateSplashIntro() {
+        auto* ui = GetSubsystem<UI>();
+        auto* gfx = GetSubsystem<Graphics>();
+        auto* cache = GetSubsystem<ResourceCache>();
+        if (!ui || !gfx || !cache) return;
+        if (!font_) {
+            font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
+        }
+        const int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+
+        splashPanel_ = ui->GetRoot()->CreateChild<UIElement>("KochSplashIntro");
+        splashPanel_->SetSize(sw, sh);
+        splashPanel_->SetPriority(1200);   // поверх загрузочного экрана (1000)
+
+        BorderImage* bg = splashPanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.0f, 0.0f, 0.0f, 1.0f));
+
+        // Неоновое свечение за надписью
+        splashGlow_ = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* glowTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
+            glowTex->SetFilterMode(FILTER_TRILINEAR);
+            splashGlow_->SetTexture(glowTex);
+        }
+        splashGlow_->SetBlendMode(BLEND_ADD);
+        splashGlow_->SetColor(Color(0.18f, 0.82f, 1.0f, 0.0f));
+        {
+            const int g0 = S(880);
+            splashGlow_->SetSize(g0, g0);
+            splashGlow_->SetPosition(sw / 2 - g0 / 2, sh / 2 - g0 / 2);
+        }
+
+        // Пробегающая световая волна
+        splashSheen_ = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* sheenTex = cache->GetResource<Texture2D>("Textures/SplashSheen.png")) {
+            sheenTex->SetFilterMode(FILTER_TRILINEAR);
+            splashSheen_->SetTexture(sheenTex);
+        }
+        splashSheen_->SetBlendMode(BLEND_ADD);
+        splashSheen_->SetColor(Color(1.0f, 0.94f, 0.78f, 0.0f));
+        splashSheen_->SetSize(S(190), S(46));
+        splashSheen_->SetPosition(-S(400), sh / 2 - S(24));
+
+        // Скрытый измеритель ширины
+        splashMeasure_ = splashPanel_->CreateChild<Text>();
+        splashMeasure_->SetVisible(false);
+        splashMeasure_->SetFont(font_, SF(36));
+        splashMeasure_->SetTextAlignment(HA_LEFT);
+        splashMeasure_->SetPosition(0, -S(500));
+
+        splashText_ = splashPanel_->CreateChild<Text>();
+        splashText_->SetFont(font_, SF(96));
+        splashText_->SetTextAlignment(HA_CENTER);
+        splashText_->SetPosition(0, sh / 2 - S(62));
+        splashText_->SetWidth(sw);
+        splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+        splashText_->SetVisible(false);
+        StyleCrispText(splashText_, true);
+
+        splashLine_ = splashPanel_->CreateChild<BorderImage>();
+        splashLine_->SetPosition(sw / 2, sh / 2 + S(20));
+        splashLine_->SetSize(0, Max(2, S(3.0f)));
+        splashLine_->SetColor(Color(0.20f, 0.92f, 1.0f, 0.0f));
+
+        splashScene_ = SharedPtr<Scene>(new Scene(context_));
+        kochMusicNode_ = SharedPtr<Node>(splashScene_->CreateChild("KochTheme"));
+        if (kochMusicNode_) {
+            kochThemeSrc_ = kochMusicNode_->CreateComponent<SoundSource>();
+            splashSfxSrc_ = kochMusicNode_->CreateComponent<SoundSource>();
+            if (kochThemeSrc_) {
+                if (Sound* theme = cache->GetResource<Sound>("Music/KochSplashTheme.wav")) {
+                    theme->SetLooped(false);
+                    kochThemeSrc_->SetGain(musicVolume_);
+                    kochThemeSrc_->Play(theme);
+                } else {
+                    kochThemeSrc_ = nullptr;
+                }
+            }
+        }
+
+        splashStage_ = 0;
+        splashTimer_ = 0.0f;
+        splashActive_ = true;
+        ConfigureSplashStage(0);
+        SplashEnterStage(0);
+    }
+
+    void EndSplashIntro() {
+        if (splashPanel_) { splashPanel_->Remove(); splashPanel_ = nullptr; }
+        splashText_ = nullptr;
+        splashMeasure_ = nullptr;
+        splashGlyphs_.Clear();
+        splashGlyphBase_.Clear();
+        splashGlyphIndex_.Clear();
+        splashLine_ = nullptr;
+        splashGlow_ = nullptr;
+        splashSheen_ = nullptr;
+        splashFullText_ = String();
+        splashActive_ = false;
+        splashTimer_ = 0.0f;
+        splashStage_ = 0;
+    }
+
+    void UpdateSplashIntro(float dt) {
+        auto* input = GetSubsystem<Input>();
+        if (input) {
+            if (input->GetMouseButtonDown(MOUSEB_LEFT) || input->GetMouseButtonDown(MOUSEB_RIGHT) ||
+                input->GetKeyPress(KEY_SPACE) || input->GetKeyPress(KEY_RETURN) ||
+                input->GetKeyPress(KEY_ESCAPE)) {
+                EndSplashIntro();
+                return;
+            }
+        }
+        splashTimer_ += dt;
+        const int sw = GetSubsystem<Graphics>()->GetWidth();
+        const int sh = GetSubsystem<Graphics>()->GetHeight();
+
+        static const float kDur[3]   = { 1.15f, 1.10f, 2.30f };
+        static const float kOutAt[3] = { 0.88f, 0.84f, 2.00f };
+        static const int   kLineW[3] = { 300, 210, 840 };
+
+        const int stage = splashStage_;
+        const float t = splashTimer_;
+        const float outT = Clamp((t - kOutAt[stage]) / (kDur[stage] - kOutAt[stage]), 0.0f, 1.0f);
+        const float fadeOut = 1.0f - EaseOutCubic(outT);
+        const float globalAlpha = Clamp(fadeOut, 0.0f, 1.0f);
+
+        const float floatAmp = (float)S(stage == 2 ? 12 : 46);
+        const float floatOff = (1.0f - EaseOutExpo(Clamp(t / 1.00f, 0.0f, 1.0f))) * floatAmp;
+        const float breathe  = sinf(t * 1.7f + stage * 1.7f) * (float)S(2.0f)
+                             * Clamp((t - 0.85f) / 0.5f, 0.0f, 1.0f);
+
+        Color base = stage == 0 ? Color(0.90f, 0.96f, 1.0f, 1.0f)
+                   : stage == 1 ? Color(0.74f, 0.80f, 0.92f, 1.0f)
+                                : Color(1.0f, 0.78f, 0.16f, 1.0f);
+        if (stage == 2) {
+            const float flash = EaseOutCubic(Clamp(t / 0.60f, 0.0f, 1.0f));
+            base = Color(1.0f, Lerp(1.0f, 0.78f, flash), Lerp(1.0f, 0.16f, flash), 1.0f);
+        }
+
+        if (stage < 2) {
+            const float fsFloat = (float)S(stage == 0 ? 30 : 24);
+            for (unsigned i = 0; i < (unsigned)splashGlyphs_.Size(); ++i) {
+                SharedPtr<Text>& glyph = splashGlyphs_[i];
+                if (!glyph) continue;
+                const float delay = 0.10f + splashGlyphIndex_[i] * 0.042f;
+                const float lt = Clamp((t - delay) / 0.55f, 0.0f, 1.0f);
+                const float ease = EaseOutCubic(lt);
+                Color gc = base; gc.a_ = ease * globalAlpha;
+                glyph->SetColor(gc);
+                glyph->SetPosition((int)splashGlyphBase_[i].x_,
+                                   (int)(splashGlyphBase_[i].y_ + (1.0f - EaseOutExpo(lt)) * fsFloat + breathe));
+            }
+        } else if (splashText_) {
+            const float punch = 1.0f - EaseOutExpo(Clamp(t / 0.30f, 0.0f, 1.0f));
+            splashText_->SetFont(font_, SF((int)(76.0f + 20.0f * punch)));
+            Color sc = base; sc.a_ = globalAlpha;
+            splashText_->SetColor(sc);
+            splashText_->SetPosition(0, SplashTextY(2) + S(14) + (int)floatOff + (int)breathe);
+        }
+
+        if (splashGlow_) {
+            static const Color kGlow[3] = {
+                Color(0.16f, 0.80f, 1.00f, 1.0f),
+                Color(0.95f, 0.52f, 0.16f, 1.0f),
+                Color(1.00f, 0.58f, 0.12f, 1.0f)
+            };
+            const float glowIn = EaseOutCubic(Clamp(t / 0.7f, 0.0f, 1.0f));
+            const float pulse = 0.78f + 0.22f * sinf(t * 1.9f + stage * 2.3f);
+            const int gsize = S(stage == 2 ? 1150 : 840);
+            Color gc = kGlow[stage];
+            gc.a_ = glowIn * globalAlpha * 0.46f * pulse;
+            splashGlow_->SetSize(gsize, gsize);
+            splashGlow_->SetPosition(sw / 2 - gsize / 2, sh / 2 - gsize / 2 + (int)floatOff + (int)breathe);
+            splashGlow_->SetColor(gc);
+        }
+
+        if (splashSheen_) {
+            const float sweep = t - 0.55f;
+            if (sweep > 0.0f && sweep < 0.80f) {
+                const float k = sweep / 0.80f;
+                const float easeK = k < 0.5f ? 2.0f * k * k : 1.0f - powf(-2.0f * k + 2.0f, 2.0f) / 2.0f;
+                splashSheen_->SetPosition((int)Lerp(sw * 0.5f - S(460), sw * 0.5f + S(300), easeK),
+                                          SplashTextY(stage) + (int)floatOff - S(2));
+                Color sc(1.0f, 0.93f, 0.78f, 0.52f * globalAlpha * sinf(3.14159265f * k));
+                splashSheen_->SetColor(sc);
+            } else {
+                splashSheen_->SetColor(Color(1.0f, 0.93f, 0.78f, 0.0f));
+            }
+        }
+
+        float lineT = Clamp((t - 0.14f) / 0.55f, 0.0f, 1.0f);
+        lineT = 1.0f - (1.0f - lineT) * (1.0f - lineT);
+        const int w = (int)(S(kLineW[stage]) * lineT);
+        if (splashLine_) {
+            splashLine_->SetPosition(sw / 2 - w / 2, SplashLineY(stage));
+            splashLine_->SetSize(Max(0, w), Max(2, S(stage == 2 ? 4.0f : 3.0f)));
+            Color lc = stage == 0 ? Color(0.20f, 0.92f, 1.00f, 1.0f)
+                     : stage == 1 ? Color(1.00f, 0.58f, 0.18f, 1.0f)
+                                  : Color(1.00f, 0.72f, 0.22f, 1.0f);
+            lc.a_ = 0.92f * EaseOutCubic(Clamp(t / 0.45f, 0.0f, 1.0f)) * globalAlpha;
+            splashLine_->SetColor(lc);
+        }
+
+        if (t >= kDur[stage]) {
+            splashTimer_ = 0.0f;
+            ++splashStage_;
+            if (splashStage_ > 2) { EndSplashIntro(); return; }
+            ConfigureSplashStage(splashStage_);
+            SplashEnterStage(splashStage_);
+        }
     }
 
     // Короткий тактический экран высадки при старте миссии («ТИР» / «АРЕНА»)

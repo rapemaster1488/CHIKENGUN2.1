@@ -13,10 +13,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <string>
 #include <thread>
 #include <vector>
-#include <sys/stat.h>
 
 namespace {
 
@@ -1082,7 +1082,10 @@ void writeSkyboxXml(const std::string& outDir) {
 int main(int argc, char** argv) {
     std::string outDir = (argc > 1) ? argv[1] : "build/Data/Textures";
     int S = (argc > 2) ? std::max(256, std::min(8192, std::atoi(argv[2]))) : 4096;
-    mkdir(outDir.c_str(), 0755);
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(outDir, ec);
+    }
 
     std::printf("[4K PBR Generator] Generating %dx%d PBR texture suite -> %s ...\n", S, S, outDir.c_str());
 

@@ -410,7 +410,11 @@ int main(int argc, char** argv) {
     if (argc > 1 && fs::exists(argv[1])) {
         fs::path tmpOut = fs::temp_directory_path() / "chikengun_test_tex";
         fs::remove_all(tmpOut);
-        std::string cmd = std::string("\"") + argv[1] + "\" \"" + tmpOut.string() + "\" 256 > /dev/null";
+#ifdef _WIN32
+        std::string cmd = std::string("\"\"") + argv[1] + "\" \"" + tmpOut.string() + "\" 256 > NUL\"";
+#else
+        std::string cmd = std::string("\"") + argv[1] + "\" \"" + tmpOut.string() + "\" 256 >/dev/null";
+#endif
         int rc = std::system(cmd.c_str());
         assert(rc == 0 && "gen_textures_4k завершился с ошибкой");
         CheckPngFile(tmpOut / "StoneHDDiffuse.png", 256, 256);

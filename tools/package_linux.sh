@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ============================================================================
 # Сборщик автономного портативного Linux-архива CHIKENGUN 2.5 «ПЕРО СУДЬБЫ»
-# Результат: build/release/CHIKENGUN-2.5-Linux-x86_64.tar.gz (+ SHA256SUMS.txt)
-# Можно скачать, распаковать и запустить на любом Linux без установленного Urho3D.
+# Результат: build/release/CHIKENGUN-2.5-Linux-<arch>.tar.gz (+ SHA256SUMS.txt)
+# Можно скачать, распаковать и запустить на любом Linux (вкл. NixOS/Arch/Ubuntu).
 # ============================================================================
 set -euo pipefail
 
@@ -25,7 +25,7 @@ chmod +x "$STAGE/MyShooter"
 
 # Копируем libUrho3D.so / сторонние несистемные библиотеки, если движок слинкован динамически
 if command -v ldd >/dev/null 2>&1; then
-    for dep in $(ldd "$STAGE/MyShooter" | awk '/=> \//{print $3}'); do
+    for dep in $(ldd "$STAGE/MyShooter" 2>/dev/null | awk '/=> \//{print $3}'); do
         base="$(basename "$dep")"
         case "$base" in
             libUrho3D*|libSDL2*|libBullet*)
@@ -37,13 +37,19 @@ fi
 
 cp -rf "$ROOT/build/CoreData"/. "$STAGE/CoreData"/
 cp -rf "$ROOT/build/Data"/. "$STAGE/Data"/
-[ -f "$ROOT/build/settings.ini" ] && cp "$ROOT/build/settings.ini" "$STAGE/settings.ini" || cp "$ROOT/bin/settings.ini" "$STAGE/settings.ini"
+if [ -f "$ROOT/build/settings.ini" ]; then
+    cp "$ROOT/build/settings.ini" "$STAGE/settings.ini"
+elif [ -f "$ROOT/bin/settings.ini" ]; then
+    cp "$ROOT/bin/settings.ini" "$STAGE/settings.ini"
+fi
 
 cat > "$STAGE/ChikenGun.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-export LD_LIBRARY_PATH="$HERE/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export LD_LIBRARY_PATH="$HERE/lib:/run/opengl-driver/lib:/run/opengl-driver-32/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export CHIKENGUN_DATA_DIR="$HERE/Data"
+export CHIKENGUN_COREDATA_DIR="$HERE/CoreData"
 cd "$HERE"
 exec "$HERE/MyShooter" "$@"
 EOF
@@ -63,7 +69,11 @@ mkdir -p "$ROOT/build/release"
 tar -C "$ROOT/build/release" -czf "$OUT_TAR" "$PKG_NAME"
 (
     cd "$ROOT/build/release"
-    sha256sum "$(basename "$OUT_TAR")" > SHA256SUMS.txt
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$(basename "$OUT_TAR")" > SHA256SUMS.txt
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$(basename "$OUT_TAR")" > SHA256SUMS.txt
+    fi
 )
 
 echo "================================================================"
