@@ -96,6 +96,21 @@
             version = "1.9.0";
             src = urho3d-src;
 
+            postPatch = ''
+              substituteInPlace cmake/Modules/CheckCompilerToolchain.cmake \
+                --replace-warn 'check_native_define ("__(arm|aarch64)__" ARM)' 'check_native_define ("__(arm|arm64|aarch64)__" ARM)'
+              substituteInPlace cmake/Modules/UrhoCommon.cmake \
+                --replace-warn 'if (ARM AND CMAKE_SYSTEM_NAME STREQUAL Linux)' 'if (ARM AND (CMAKE_SYSTEM_NAME STREQUAL Linux OR CMAKE_SYSTEM_NAME STREQUAL Darwin))'
+              ${lib.optionalString stdenv.isDarwin ''
+                substituteInPlace cmake/Modules/UrhoCommon.cmake \
+                  --replace-warn 'set (ARM_CFLAGS "''${ARM_CFLAGS} -march=armv8-a")' 'set (ARM_CFLAGS "''${ARM_CFLAGS}")'
+                substituteInPlace Source/Urho3D/IO/File.cpp \
+                  --replace-warn 'fseeko64(' 'fseeko(' \
+                  --replace-warn 'ftello64(' 'ftello(' \
+                  --replace-warn 'fopen64(' 'fopen('
+              ''}
+            '';
+
             nativeBuildInputs = [
               pkgs.cmake
               pkgs.pkg-config

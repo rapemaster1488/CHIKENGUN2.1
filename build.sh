@@ -353,12 +353,58 @@ if [ -z "$URHO_INC" ] || [ -z "$URHO_LIBDIR" ]; then
             git clone --depth 1 https://github.com/urho3d/Urho3D.git "$URHO_SRC"
     fi
 
+    # Патчим Urho3D 1.9.0 для совместимости с macOS Apple Silicon (arm64) и новым Apple SDK
+    if [ "$OS_NAME" = "Darwin" ] && [ ! -f "$URHO_SRC/.chikengun_apple_patched" ] && command -v python3 >/dev/null 2>&1; then
+        python3 - "$URHO_SRC" << 'PYPATCH'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+
+cct = root / "cmake/Modules/CheckCompilerToolchain.cmake"
+if cct.exists():
+    s = cct.read_text()
+    s = s.replace('check_native_define ("__(arm|aarch64)__" ARM)', 'check_native_define ("__(arm|arm64|aarch64)__" ARM)')
+    cct.write_text(s)
+
+uc = root / "cmake/Modules/UrhoCommon.cmake"
+if uc.exists():
+    s = uc.read_text()
+    s = s.replace('if (ARM AND CMAKE_SYSTEM_NAME STREQUAL Linux)', 'if (ARM AND (CMAKE_SYSTEM_NAME STREQUAL Linux OR CMAKE_SYSTEM_NAME STREQUAL Darwin))')
+    s = s.replace('if (URHO3D_64BIT)\n                    # aarch64 has only one valid arch so far\n                    set (ARM_CFLAGS "${ARM_CFLAGS} -march=armv8-a")',
+                  'if (URHO3D_64BIT AND NOT APPLE)\n                    # aarch64 has only one valid arch so far\n                    set (ARM_CFLAGS "${ARM_CFLAGS} -march=armv8-a")')
+    uc.write_text(s)
+
+fc = root / "Source/Urho3D/IO/File.cpp"
+if fc.exists():
+    s = fc.read_text()
+    s = s.replace('#ifdef _MSC_VER\r\n    return _fseeki64(stream, offset, origin);\r\n#else',
+                  '#ifdef _MSC_VER\n    return _fseeki64(stream, offset, origin);\n#elif defined(__APPLE__)\n    return fseeko(stream, offset, origin);\n#else')
+    s = s.replace('#ifdef _MSC_VER\n    return _fseeki64(stream, offset, origin);\n#else',
+                  '#ifdef _MSC_VER\n    return _fseeki64(stream, offset, origin);\n#elif defined(__APPLE__)\n    return fseeko(stream, offset, origin);\n#else')
+    s = s.replace('#ifdef _MSC_VER\r\n    return _ftelli64(stream);\r\n#else',
+                  '#ifdef _MSC_VER\n    return _ftelli64(stream);\n#elif defined(__APPLE__)\n    return ftello(stream);\n#else')
+    s = s.replace('#ifdef _MSC_VER\n    return _ftelli64(stream);\n#else',
+                  '#ifdef _MSC_VER\n    return _ftelli64(stream);\n#elif defined(__APPLE__)\n    return ftello(stream);\n#else')
+    s = s.replace('return fopen64(', 'return fopen(') if False else s
+    s = s.replace('handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode]);',
+                  '#ifdef __APPLE__\n    handle_ = fopen(GetNativePath(fileName).CString(), openMode[mode]);\n#else\n    handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode]);\n#endif')
+    s = s.replace('handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode + 1]);',
+                  '#ifdef __APPLE__\n        handle_ = fopen(GetNativePath(fileName).CString(), openMode[mode + 1]);\n#else\n        handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode + 1]);\n#endif')
+    fc.write_text(s)
+
+(root / ".chikengun_apple_patched").write_text("1\n")
+PYPATCH
+    fi
+
     CMAKE_EXTRA_ARGS=(
         "-DLIB_SUFFIX="
         "-DURHO3D_USE_LIB_DEB=1"
+        "-DURHO3D_DEPLOYMENT_TARGET=generic"
         "-DCMAKE_C_FLAGS=-std=gnu11 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types"
         "-DCMAKE_CXX_FLAGS=-include cstdint -Wno-error"
     )
+    if [ "$OS_NAME" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
+        CMAKE_EXTRA_ARGS+=("-DARM=1" "-DX86=0")
+    fi
     # CMake >= 3.27 / 4.0 отклоняет старые ThirdParty cmake_minimum_required без policy minimum
     CMAKE_VER="$(cmake --version 2>/dev/null | head -n1 | sed -E 's/[^0-9]*([0-9]+\.[0-9]+).*/\1/' || echo "3.20")"
     CMAKE_MAJ="${CMAKE_VER%%.*}"

@@ -177,9 +177,10 @@ jobs:
           } catch {
             $errs = ""
             if (Test-Path "$env:TEMP\win_build.log") {
-              $errLines = Select-String -Path "$env:TEMP\win_build.log" -Pattern "CMake Error|fatal error|error [A-Z0-9]+:" -Context 0,2 | ForEach-Object { $_.Line }
-              $tail = (Get-Content "$env:TEMP\win_build.log" -Tail 25) -join "`n"
-              $errs = (($errLines | Select-Object -First 20) -join "`n") + "`n--- TAIL ---`n" + $tail
+              $matches = Select-String -Path "$env:TEMP\win_build.log" -Pattern "CMake Error|fatal error|error [A-Z0-9]+:" -Context 0,8
+              $errBlocks = $matches | Select-Object -First 6 | ForEach-Object { ($_.Line + "`n" + ($_.Context.PostContext -join "`n")) }
+              $tail = (Get-Content "$env:TEMP\win_build.log" -Tail 15) -join "`n"
+              $errs = ($errBlocks -join "`n---`n") + "`n--- TAIL ---`n" + $tail
             }
             $msg = ($_ | Out-String) + "`n" + $errs
             $esc = $msg -replace '%','%25' -replace "`r","" -replace "`n",'%0A'
