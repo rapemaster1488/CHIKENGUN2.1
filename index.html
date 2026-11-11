@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CHIKENGUN 2.3 — 4K ULTRA &amp; CYBER EVOLUTION (WebGL2 PBR 3D)</title>
+<title>CHIKENGUN 2.5 — ПЕРО СУДЬБЫ (WebGL2 PBR 3D)</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='86'%3E%F0%9F%90%94%3C/text%3E%3C/svg%3E">
 <style>
   :root {
     --bg: #040914;
@@ -21,49 +22,217 @@
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
   }
 
-  /* ===== 4K BOOT LOADING SCREEN ===== */
+  /* ===== 2.5 «ПЕРО СУДЬБЫ» CINEMATIC BOOT SCREEN ===== */
   #bootScreen {
-    position: fixed; inset: 0; z-index: 200;
-    background: #040812 url("Data/Textures/LoadingBg4K.png") center/cover no-repeat;
+    position: fixed; inset: 0; z-index: 200; overflow: hidden;
+    background: #03060f url("Data/Textures/LoadingBg4K.png") center/cover no-repeat;
     display: flex; flex-direction: column; justify-content: space-between;
-    transition: opacity 0.45s ease;
+    transition: opacity 0.5s ease, transform 0.5s ease, filter 0.5s ease;
   }
-  #bootScreen.hidden { opacity: 0; pointer-events: none; }
+  #bootScreen::before {   /* затемнение арта + радиальный фокус на эмблеме */
+    content: ""; position: absolute; inset: 0; z-index: 0;
+    background:
+      radial-gradient(ellipse 62% 54% at 50% 34%, rgba(46,242,255,0.14) 0%, rgba(3,6,15,0.18) 45%, rgba(3,6,15,0.93) 100%),
+      linear-gradient(180deg, rgba(3,6,15,0.82) 0%, rgba(3,6,15,0.25) 22%, rgba(3,6,15,0.25) 62%, rgba(3,6,15,0.95) 100%);
+  }
+  #bootScreen.hidden { opacity: 0; pointer-events: none; transform: scale(1.06); filter: blur(6px); }
+
+  /* сканирующие линии + бегущая световая полоса */
+  .boot-fx-scan {
+    position: absolute; inset: -100px 0; z-index: 1; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(180,255,255,0.045) 0 1px, transparent 1px 4px);
+    animation: scanDrift 7s linear infinite;
+  }
+  @keyframes scanDrift { from { transform: translateY(0); } to { transform: translateY(100px); } }
+  .boot-scanband {
+    position: absolute; left: 0; right: 0; height: 140px; z-index: 1; pointer-events: none;
+    background: linear-gradient(180deg, transparent, rgba(46,242,255,0.16) 42%, rgba(255,255,255,0.30) 50%, rgba(46,242,255,0.16) 58%, transparent);
+    filter: blur(1px); animation: scanBand 4.6s cubic-bezier(0.45,0,0.25,1) infinite;
+  }
+  @keyframes scanBand { 0% { top: -22%; opacity: 0; } 12% { opacity: 1; } 55% { opacity: 1; } 100% { top: 122%; opacity: 0; } }
+
+  /* гекс-сетка фона */
+  .boot-fx-grid {
+    position: absolute; inset: 0; z-index: 1; pointer-events: none; opacity: 0.5;
+    background-image:
+      repeating-linear-gradient(60deg, rgba(46,242,255,0.05) 0 1px, transparent 1px 56px),
+      repeating-linear-gradient(-60deg, rgba(46,242,255,0.05) 0 1px, transparent 1px 56px);
+    mask-image: radial-gradient(ellipse 75% 65% at 50% 40%, black 30%, transparent 75%);
+    -webkit-mask-image: radial-gradient(ellipse 75% 65% at 50% 40%, black 30%, transparent 75%);
+  }
+
+  /* падающие перья */
+  .boot-feathers { position: absolute; inset: 0; z-index: 2; pointer-events: none; overflow: hidden; }
+  .feather {
+    position: absolute; top: -56px; border-radius: 78% 6% 78% 6%;
+    background: linear-gradient(155deg, #ffe98a 0%, #ffd447 38%, #d4a017 78%, #7a5a08 100%);
+    box-shadow: 0 0 10px rgba(255, 212, 71, 0.45), inset -2px 2px 4px rgba(255,255,255,0.55);
+    opacity: 0.92; animation: featherFall linear infinite;
+  }
+  .feather.cyan {
+    background: linear-gradient(155deg, #bafcff 0%, #2ef2ff 40%, #0e8fa3 82%, #053a46 100%);
+    box-shadow: 0 0 10px rgba(46, 242, 255, 0.5), inset -2px 2px 4px rgba(255,255,255,0.6);
+  }
+  .feather.red {
+    background: linear-gradient(155deg, #ffb3ba 0%, #ff3b4e 42%, #a3121f 84%, #4d040c 100%);
+    box-shadow: 0 0 10px rgba(255, 59, 78, 0.5), inset -2px 2px 4px rgba(255,255,255,0.5);
+  }
+  @keyframes featherFall {
+    0%   { transform: translate3d(0, -8vh, 0) rotate(14deg); }
+    18%  { transform: translate3d(4.5vw, 18vh, 0) rotate(-28deg); }
+    37%  { transform: translate3d(-3vw, 38vh, 0) rotate(22deg); }
+    55%  { transform: translate3d(5vw, 58vh, 0) rotate(-34deg); }
+    74%  { transform: translate3d(-2.5vw, 78vh, 0) rotate(26deg); }
+    100% { transform: translate3d(2vw, 112vh, 0) rotate(48deg); }
+  }
+
   .boot-top {
-    background: rgba(3, 8, 20, 0.88);
+    position: relative; z-index: 3;
+    background: rgba(3, 8, 20, 0.86); backdrop-filter: blur(6px);
     border-bottom: 1px solid rgba(46, 242, 255, 0.35);
-    padding: 15px 24px; text-align: center;
-    font-size: 13px; letter-spacing: 0.14em; color: var(--cyan); font-weight: 700;
+    padding: 12px 24px; text-align: center;
+    font-size: 12px; letter-spacing: 0.16em; color: var(--cyan); font-weight: 700;
+    text-shadow: 0 0 12px rgba(46,242,255,0.6);
+    overflow: hidden; white-space: nowrap;
   }
-  .boot-card {
-    align-self: center; width: min(780px, 92vw);
-    background: rgba(6, 14, 30, 0.82); backdrop-filter: blur(10px);
-    border-top: 2px solid var(--cyan); border-bottom: 2px solid var(--gold);
-    padding: 26px 34px; text-align: center; box-shadow: 0 24px 70px rgba(0,0,0,0.85);
+  .boot-top b { color: var(--gold); }
+
+  /* центральная сцена */
+  .boot-stage-wrap { position: relative; z-index: 3; align-self: center; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0 12px; }
+
+  /* ===== СИГИЛ: вращающийся кибер-петух ===== */
+  .boot-sigil { position: relative; width: clamp(180px, 24vh, 250px); height: clamp(180px, 24vh, 250px); margin-bottom: 2px; }
+  .boot-sigil svg { width: 100%; height: 100%; overflow: visible; filter: drop-shadow(0 0 26px rgba(46,242,255,0.35)) drop-shadow(0 0 60px rgba(255,212,71,0.18)); }
+  .ring-outer { transform-origin: 120px 120px; animation: sigilSpin 46s linear infinite; }
+  .ring-inner { transform-origin: 120px 120px; animation: sigilSpinRev 30s linear infinite; }
+  .sigil-ticks { transform-origin: 120px 120px; animation: sigilSpin 90s linear infinite; }
+  @keyframes sigilSpin    { from { transform: rotate(0deg); }   to { transform: rotate(360deg); } }
+  @keyframes sigilSpinRev { from { transform: rotate(0deg); }   to { transform: rotate(-360deg); } }
+  .sigil-core-pulse { transform-origin: 120px 120px; animation: corePulse 2.6s ease-in-out infinite; }
+  @keyframes corePulse { 0%, 100% { transform: scale(1); opacity: 0.75; } 50% { transform: scale(1.14); opacity: 1; } }
+  .sigil-eye { animation: eyeFlare 2.6s ease-in-out infinite; }
+  @keyframes eyeFlare { 0%, 100% { opacity: 1; } 42% { opacity: 1; } 46% { opacity: 0.15; } 50% { opacity: 1; } 54% { opacity: 0.3; } 58% { opacity: 1; } }
+  .sigil-beam { transform-origin: 120px 120px; animation: beamSweep 5.2s linear infinite; }
+  @keyframes beamSweep { from { transform: rotate(0deg); opacity: 0.9; } 70% { opacity: 0.9; } 100% { transform: rotate(360deg); opacity: 0.25; } }
+
+  /* ===== ТИТУЛ + ГЛИТЧ ===== */
+  .boot-title { line-height: 0.98; text-align: center; }
+  .glitch {
+    position: relative; display: inline-block;
+    font-size: clamp(44px, 8.2vw, 84px); font-weight: 900; letter-spacing: 0.09em; color: var(--gold);
+    text-shadow: 0 0 34px rgba(255, 212, 71, 0.5), 0 4px 0 #6b4a00, 0 8px 26px rgba(0,0,0,0.9);
+    animation: titleGlow 3.4s ease-in-out infinite;
   }
-  .boot-card h1 {
-    font-size: clamp(32px, 5vw, 54px); color: var(--gold);
-    text-shadow: 0 0 24px rgba(255, 212, 71, 0.45);
-    letter-spacing: 0.06em; font-weight: 900;
+  @keyframes titleGlow {
+    0%, 100% { text-shadow: 0 0 34px rgba(255,212,71,0.5), 0 4px 0 #6b4a00, 0 8px 26px rgba(0,0,0,0.9); }
+    50%      { text-shadow: 0 0 52px rgba(255,212,71,0.78), 0 0 90px rgba(255,180,40,0.35), 0 4px 0 #6b4a00, 0 8px 26px rgba(0,0,0,0.9); }
   }
-  .boot-sub { margin-top: 5px; font-size: 13px; letter-spacing: 0.22em; color: var(--cyan); }
+  .glitch::before, .glitch::after {
+    content: attr(data-text); position: absolute; left: 0; top: 0; width: 100%;
+    background: transparent; pointer-events: none;
+  }
+  .glitch::before { color: #2ef2ff; z-index: -1; animation: glitchA 2.7s steps(2, end) infinite; }
+  .glitch::after  { color: #ff3b4e; z-index: -2; animation: glitchB 3.1s steps(2, end) infinite; }
+  @keyframes glitchA {
+    0%, 91%, 100% { transform: translate(0, 0); opacity: 0.0; clip-path: inset(0 0 0 0); }
+    92% { transform: translate(-6px, 2px); opacity: 0.85; clip-path: inset(12% 0 58% 0); }
+    94% { transform: translate(5px, -2px); opacity: 0.85; clip-path: inset(62% 0 8% 0); }
+    96% { transform: translate(-4px, 1px); opacity: 0.7; clip-path: inset(30% 0 30% 0); }
+    98% { transform: translate(0, 0); opacity: 0; }
+  }
+  @keyframes glitchB {
+    0%, 88%, 100% { transform: translate(0, 0); opacity: 0.0; clip-path: inset(0 0 0 0); }
+    89% { transform: translate(6px, -1px); opacity: 0.8; clip-path: inset(70% 0 5% 0); }
+    91% { transform: translate(-5px, 2px); opacity: 0.8; clip-path: inset(8% 0 72% 0); }
+    93% { transform: translate(4px, 0); opacity: 0.6; clip-path: inset(40% 0 38% 0); }
+    95% { transform: translate(0, 0); opacity: 0; }
+  }
+  .boot-sub2 {
+    font-size: clamp(15px, 2vw, 21px); font-weight: 800; letter-spacing: 0.52em; text-indent: 0.52em;
+    color: var(--cyan); text-shadow: 0 0 18px rgba(46,242,255,0.75);
+    animation: subFlicker 6s linear infinite;
+  }
+  @keyframes subFlicker {
+    0%, 100% { opacity: 1; } 92% { opacity: 1; } 93% { opacity: 0.35; } 94% { opacity: 1; } 96% { opacity: 0.55; } 97% { opacity: 1; }
+  }
+  .boot-tagline { font-size: 10.5px; letter-spacing: 0.3em; color: #7f9cc0; text-indent: 0.3em; font-family: monospace; }
+
+  /* ===== КОНСОЛЬ РИТУАЛА ===== */
+  .boot-console {
+    width: min(680px, 94vw); margin-top: 10px;
+    background: rgba(2, 7, 17, 0.88); border: 1px solid rgba(46, 242, 255, 0.4);
+    border-radius: 10px; box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 18px 60px rgba(0,0,0,0.75), inset 0 0 44px rgba(46,242,255,0.05);
+    overflow: hidden; backdrop-filter: blur(7px);
+  }
+  .boot-console-head {
+    display: flex; align-items: center; gap: 8px; padding: 7px 12px;
+    background: linear-gradient(180deg, rgba(20, 40, 70, 0.75), rgba(8, 18, 34, 0.75));
+    border-bottom: 1px solid rgba(46, 242, 255, 0.25);
+    font-family: monospace; font-size: 11px; color: #8fd8e8;
+  }
+  .bc-dot { width: 10px; height: 10px; border-radius: 50%; }
+  .bc-dot.r { background: #ff5f57; box-shadow: 0 0 6px #ff5f57; }
+  .bc-dot.y { background: #febc2e; box-shadow: 0 0 6px #febc2e; }
+  .bc-dot.g { background: #28c840; box-shadow: 0 0 6px #28c840; }
+  .boot-console-title { margin-left: 6px; letter-spacing: 0.08em; }
+  .boot-console-id { margin-left: auto; color: #4f7a9e; }
   .boot-checklist {
-    margin-top: 18px; text-align: left; font-family: monospace;
-    font-size: 13px; line-height: 1.72; color: #cfe8ff;
-    background: rgba(2, 6, 15, 0.58); padding: 12px 16px; border-radius: 6px;
+    padding: 12px 16px 6px; min-height: 148px;
+    font-family: "JetBrains Mono", ui-monospace, Consolas, monospace; font-size: 12px; line-height: 1.85; color: #b8f5ff;
   }
+  .boot-checklist .ln { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ln-addr { color: #4f7a9e; }
+  .ln-ok { color: #2bff9e; }
+  .ln-warn { color: #ffd447; }
+  .ln-dim { color: #5b7797; }
+  .ln-hot { color: #ff8a5c; }
+  .boot-cursor-line { padding: 0 16px 12px; font-family: monospace; font-size: 12px; color: #2ef2ff; }
+  .boot-cursor { display: inline-block; animation: blink 0.9s steps(1) infinite; }
+  @keyframes blink { 0%, 55% { opacity: 1; } 56%, 100% { opacity: 0; } }
+
+  /* ===== НИЖНЯЯ ПАНЕЛЬ ===== */
   .boot-bot {
-    background: rgba(3, 8, 20, 0.92);
+    position: relative; z-index: 3;
+    background: rgba(3, 8, 20, 0.88); backdrop-filter: blur(8px);
     border-top: 1px solid rgba(255, 212, 71, 0.3);
-    padding: 18px 6vw 24px;
+    padding: 14px 6vw 16px;
   }
-  .boot-bar-head { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; font-weight: 700; }
+  .boot-bar-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 7px; font-size: 13px; font-weight: 700; gap: 12px; }
+  #bootStage { color: #bfe9ff; font-family: monospace; font-size: 12px; letter-spacing: 0.05em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #bootPct { color: var(--gold); font-family: monospace; font-size: 19px; text-shadow: 0 0 12px rgba(255,212,71,0.6); min-width: 58px; text-align: right; font-variant-numeric: tabular-nums; }
   .boot-track {
-    width: 100%; height: 14px; background: rgba(20, 36, 62, 0.95);
-    border-radius: 7px; overflow: hidden; border: 1px solid rgba(46, 242, 255, 0.35);
+    position: relative; width: 100%; height: 18px; border-radius: 9px; overflow: hidden;
+    background: repeating-linear-gradient(90deg, rgba(22, 40, 68, 0.95) 0 12px, rgba(10, 22, 40, 0.95) 12px 14px);
+    border: 1px solid rgba(46, 242, 255, 0.4);
+    box-shadow: inset 0 2px 6px rgba(0,0,0,0.7);
   }
-  .boot-fill { height: 100%; width: 4%; background: linear-gradient(90deg, #16d9a0, #2ef2ff, #ffd447); transition: width 0.14s linear; }
-  .boot-tip { margin-top: 10px; text-align: center; font-size: 13px; color: #a7c4e2; }
+  .boot-fill {
+    position: relative; height: 100%; width: 3%;
+    background: linear-gradient(90deg, #0e8f5b 0%, #16d9a0 22%, #2ef2ff 52%, #ffd447 88%, #fff6c8 100%);
+    transition: width 0.12s linear;
+    box-shadow: 0 0 18px rgba(46, 242, 255, 0.65), 0 0 44px rgba(255, 212, 71, 0.3);
+  }
+  .boot-fill::after {   /* бегущий блик по заполнению */
+    content: ""; position: absolute; top: 0; bottom: 0; width: 90px;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.85), transparent);
+    animation: fillShine 1.15s linear infinite; mix-blend-mode: screen;
+  }
+  @keyframes fillShine { from { left: -110px; } to { left: 110%; } }
+
+  /* бегущая строка лоры */
+  .boot-marquee { margin-top: 9px; overflow: hidden; border-top: 1px solid rgba(46,242,255,0.18); border-bottom: 1px solid rgba(46,242,255,0.18); padding: 5px 0; }
+  .boot-marquee-inner {
+    display: inline-block; white-space: nowrap; padding-left: 100%;
+    font-family: monospace; font-size: 11px; letter-spacing: 0.22em; color: #6f93b5;
+    animation: marqueeScroll 22s linear infinite;
+  }
+  @keyframes marqueeScroll { from { transform: translateX(0); } to { transform: translateX(-100%); } }
+
+  .boot-tip { margin-top: 7px; text-align: center; font-size: 12.5px; color: #a7c4e2; min-height: 17px; transition: opacity 0.25s; }
+  .boot-tip b { color: var(--cyan); }
+  .boot-skip { margin-top: 4px; text-align: center; font-size: 10px; letter-spacing: 0.28em; color: #54749a; font-family: monospace; animation: skipPulse 1.6s ease-in-out infinite; }
+  @keyframes skipPulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+  .boot-skip b { color: #9fd8ff; }
 
   /* ===== TOP NAVIGATION ===== */
   #topNav {
@@ -73,7 +242,13 @@
     padding: 0 16px; backdrop-filter: blur(8px);
   }
   body.playing #topNav { transform: translateY(-100%); transition: transform 0.2s; }
-  .brand { font-weight: 900; letter-spacing: 0.07em; color: var(--gold); font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .brand { position: relative; overflow: hidden; font-weight: 900; letter-spacing: 0.07em; color: var(--gold); font-size: 15px; display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 8px; }
+  .brand::after {
+    content: ""; position: absolute; top: -20%; bottom: -20%; width: 56px; pointer-events: none;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.55), transparent);
+    animation: brandShine 3.6s ease-in-out infinite;
+  }
+  @keyframes brandShine { 0%, 55% { left: -80px; } 100% { left: 135%; } }
   .brand span { font-size: 11px; padding: 3px 7px; border-radius: 4px; background: rgba(46,242,255,0.16); color: var(--cyan); border: 1px solid rgba(46,242,255,0.4); }
   .tabs { display: flex; gap: 7px; flex-wrap: wrap; }
   .tab-btn {
@@ -107,7 +282,8 @@
 
   #radarCanvas {
     position: absolute; top: 18px; left: 18px; width: 144px; height: 144px;
-    background: rgba(4, 14, 28, 0.82); border: 2px solid rgba(46, 242, 255, 0.55); border-radius: 8px;
+    background: rgba(4, 14, 28, 0.82); border: 2px solid rgba(46, 242, 255, 0.55); border-radius: 10px;
+    box-shadow: 0 0 22px rgba(46, 242, 255, 0.18), inset 0 0 26px rgba(46, 242, 255, 0.14);
   }
   #killFeed { position: absolute; top: 170px; left: 18px; font-size: 13px; line-height: 1.55; color: #d8f3ff; text-shadow: 0 1px 4px #000; }
   #telemetryHud {
@@ -157,6 +333,42 @@
     background: radial-gradient(circle, transparent 45%, rgba(255, 25, 45, 0.55) 100%);
     opacity: 0; transition: opacity 0.12s;
   }
+  /* 2.5: постоянный пульс «мало HP», пока hp ≤ 30 */
+  #lowhpFx {
+    position: fixed; inset: 0; pointer-events: none; z-index: 28; opacity: 0;
+    background: radial-gradient(ellipse at center, transparent 54%, rgba(255, 30, 47, 0.30) 88%, rgba(255, 30, 47, 0.52) 100%);
+    transition: opacity 0.25s;
+  }
+  body.lowhp #lowhpFx { animation: lowhpPulse 0.85s ease-in-out infinite; }
+  @keyframes lowhpPulse { 0%, 100% { opacity: 0.3; } 50% { opacity: 0.9; } }
+  /* 2.5: прицеливание — скоп-виньетка */
+  #zoomFx { position: fixed; inset: 0; pointer-events: none; z-index: 27; opacity: 0; transition: opacity 0.18s; background: radial-gradient(circle at center, transparent 46%, rgba(0,0,0,0.42) 78%, rgba(0,0,0,0.8) 100%); }
+  body.aiming #zoomFx { opacity: 1; }
+  /* 2.5: полоса перезарядки */
+  .reload-track { height: 4px; background: rgba(22,40,68,0.9); border-radius: 2px; margin-top: 4px; overflow: hidden; opacity: 0; transition: opacity 0.15s; }
+  .reload-fill { height: 100%; width: 0%; background: linear-gradient(90deg, #2ef2ff, #ffd447); box-shadow: 0 0 8px rgba(46,242,255,0.6); }
+  .ammo-zero { color: #ff3b4e !important; animation: ammoZeroBlink 0.6s steps(2) infinite; }
+  @keyframes ammoZeroBlink { 50% { opacity: 0.35; } }
+  /* 2.5: хитмаркер — pop при попадании */
+  #hitMarker.pop { animation: hitPop 0.16s ease-out; }
+  @keyframes hitPop { 0% { transform: translate(-50%,-50%) rotate(45deg) scale(1.8); } 100% { transform: translate(-50%,-50%) rotate(45deg) scale(1); } }
+  /* 2.5: заголовок меню — бегущий золотой градиент */
+  .arena-title { font-size: clamp(24px, 3.6vw, 34px); font-weight: 900; letter-spacing: 0.02em;
+    background: linear-gradient(100deg, #ffd447 20%, #fff6c8 34%, #ffb52e 48%, #ffd447 62%); background-size: 240% 100%;
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    animation: arenaTitleShine 4.4s linear infinite; filter: drop-shadow(0 2px 12px rgba(255,180,40,0.28)); }
+  @keyframes arenaTitleShine { from { background-position: 0% 0; } to { background-position: 240% 0; } }
+  /* 2.5: дуга-индикатор направления урона */
+  #dmgDir { position: fixed; left: 50%; top: 50%; width: 190px; height: 190px; margin: -95px 0 0 -95px; z-index: 28; pointer-events: none; opacity: 0; transition: opacity 0.22s; }
+  .dmg-arc { position: absolute; left: 50%; top: 50%; width: 150px; height: 150px; margin: -75px; border-radius: 50%;
+    border: 10px solid transparent; border-top-color: rgba(255, 64, 80, 0.95);
+    clip-path: polygon(16% 0, 84% 0, 71% 30%, 29% 30%);
+    filter: blur(0.6px) drop-shadow(0 0 14px rgba(255, 64, 80, 0.8)); }
+  /* 2.5: блик по открытым достижениям */
+  .sfx-btn.ach-on { position: relative; overflow: hidden; }
+  .sfx-btn.ach-on::after { content: ""; position: absolute; top: -25%; bottom: -25%; left: -70px; width: 46px; pointer-events: none;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.45), transparent); animation: achShine 4.6s ease-in-out infinite; }
+  @keyframes achShine { 0%, 62% { left: -70px; } 100% { left: 130%; } }
   #toastBanner {
     position: fixed; top: 66px; left: 50%; transform: translateX(-50%);
     z-index: 95; background: rgba(28, 20, 4, 0.94); border-top: 2px solid var(--gold);
@@ -269,32 +481,131 @@
 </head>
 <body>
 
-<!-- 1. 4K BOOT LOADING SCREEN -->
+<!-- 1. «ПЕРО СУДЬБЫ» CINEMATIC BOOT LOADING SCREEN -->
 <div id="bootScreen">
-  <div class="boot-top">WEBGL2 #version 300 es &nbsp;•&nbsp; GGX PBR + NORMAL MAPPING &nbsp;•&nbsp; SKY4K CUBEMAP IBL &nbsp;•&nbsp; ACES FILMIC HDR</div>
-  <div class="boot-card">
-    <h1>CHIKENGUN 2.3</h1>
-    <div class="boot-sub">4K ULTRA &amp; CYBER EVOLUTION</div>
-    <div class="boot-checklist" id="bootList"></div>
+  <div class="boot-fx-grid"></div>
+  <div class="boot-fx-scan"></div>
+  <div class="boot-scanband"></div>
+  <div class="boot-feathers" id="bootFeathers"></div>
+
+  <div class="boot-top">WEBGL2 <b>#version 300 es</b> &nbsp;•&nbsp; GGX PBR + NORMAL MAP &nbsp;•&nbsp; <b>SUN SHADOWS</b> &nbsp;•&nbsp; ACES FILMIC HDR &nbsp;•&nbsp; ПЕРО СУДЬБЫ <b>2.5</b></div>
+
+  <div class="boot-stage-wrap">
+    <div class="boot-sigil" aria-hidden="true">
+      <svg viewBox="0 0 240 240" role="img" aria-label="Кибер-петух — сигмл ChickenGun">
+        <defs>
+          <radialGradient id="sigilCoreGrad" cx="50%" cy="42%" r="60%">
+            <stop offset="0%" stop-color="#ffe98a" stop-opacity="0.95"/>
+            <stop offset="45%" stop-color="#ffb52e" stop-opacity="0.35"/>
+            <stop offset="100%" stop-color="#ffb52e" stop-opacity="0"/>
+          </radialGradient>
+          <linearGradient id="goldGrad" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#ffe98a"/><stop offset="45%" stop-color="#ffd447"/><stop offset="100%" stop-color="#b8860b"/>
+          </linearGradient>
+          <linearGradient id="beakGrad" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0%" stop-color="#fff3b0"/><stop offset="55%" stop-color="#ffb52e"/><stop offset="100%" stop-color="#8a5a00"/>
+          </linearGradient>
+        </defs>
+
+        <!-- пульсирующая сердцевина -->
+        <circle class="sigil-core-pulse" cx="120" cy="118" r="78" fill="url(#sigilCoreGrad)"/>
+
+        <!-- внешнее пунктирное кольцо (медленно крутится) -->
+        <g class="ring-outer" stroke="#2ef2ff" stroke-width="2.4" fill="none" opacity="0.95">
+          <circle cx="120" cy="120" r="112" stroke-dasharray="10 14"/>
+          <circle cx="120" cy="120" r="112" stroke-dasharray="2 44" stroke-width="6" opacity="0.9"/>
+        </g>
+        <!-- внутреннее золотое кольцо (реверс) -->
+        <g class="ring-inner" stroke="#ffd447" stroke-width="1.6" fill="none" opacity="0.9">
+          <circle cx="120" cy="120" r="90" stroke-dasharray="30 10 4 10"/>
+        </g>
+        <!-- риски по периметру -->
+        <g class="sigil-ticks" stroke="#7fd8e8" stroke-width="2" opacity="0.85">
+          <line x1="120" y1="2"  x2="120" y2="14"/>
+          <line x1="165" y1="8"  x2="162" y2="19"/>
+          <line x1="205" y1="38" x2="196" y2="46"/>
+          <line x1="232" y1="85" x2="222" y2="90"/>
+          <line x1="238" y1="135" x2="228" y2="135"/>
+          <line x1="215" y1="183" x2="206" y2="177"/>
+          <line x1="175" y1="222" x2="169" y2="213"/>
+          <line x1="120" y1="236" x2="120" y2="224"/>
+          <line x1="65" y1="222" x2="71" y2="213"/>
+          <line x1="25" y1="183" x2="34" y2="177"/>
+          <line x1="4"  y1="120" x2="15" y2="120"/>
+          <line x1="25" y1="57" x2="34" y2="63"/>
+        </g>
+        <!-- развёртывающийся луч-сканер -->
+        <g class="sigil-beam" opacity="0.5">
+          <path d="M120 120 L120 8 A112 112 0 0 1 199 64 Z" fill="url(#sigilCoreGrad)" opacity="0.5"/>
+        </g>
+
+        <!-- гекс-подложка -->
+        <polygon points="175.4,152 120,184 64.6,152 64.6,88 120,56 175.4,88" fill="rgba(46,242,255,0.05)" stroke="#2ef2ff" stroke-width="1.2" stroke-opacity="0.65"/>
+
+        <!-- === КИБЕР-ПЕТУХ === -->
+        <!-- гребень (3 «пера») -->
+        <path d="M99 79 C 93 57 108 53 111 72 Z" fill="#ff3b4e" stroke="#7a0411" stroke-width="1.4"/>
+        <path d="M117 74 C 113 46 134 44 130 72 Z" fill="#ff5566" stroke="#7a0411" stroke-width="1.4"/>
+        <path d="M138 77 C 141 55 158 58 149 78 Z" fill="#ff3b4e" stroke="#7a0411" stroke-width="1.4"/>
+        <!-- голова -->
+        <path d="M120 72 C 154 72 173 96 173 123 C 173 152 151 170 120 170 C 89 170 67 152 67 123 C 67 96 86 72 120 72 Z"
+              fill="url(#goldGrad)" stroke="#3a2800" stroke-width="2.2"/>
+        <!-- шейное «перо»-воротник -->
+        <path d="M84 150 L100 132 L104 156 L122 138 L128 163 L146 146 L158 168 L120 176 L96 168 Z" fill="#d4a017" stroke="#5c4300" stroke-width="1.6" opacity="0.95"/>
+        <!-- клюв (влево, рубленый) -->
+        <path d="M69 113 L26 126 L68 140 Z" fill="url(#beakGrad)" stroke="#3a2800" stroke-width="2" stroke-linejoin="round"/>
+        <path d="M69 127 L47 128" stroke="#3a2800" stroke-width="1.6" opacity="0.8"/>
+        <!-- кибер-глаз: орбиты + вспыхивающий зрачок -->
+        <circle cx="113" cy="112" r="13.5" fill="#04081a" stroke="#2ef2ff" stroke-width="2.4"/>
+        <circle cx="113" cy="112" r="6.2" fill="none" stroke="#2ef2ff" stroke-width="1.1" stroke-dasharray="2.6 2.2" opacity="0.9"/>
+        <circle class="sigil-eye" cx="113" cy="112" r="3.4" fill="#2ef2ff"/>
+        <circle cx="111.6" cy="110.4" r="1.15" fill="#eaffff"/>
+        <!-- схемы-обвес на щеке -->
+        <polyline points="131,131 150,131 158,139 172,139" fill="none" stroke="#2ef2ff" stroke-width="1.5" opacity="0.9"/>
+        <circle cx="176" cy="139" r="2" fill="#2ef2ff"/>
+        <polyline points="133,120 148,116 154,120" fill="none" stroke="#2ef2ff" stroke-width="1.1" opacity="0.65"/>
+        <!-- заклепки на гребне -->
+        <circle cx="117" cy="60" r="1.4" fill="#ffe98a" opacity="0.9"/>
+        <circle cx="103" cy="70" r="1.1" fill="#ffe98a" opacity="0.7"/>
+        <circle cx="143" cy="70" r="1.1" fill="#ffe98a" opacity="0.7"/>
+      </svg>
+    </div>
+
+    <h1 class="boot-title"><span class="glitch" data-text="CHIKENGUN">CHIKENGUN</span></h1>
+    <div class="boot-sub2">2.5 // ПЕРО&nbsp;СУДЬБЫ</div>
+    <div class="boot-tagline">WEBGL2 PBR • SUN SHADOWS • ACES HDR</div>
+
+    <div class="boot-console">
+      <div class="boot-console-head">
+        <span class="bc-dot r"></span><span class="bc-dot y"></span><span class="bc-dot g"></span>
+        <span class="boot-console-title">chikengun.exe — ритуал пробуждения</span>
+        <span class="boot-console-id">PID 0x0C4B</span>
+      </div>
+      <div class="boot-checklist" id="bootList"></div>
+      <div class="boot-cursor-line">&gt; <span class="boot-cursor">█</span></div>
+    </div>
   </div>
+
   <div class="boot-bot">
     <div class="boot-bar-head">
-      <span id="bootStage">ЭТАП 1/6: Компиляция шейдеров WebGL2 GGX PBR...</span>
-      <span id="bootPct" style="color:var(--gold)">4%</span>
+      <span id="bootStage">ЭТАП 1/8: контекст WebGL2...</span>
+      <span id="bootPct">4%</span>
     </div>
     <div class="boot-track"><div class="boot-fill" id="bootFill"></div></div>
-    <div class="boot-tip">СОВЕТ: [Z] Грэппл-крюк затягивает на крыши бункеров, а [X] вызывает Орбитальный Лазер «ЯЙЦЕГЕДДОН»!</div>
+    <div class="boot-marquee"><div class="boot-marquee-inner" id="bootMarquee">ПЕРО СУДЬБЫ • ШЕСТЬ ПОРОД УЖЕ ЖДУТ В ТЕНИ АРЕНЫ • [Z] ГРЭППЛ НА КРЫШУ БУНКЕРА • [X] ЯЙЦЕГЕДДОН С ОРБИТЫ • [P] БАНЬКА СМОТРЯЩЕГО • НЕ ВЕРЬТЕ ЗОЛОТЫМ КУРИЦАМ • ПЕРО СУДЬБЫ •</div></div>
+    <div class="boot-tip" id="bootTip">СОВЕТ: <b>[Z]</b> Грэппл-крюк затягивает на крыши бункеров, а <b>[X]</b> вызывает Орбитальный Лазер «ЯЙЦЕГЕДДОН»!</div>
+    <div class="boot-skip">НАЖМИ <b>ENTER</b> / <b>КЛИК</b> — ПРОПУСТИТЬ РИТУАЛ</div>
   </div>
 </div>
 
 <!-- 2. TOP NAVIGATION -->
 <nav id="topNav">
-  <div class="brand">🐔 CHIKENGUN 2.3 <span>WEBGL2 4K PBR</span></div>
+  <div class="brand">🐔 CHIKENGUN 2.5 <span>ПЕРО СУДЬБЫ</span></div>
   <div class="tabs">
     <button class="tab-btn active" data-tab="arenaView">▶ 3D АРЕНА (WebGL2)</button>
     <button class="tab-btn banya-tab" data-tab="banyaView" id="banyaNavBtn">🧖 КОЧЕТ В БАНЬКЕ (14)</button>
     <button class="tab-btn" data-tab="achView">🏆 ДОСТИЖЕНИЯ (14)</button>
-    <button class="tab-btn" data-tab="pbrView">🎨 4K PBR КАРТЫ</button>
+    <button class="tab-btn" data-tab="pbrView">🎨 PBR ТЕКСТУРЫ</button>
     <button class="tab-btn" data-tab="sfxView">🔊 АУДИО-СТЕНД (27 WAV)</button>
     <a class="tab-btn ext" href="minigames.html">🕹 PIXEL ARCADE</a>
     <a class="tab-btn ext" href="casino.html">🎰 РУЛЕТКА</a>
@@ -304,6 +615,9 @@
 <!-- 3. HARDWARE WEBGL2 3D CANVAS & HUD -->
 <canvas id="glCanvas"></canvas>
 <div id="dmgFlash"></div>
+<div id="lowhpFx"></div>
+<div id="zoomFx"></div>
+<div id="dmgDir"><div class="dmg-arc"></div></div>
 <div id="toastBanner"></div>
 
 <div id="hud">
@@ -318,6 +632,7 @@
   <div id="scoreBox">
     <div id="hudScore">СЧЁТ: 0 &nbsp;|&nbsp; ₵100 &nbsp;|&nbsp; ВОЛНА 1</div>
     <div id="hudSub" style="font-size:12px;color:var(--cyan)">РЕКОРД: 0 &nbsp;|&nbsp; 🏆 0/12</div>
+    <div id="waveLeft" style="font-size:12px;color:#ffb04a;margin-top:2px;font-weight:800">🐔 ОСТАЛОСЬ: 0</div>
   </div>
   <div id="dmgLayer"></div>
   <div class="crosshair">
@@ -344,6 +659,7 @@
     <div class="ammo-card" style="text-align:right">
       <div id="weaponTitle" style="color:var(--gold);font-weight:900;font-size:14.5px">3. RIFLE &nbsp;•&nbsp; CYBER NEON</div>
       <div id="ammoLabel" style="font-size:22px;font-weight:900;margin-top:2px">30 / ∞</div>
+      <div class="reload-track" id="reloadTrack"><div class="reload-fill" id="reloadFill"></div></div>
       <div style="font-size:11px;color:#9cc3e8;margin-top:2px">[F / ПКМ] Прицел &nbsp;•&nbsp; [Клик / K] Огонь &nbsp;•&nbsp; [-/+] Чувств.</div>
     </div>
   </div>
@@ -366,8 +682,8 @@
   <div class="hero-box">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
       <div>
-        <h1 style="font-size:30px;color:var(--gold);font-weight:900">CHIKENGUN 2.3 — WEBGL2 4K PBR ARENA</h1>
-        <p style="color:#a8ccf0;margin-top:3px;font-size:13.5px">Настоящий аппаратный 3D-движок WebGL2 с картами нормалей, Skybox4K IBL и ACES HDR + нативная сборка Urho3D (<code style="color:var(--cyan)">./run.sh</code>)</p>
+        <h1 class="arena-title">CHIKENGUN 2.5 — ПЕРО СУДЬБЫ</h1>
+        <p style="color:#a8ccf0;margin-top:3px;font-size:13.5px">Настоящий аппаратный 3D-движок WebGL2 с картами нормалей, sky-кубемапой IBL и ACES HDR + нативная сборка Urho3D (<code style="color:var(--cyan)">./run.sh</code>)</p>
       </div>
       <div style="text-align:right;font-size:12.5px;color:var(--emerald);font-weight:800">
         ГРЭППЛ-КРЮК [Z] &nbsp;•&nbsp; ОРБИТА [X] &nbsp;•&nbsp; МУТАТОРЫ ВОЛН
@@ -400,9 +716,9 @@
       </div>
 
       <div class="key-list">
-        <div style="color:var(--gold);font-weight:800;margin-bottom:5px">ЭВОЛЮЦИЯ 2.3 + «КОЧЕТ В БАНЬКЕ»:</div>
+        <div style="color:var(--gold);font-weight:800;margin-bottom:5px">ЭВОЛЮЦИЯ 2.5 «ПЕРО СУДЬБЫ» + «КОЧЕТ В БАНЬКЕ»:</div>
         • <b>Симулятор парной «Кочет в баньке» [P]</b>: сруб прямо на 3D-арене, <b>14 концовок</b>, <b>57 загадок Смотрящего</b>, баффы Арены (<i>Банный закал</i> / <i>Ковш Смотрящего</i>) и награды в ₵!<br>
-        • <b>Аппаратный WebGL2 3D PBR</b>: реальные карты <code>Diffuse + Normal + RoughMetal</code>, 6 граней <code>Sky4K</code> IBL и ACES HDR.<br>
+        • <b>Аппаратный WebGL2 3D PBR</b>: реальные карты <code>Diffuse + Normal + RoughMetal</code>, 6 граней sky-кубемапы IBL, ACES HDR, динамические солнце-тени.<br>
         • <b>[Z] Грэппл-Крюк</b> и <b>[X] Орбитальный Лазер «ЯЙЦЕГЕДДОН»</b> — 60-метровый ионный столб с небес.<br>
         • <b>Мутаторы волн</b> (<i>Лунная гравитация, Турбо-стая, Золотая лихорадка x2₵, Пиро-шторм</i>) + <b>Фаза Ярости Босса</b>.<br>
         • Модульные C++17 заголовки <code>src/LitePhysics.h</code>, <code>src/CyberSystems.h</code> и <code>src/BanyaSim.h</code>.
@@ -413,7 +729,7 @@
 
 <!-- 4B. EMBEDDED BANYA SIMULATOR («КОЧЕТ В БАНЬКЕ») -->
 <section class="view-panel" id="banyaView">
-  <iframe id="banyaFrame" data-src="banya.html?embed=1&v=2.3.2" title="Кочет в баньке — Симулятор парной"></iframe>
+  <iframe id="banyaFrame" data-src="banya.html?embed=1&v=2.5.0" title="Кочет в баньке — Симулятор парной"></iframe>
 </section>
 
 <!-- 5. 14 ACHIEVEMENTS PANEL -->
@@ -443,30 +759,97 @@
   </div>
 </section>
 
-<script src="web/webgl2_arena.js?v=2.3.2"></script>
+<script src="web/webgl2_arena.js?v=2.5.1"></script>
 <script>
 (() => {
-  // ===== 1. BOOT CHECKLIST =====
+  // ===== 1. BOOT: «РИТУАЛ ПРОБУЖДЕНИЯ» (cinematic sequence) =====
   const bootStages = [
-    "Компиляция шейдеров WebGL2 (#version 300 es, GGX PBR + ACES HDR)",
-    "Загрузка триад PBR-текстур (Diffuse + Tangent Normal + RoughMetal)",
-    "Сборка 6-гранной кубической карты Sky4K IBL и 3D «Баньки Смотрящего» [P]",
-    "Генерация 3D-архитектуры арены, бункеров, джамп-падов и бочек C4",
-    "Инициализация Грэппл-крюка [Z], Орбиты [X], турелей и 14 концовок Баньки",
-    "Подключение 27 WAV-эффектов и кибер-саундтреков OGG"
+    { addr: "0x0007", text: "WebGL2 контекст поднят — #version 300 es", ms: "12мс" },
+    { addr: "0x02F1", text: "Шейдеры: GGX PBR + ACES Filmic + vignette", ms: "84мс" },
+    { addr: "0x03A0", text: "Триады ×7 сетов: Diffuse + Normal + RoughMetal (HD)", ms: "146мс" },
+    { addr: "0x0511", text: "Sky IBL кубемапа 6×1024 + мипмапы", ms: "39мс" },
+    { addr: "0x0666", text: "Арена «ПЕРО СУДЬБЫ»: архитектура + AABB-коллайдеры", ms: "58мс" },
+    { addr: "0x07FF", text: "Sun-тени: depth-FBO 1024², PCF 3×3", ms: "21мс" },
+    { addr: "0x0A11", text: "27 WAV + 2 OGG саундтрека распакованы", ms: "73мс" },
+    { addr: "0x0C4B", text: "6 пород взведены. Перья приняли боевое положение", ms: "!!!" }
   ];
-  let bIdx = 0;
+  const bootTips = [
+    "СОВЕТ: <b>[Z]</b> Грэппл-крюк затягивает на крыши бункеров, а <b>[X]</b> вызывает Орбитальный Лазер «ЯЙЦЕГЕДДОН»!",
+    "СОВЕТ: жёлтые hazard-ежи рвут чарджеров — выманивай стаю на них.",
+    "СОВЕТ: неоновые стены простреливаются только стоя (eye 1.75). Присев — нет.",
+    "СОВЕТ: <b>[F8]</b> переключает погоду арены, <b>[F3]</b> — телеметрия и статус теней.",
+    "СОВЕТ: дроны и стрелки плетут восьмёркой — веди цель, а не сопровождай.",
+    "СОВЕТ: труп босса остаётся на арене — подходи собирать кредиты аккуратно."
+  ];
   const bList = document.getElementById("bootList"), bFill = document.getElementById("bootFill"),
         bPct = document.getElementById("bootPct"), bStage = document.getElementById("bootStage"),
-        bScreen = document.getElementById("bootScreen");
-  (function stepBoot() {
-    bList.innerHTML = bootStages.map((s, i) => `${i < bIdx ? "[✓]" : (i === bIdx ? "[▶]" : "[·]")} ${s}`).join("<br>");
-    const p = Math.min(100, Math.round(((bIdx + 1) / bootStages.length) * 100));
-    bFill.style.width = p + "%"; bPct.textContent = p + "%";
-    bStage.textContent = `ЭТАП ${Math.min(bIdx + 1, 6)}/6: ${bootStages[Math.min(bIdx, 5)]}`;
-    if (++bIdx <= bootStages.length) setTimeout(stepBoot, 175);
-    else setTimeout(() => bScreen.classList.add("hidden"), 220);
-  })();
+        bScreen = document.getElementById("bootScreen"), bTip = document.getElementById("bootTip");
+
+  // падающие перья (генерим один раз)
+  const feathersBox = document.getElementById("bootFeathers");
+  const FEATHER_KINDS = ["", "", "", "cyan", "red"];
+  for (let i = 0; i < 26; i++) {
+    const f = document.createElement("span");
+    const kind = FEATHER_KINDS[i % FEATHER_KINDS.length];
+    f.className = "feather" + (kind ? " " + kind : "");
+    const w = 9 + Math.random() * 13;
+    f.style.left = (Math.random() * 100).toFixed(2) + "vw";
+    f.style.width = w.toFixed(1) + "px";
+    f.style.height = (w * (2.1 + Math.random() * 0.9)).toFixed(1) + "px";
+    f.style.animationDuration = (8 + Math.random() * 9).toFixed(2) + "s";
+    f.style.animationDelay = (-Math.random() * 17).toFixed(2) + "s";
+    f.style.opacity = (0.4 + Math.random() * 0.55).toFixed(2);
+    feathersBox.appendChild(f);
+  }
+
+  let bIdx = 0, bootDone = false, prog = 3;
+  const lineTimer = setInterval(() => {
+    if (bIdx < bootStages.length) {
+      const st = bootStages[bIdx];
+      const div = document.createElement("span");
+      div.className = "ln";
+      const hot = bIdx === bootStages.length - 1;
+      div.innerHTML = `<span class="ln-addr">[${st.addr}]</span> ${st.text} <span class="${hot ? "ln-warn" : "ln-ok"}">${hot ? "!!" : "✓ " + st.ms}</span>`;
+      bList.appendChild(div);
+      bStage.textContent = `ЭТАП ${bIdx + 1}/8: ${st.text}`;
+      bIdx++;
+    } else clearInterval(lineTimer);
+  }, 200);
+  const progTimer = setInterval(() => {
+    const target = 3 + (bIdx / bootStages.length) * 97;
+    prog += (target - prog) * 0.24;
+    if (bootDone) prog = 100;
+    bFill.style.width = Math.min(100, prog) + "%";
+    bPct.textContent = Math.min(100, Math.round(prog)) + "%";
+    if (prog >= 99.5 && bIdx >= bootStages.length) { bFill.style.width = "100%"; bPct.textContent = "100%"; clearInterval(progTimer); }
+  }, 40);
+  let tipIdx = 0;
+  const tipTimer = setInterval(() => {
+    tipIdx = (tipIdx + 1) % bootTips.length;
+    bTip.style.opacity = "0";
+    setTimeout(() => { bTip.innerHTML = bootTips[tipIdx]; bTip.style.opacity = "1"; }, 230);
+  }, 2800);
+  const doneCheck = setInterval(() => {
+    if (bIdx >= bootStages.length && !bootDone) { clearInterval(doneCheck); setTimeout(finishBoot, 480); }
+  }, 60);
+  const hardTimeout = setTimeout(finishBoot, 4200);   // страховка: загрузка не может зависнуть
+  function finishBoot() {
+    if (bootDone) return;
+    bootDone = true;
+    clearInterval(lineTimer); clearInterval(progTimer); clearInterval(tipTimer); clearInterval(doneCheck); clearTimeout(hardTimeout);
+    window.removeEventListener("keydown", skipBoot);
+    bScreen.removeEventListener("click", skipBoot);
+    bStage.textContent = "СИСТЕМА ГОТОВА. ПЕРО СУДЬБЫ ВЗВЕДЕНО.";
+    bFill.style.width = "100%"; bPct.textContent = "100%";
+    bScreen.classList.add("hidden");
+    setTimeout(() => { bScreen.style.display = "none"; }, 700);
+  }
+  function skipBoot(e) {
+    if (e && e.type === "keydown" && e.code !== "Enter" && e.code !== "Space" && e.code !== "Escape") return;
+    finishBoot();
+  }
+  bScreen.addEventListener("click", skipBoot);
+  window.addEventListener("keydown", skipBoot);
 
   // ===== 2. AUDIO & OGG MUSIC ENGINE =====
   let audioCtx = null, analyser = null;
@@ -528,7 +911,7 @@
     ACH_LIST.forEach((txt, i) => {
       const ok = !!(mask & (1 << i));
       const d = document.createElement("div");
-      d.className = "sfx-btn";
+      d.className = "sfx-btn" + (ok ? " ach-on" : "");
       d.style.borderColor = ok ? "var(--gold)" : "rgba(46,242,255,0.2)";
       d.innerHTML = `${ok ? "🏆" : "🔒"} <span style="color:${ok ? "var(--gold)" : "#8aa8c7"}">${txt}</span>`;
       g.appendChild(d);
@@ -631,6 +1014,7 @@
   ];
 
   let engine = null;
+  let lastWepIdx = -1, dmgDirT = null;
   function refreshPerks() {
     if (!engine) return;
     const S = engine.state;
@@ -747,11 +1131,19 @@
     flashHit(head, kill) {
       const hm = document.getElementById("hitMarker");
       hm.style.borderColor = head ? "#ffd447" : (kill ? "#ff3b4e" : "#ffffff");
+      hm.classList.remove("pop"); void hm.offsetWidth; hm.classList.add("pop");
       hm.style.opacity = "1"; setTimeout(() => hm.style.opacity = "0", 85);
     },
     flashDamage() {
       const df = document.getElementById("dmgFlash");
       df.style.opacity = "1"; setTimeout(() => df.style.opacity = "0", 130);
+    },
+    flashDamageFrom(bearing) {
+      const el = document.getElementById("dmgDir");
+      el.style.transform = `rotate(${bearing}rad)`;
+      el.style.opacity = "1";
+      clearTimeout(dmgDirT);
+      dmgDirT = setTimeout(() => { el.style.opacity = "0"; }, 330);
     },
     spawnDmgNum(x, y, z, val, crit) {
       const el = document.createElement("div");
@@ -771,6 +1163,8 @@
       } else bh.style.display = "none";
     },
     syncHud(S, wep, skin, atm, mut, vp) {
+      document.body.classList.toggle("lowhp", playing && S.hp > 0 && S.hp <= 30);   // 2.5: пульс «мало HP»
+      document.body.classList.toggle("aiming", playing && !!S.aiming);              // 2.5: скоп-виньетка
       if (!playing) return;
       document.getElementById("hpText").textContent = `HP: ${Math.round(S.hp)} / ${S.maxHp}`;
       document.getElementById("armorText").textContent = `БРОНЯ: ${Math.round(S.armor)}`;
@@ -780,7 +1174,20 @@
       document.getElementById("orbFill").style.width = S.orbitalPct + "%";
 
       document.getElementById("weaponTitle").textContent = `${S.wep + 1}. ${wep.name}  •  ${skin.name}`;
-      document.getElementById("ammoLabel").textContent = S.reloadT > 0 ? "ПЕРЕЗАРЯДКА..." : `${S.ammo[S.wep]} / ∞`;
+      document.getElementById("waveLeft").textContent = `🐔 ОСТАЛОСЬ: ${S.chickens.length}`;
+      if (S.wep !== lastWepIdx && wep.color) {   // 2.5: перекрёстие в цвет оружия
+        lastWepIdx = S.wep;
+        const wc = `rgb(${wep.color.map(v => Math.round(Math.min(1, Math.max(0, v)) * 255)).join(",")})`;
+        document.querySelectorAll(".ch-bar, .ch-dot").forEach(el => el.style.background = wc);
+      }
+      const al = document.getElementById("ammoLabel");
+      if (S.reloadT > 0) { al.textContent = "ПЕРЕЗАРЯДКА..."; al.classList.remove("ammo-zero"); }
+      else { al.textContent = `${S.ammo[S.wep]} / ∞`; al.classList.toggle("ammo-zero", S.ammo[S.wep] <= 0); }
+      const rTrack = document.getElementById("reloadTrack"), rFill = document.getElementById("reloadFill");
+      if (S.reloadT > 0) {
+        rTrack.style.opacity = "1";
+        rFill.style.width = Math.max(0, Math.min(100, (1 - S.reloadT / wep.reload) * 100)) + "%";
+      } else rTrack.style.opacity = "0";
 
       let achCnt = 0; for (let i = 0; i < 14; i++) if (S.achiev & (1 << i)) achCnt++;
       const buffTag = S.banyaBuff >= 2 ? " &nbsp;|&nbsp; 👑 КОВШ СМОТРЯЩЕГО" : (S.banyaBuff === 1 ? " &nbsp;|&nbsp; ♨ БАННЫЙ ЗАКАЛ" : "");
@@ -795,7 +1202,7 @@
       const tel = document.getElementById("telemetryHud");
       if (S.showFps) {
         tel.style.display = "block";
-        tel.innerHTML = `WebGL2 PBR 4K | ${S.fps} FPS | DrawCalls: ${S.drawCalls}<br>Погода: ${atm.name} | Мутатор: ${mut.name}`;
+        tel.innerHTML = `WebGL2 PBR | ${S.fps} FPS | DrawCalls: ${S.drawCalls} | Тени: ${S.sunShadows ? "SUN" : "выкл"}<br>Погода: ${atm.name} | Мутатор: ${mut.name}`;
       } else tel.style.display = "none";
 
       // Project floating 3D damage numbers
@@ -812,24 +1219,59 @@
         } else d.el.style.opacity = "0";
       }
 
-      // Tactical Radar
+      // Tactical Radar 2.5: круговой сканер — свип-луч, пинг целей, шеврон игрока
+      const sweep = (performance.now() * 0.0013) % 6.2832;
+      const beamA = sweep - Math.PI / 2;
       radarCtx.clearRect(0, 0, 144, 144);
-      radarCtx.strokeStyle = "rgba(46,242,255,0.22)";
-      radarCtx.beginPath(); radarCtx.arc(72, 72, 58, 0, 6.28); radarCtx.stroke();
-      radarCtx.fillStyle = "#fff"; radarCtx.fillRect(70, 70, 4, 4);
+      const bgGrad = radarCtx.createRadialGradient(72, 72, 4, 72, 72, 68);
+      bgGrad.addColorStop(0, "rgba(9, 32, 38, 0.92)");
+      bgGrad.addColorStop(1, "rgba(2, 9, 15, 0.96)");
+      radarCtx.fillStyle = bgGrad; radarCtx.fillRect(0, 0, 144, 144);
+      radarCtx.lineWidth = 1;
+      radarCtx.strokeStyle = "rgba(46,242,255,0.30)";
+      [19, 37, 55].forEach(rr => { radarCtx.beginPath(); radarCtx.arc(72, 72, rr, 0, 6.2832); radarCtx.stroke(); });
+      radarCtx.strokeStyle = "rgba(46,242,255,0.14)";
+      radarCtx.beginPath(); radarCtx.moveTo(72, 8); radarCtx.lineTo(72, 136); radarCtx.moveTo(8, 72); radarCtx.lineTo(136, 72); radarCtx.stroke();
+      if (radarCtx.createConicGradient) {
+        const cg = radarCtx.createConicGradient(beamA, 72, 72);
+        cg.addColorStop(0, "rgba(64,255,170,0.5)");
+        cg.addColorStop(0.09, "rgba(64,255,170,0.13)");
+        cg.addColorStop(0.26, "rgba(64,255,170,0)");
+        cg.addColorStop(1, "rgba(64,255,170,0)");
+        radarCtx.fillStyle = cg;
+        radarCtx.beginPath(); radarCtx.moveTo(72, 72); radarCtx.arc(72, 72, 55, 0, 6.2832); radarCtx.fill();
+      }
+      radarCtx.strokeStyle = "rgba(140,255,200,0.9)"; radarCtx.lineWidth = 1.5;
+      radarCtx.beginPath(); radarCtx.moveTo(72, 72); radarCtx.lineTo(72 + Math.cos(beamA) * 55, 72 + Math.sin(beamA) * 55); radarCtx.stroke();
+      // шеврон игрока (нос = вверх по курсу)
+      radarCtx.fillStyle = "#ffffff";
+      radarCtx.beginPath(); radarCtx.moveTo(72, 66.5); radarCtx.lineTo(67.6, 77.5); radarCtx.lineTo(72, 74.3); radarCtx.lineTo(76.4, 77.5); radarCtx.closePath(); radarCtx.fill();
+
       const cy = Math.cos(S.yaw), sy = Math.sin(S.yaw);
+      const pingAlpha = (rx, rz) => {
+        const targetA = Math.atan2(-rz, rx);
+        let dA = (beamA - targetA) % 6.2832; if (dA < 0) dA += 6.2832;
+        const glow = Math.max(0, 1 - dA / 1.9);
+        return 0.18 + 0.82 * glow * glow;
+      };
+      const plotBlip = (rx, rz, size, color) => {
+        const px = Math.max(-52, Math.min(52, rx)), pz = Math.max(-52, Math.min(52, rz));
+        radarCtx.globalAlpha = pingAlpha(px, pz);
+        radarCtx.fillStyle = color;
+        radarCtx.fillRect(72 + px - size / 2, 72 - pz - size / 2, size, size);
+        radarCtx.globalAlpha = 1;
+      };
       if (S.banyaDoorPos) {
-        const bdx = (S.banyaDoorPos.x - S.x) * 1.35, bdz = (S.banyaDoorPos.z - S.z) * 1.35;
-        const brx = bdx * cy - bdz * sy, brz = bdx * sy + bdz * cy;
-        radarCtx.fillStyle = "#ff9f43";
-        radarCtx.fillRect(72 + Math.max(-62, Math.min(62, brx)) - 3, 72 - Math.max(-62, Math.min(62, brz)) - 3, 7, 7);
+        const bdx = (S.banyaDoorPos.x - S.x) * 1.3, bdz = (S.banyaDoorPos.z - S.z) * 1.3;
+        plotBlip(bdx * cy - bdz * sy, bdx * sy + bdz * cy, 7, "#ff9f43");
       }
       S.chickens.forEach(c => {
-        const dx = (c.x - S.x) * 1.35, dz = (c.z - S.z) * 1.35;
-        const rx = dx * cy - dz * sy, rz = dx * sy + dz * cy;
-        radarCtx.fillStyle = c.type === "boss" ? "#ffd447" : (c.type === "drone" ? "#2ef2ff" : "#ff3b4e");
-        radarCtx.fillRect(72 + Math.max(-62, Math.min(62, rx)) - 2, 72 - Math.max(-62, Math.min(62, rz)) - 2, 5, 5);
+        const dx = (c.x - S.x) * 1.3, dz = (c.z - S.z) * 1.3;
+        const col = c.type === "boss" ? "#ffd447" : (c.type === "drone" ? "#2ef2ff" : "#ff3b4e");
+        plotBlip(dx * cy - dz * sy, dx * sy + dz * cy, c.type === "boss" ? 8 : 5, col);
       });
+      radarCtx.globalAlpha = 0.8; radarCtx.fillStyle = "#2ef2ff"; radarCtx.font = "8px ui-monospace, monospace";
+      radarCtx.fillText("T-SCAN 1.3", 6, 140); radarCtx.globalAlpha = 1;
     }
   });
 
