@@ -103,6 +103,7 @@
               "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
               "-DLIB_SUFFIX="
               "-DURHO3D_USE_LIB_DEB=1"
+              "-DURHO3D_DEPLOYMENT_TARGET=generic"
               "-DURHO3D_LIB_TYPE=STATIC"
               "-DURHO3D_C++11=1"
               "-DURHO3D_PCH=0"

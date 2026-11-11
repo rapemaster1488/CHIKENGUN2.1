@@ -105,7 +105,9 @@ jobs:
         run: |
           set -o pipefail
           if ! nix build .#default --no-link -L --no-write-lock-file 2>&1 | tee /tmp/nix_build.log; then
-            TAIL="$(tail -n 60 /tmp/nix_build.log | python3 -c 'import sys; s=sys.stdin.read(); print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')"
-            echo "::error title=Nix build failure::$TAIL"
+            ERRS="$(grep -i -E 'error:|fatal error|CMake Error|undefined reference' /tmp/nix_build.log | head -n 30)"
+            TAIL="${ERRS}"$'\n'"$(tail -n 25 /tmp/nix_build.log)"
+            ESC="$(printf '%s' "$TAIL" | python3 -c 'import sys; s=sys.stdin.read(); print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')"
+            echo "::error title=Nix build failure::$ESC"
             exit 1
           fi
