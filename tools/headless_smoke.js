@@ -42,6 +42,7 @@ const GL_CONST = {
   TRIANGLES: 0x0004, UNSIGNED_BYTE: 0x1401, UNSIGNED_SHORT: 0x1403,
   VERTEX_SHADER: 0x8B31, BLEND: 0x0BE2, SRC_ALPHA: 0x0302, ONE_MINUS_SRC_ALPHA: 0x0303,
   CLAMP_TO_EDGE: 0x812F, NEAREST: 0x2600, TEXTURE4: 0x84C4,
+  FRONT: 0x0404, BACK: 0x0405,
   FRAMEBUFFER: 0x8D40, DEPTH_ATTACHMENT: 0x8D00, DEPTH_COMPONENT: 0x1902, DEPTH_COMPONENT24: 0x81A6,
   UNSIGNED_INT: 0x1405, FRAMEBUFFER_COMPLETE: 0x8CD5, NONE: 0x0000
 };
@@ -53,7 +54,7 @@ const noop = () => {};
   "bufferData","clear","compileShader","depthFunc","disable","enable",
   "enableVertexAttribArray","generateMipmap","linkProgram","shaderSource",
   "texImage2D","texParameterf","texParameteri","useProgram","vertexAttribPointer","viewport",
-  "blendFunc","depthMask",
+  "blendFunc","depthMask","cullFace","clearColor",
   "createFramebuffer","bindFramebuffer","framebufferTexture2D","drawBuffers","readBuffer"
 ].forEach(fn => { gl[fn] = noop; });
 gl.createFramebuffer = () => ({});

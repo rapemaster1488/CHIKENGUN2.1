@@ -230,13 +230,15 @@
     // 2.5: Directional sun shadow (PCF 3x3, front-face culling в depth pass убирает acne)
     float sunShadow = 1.0;
     if (uUseShadows > 0.5) {
-      vec4 lp = uLightVP * vec4(vWorldPos, 1.0);
+      // normal-offset: сдвигаем точку вдоль нормали — убирает acne/полосы на гранях
+      vec3 wpOff = vWorldPos + N * 0.035;
+      vec4 lp = uLightVP * vec4(wpOff, 1.0);
       vec3 ls = lp.xyz / max(lp.w, 0.0001);
       vec2 suv = ls.xy * 0.5 + 0.5;
       float cur = ls.z * 0.5 + 0.5;
       if (suv.x > 0.002 && suv.x < 0.998 && suv.y > 0.002 && suv.y < 0.998 && cur < 1.0) {
         float ndl = max(dot(N, normalize(uSunDir)), 0.0);
-        float bias = clamp(0.0022 * (1.0 - ndl), 0.0007, 0.0028);
+        float bias = clamp(0.0045 * (1.0 - ndl), 0.0012, 0.0090);
         vec2 texel = vec2(1.0 / 1024.0);
         float acc = 0.0;
         for (int y = -1; y <= 1; y++) {
@@ -245,7 +247,7 @@
             acc += (stored > cur - bias) ? 1.0 : 0.0;
           }
         }
-        sunShadow = mix(0.30, 1.0, acc / 9.0);
+        sunShadow = mix(0.45, 1.0, acc / 9.0);
       }
     }
     vec3 sunLit = (kD * albedo / 3.14159 + D * F * 0.28) * uSunColor * NdotL * sunShadow;
@@ -265,6 +267,7 @@
       float specP = pow(max(dot(N, Hp), 0.0), mix(96.0, 8.0, rough));
       ptLit += (albedo * (1.0 - metal * 0.6) * nl + F0 * specP * 0.8) * uPointCol[i] * att;
     }
+    ptLit = min(ptLit, vec3(2.6));   // 2.5.3: дульная вспышка не должна выжигать кадр в жёлтый
 
     // Hemisphere + Cubemap IBL reflection
     vec3 R = reflect(-V, N);
@@ -1107,7 +1110,7 @@
       opts.playSfx(w.sfx, 0.75);
 
       const [fx, fy, fz] = getAimDir(0);
-      addFlashLight(S.x + fx * 1.1, S.y - 0.1 + fy * 1.1, S.z + fz * 1.1, w.color[0]*3, w.color[1]*3, w.color[2]*3, 9, 0.06);
+      addFlashLight(S.x + fx * 1.1, S.y - 0.1 + fy * 1.1, S.z + fz * 1.1, w.color[0]*1.6, w.color[1]*1.6, w.color[2]*1.6, 6.5, 0.05);
 
       const banyaDmgMul = S.banyaBuff >= 2 ? 1.15 : 1.0;
       const dmgMul = (1 + 0.15 * S.perks[2]) * banyaDmgMul * (S.overdriveT > 0 ? 2.0 : 1.0);
@@ -1792,6 +1795,9 @@
 
       const atm = ATMOSPHERES[S.atmIdx];
 
+      // 2.5.3: явный тёмный clear (формально и для надёжности на кривых драйверах)
+      gl.clearColor(0.015, 0.03, 0.07, 1.0);
+
       // 2.5a) Sun shadow map (depth-only, ортографический охват всей арены)
       if (sunShadowsOn) {
         const ld = atm.sunDir;
@@ -1801,7 +1807,8 @@
         gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFB);
         gl.viewport(0, 0, SHADOW_RES, SHADOW_RES);
         gl.clear(gl.DEPTH_BUFFER_BIT);
-        gl.disable(gl.CULL_FACE);
+        gl.enable(gl.CULL_FACE);
+        gl.cullFace(gl.FRONT);   // классика против acne: пишем только задние грани
         gl.depthFunc(gl.LEQUAL);
         gl.useProgram(depthProg);
         gl.uniformMatrix4fv(UDepth.lightVP, false, lightVPMat);
@@ -1820,7 +1827,7 @@
           M4.trs(tmpM, cp.x, 0.45 * cp.sc, cp.z, cp.yaw || 0, 0, 0, 1.5 * cp.sc, 0.85 * cp.sc, 1.1 * cp.sc);
           depthDraw("box", tmpM);
         });
-        gl.enable(gl.CULL_FACE);
+        gl.cullFace(gl.BACK);
         gl.depthFunc(gl.LESS);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.viewport(0, 0, canvas.width, canvas.height);   // вернуть viewport основного пасса
