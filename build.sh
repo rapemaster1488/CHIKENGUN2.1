@@ -354,7 +354,7 @@ if [ -z "$URHO_INC" ] || [ -z "$URHO_LIBDIR" ]; then
     fi
 
     # Патчим Urho3D 1.9.0 для совместимости с macOS Apple Silicon (arm64) и новым Apple SDK
-    if [ "$OS_NAME" = "Darwin" ] && [ ! -f "$URHO_SRC/.chikengun_apple_patched_v2" ] && command -v python3 >/dev/null 2>&1; then
+    if [ "$OS_NAME" = "Darwin" ] && [ ! -f "$URHO_SRC/.chikengun_apple_patched_v3" ] && command -v python3 >/dev/null 2>&1; then
         python3 - "$URHO_SRC" << 'PYPATCH'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -371,7 +371,20 @@ if uc.exists():
     s = s.replace('if (ARM AND CMAKE_SYSTEM_NAME STREQUAL Linux)', 'if (ARM AND (CMAKE_SYSTEM_NAME STREQUAL Linux OR CMAKE_SYSTEM_NAME STREQUAL Darwin))')
     s = s.replace('if (URHO3D_64BIT)\n                    # aarch64 has only one valid arch so far\n                    set (ARM_CFLAGS "${ARM_CFLAGS} -march=armv8-a")',
                   'if (URHO3D_64BIT AND NOT APPLE)\n                    # aarch64 has only one valid arch so far\n                    set (ARM_CFLAGS "${ARM_CFLAGS} -march=armv8-a")')
+    s = s.replace('        elseif (APPLE)\n            if (ARM)', '        elseif (APPLE)\n            if (IOS OR TVOS)')
     uc.write_text(s)
+
+su = root / "Source/Urho3D/CMakeLists.txt"
+if su.exists():
+    s = su.read_text()
+    s = s.replace('if (APPLE AND NOT ARM)', 'if (APPLE AND NOT IOS AND NOT TVOS)')
+    su.write_text(s)
+
+sdlc = root / "Source/ThirdParty/SDL/CMakeLists.txt"
+if sdlc.exists():
+    s = sdlc.read_text()
+    s = s.replace('if(HAVE_GCC_WERROR_DECLARATION_AFTER_STATEMENT AND NOT ANDROID)', 'if(FALSE)')
+    sdlc.write_text(s)
 
 for rel in ["Source/ThirdParty/FreeType/src/gzip/ftzconf.h", "Source/ThirdParty/FreeType/src/gzip/zconf.h"]:
     p = root / rel
@@ -398,7 +411,7 @@ if fc.exists():
                   '#ifdef __APPLE__\n        handle_ = fopen(GetNativePath(fileName).CString(), openMode[mode + 1]);\n#else\n        handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode + 1]);\n#endif')
     fc.write_text(s)
 
-(root / ".chikengun_apple_patched_v2").write_text("1\n")
+(root / ".chikengun_apple_patched_v3").write_text("1\n")
 PYPATCH
     fi
     rm -rf "$URHO_BLD"
@@ -421,7 +434,7 @@ PYPATCH
         CMAKE_EXTRA_ARGS+=("-DCMAKE_POLICY_VERSION_MINIMUM=3.5")
     fi
     if [ "$IS_WIN" -eq 1 ]; then
-        CMAKE_EXTRA_ARGS+=("-DURHO3D_OPENGL=1" "-DURHO3D_WIN32_CONSOLE=0")
+        CMAKE_EXTRA_ARGS+=("-DURHO3D_OPENGL=1" "-DURHO3D_D3D11=0" "-DURHO3D_WIN32_CONSOLE=0")
     fi
 
     cmake -S "$URHO_SRC" -B "$URHO_BLD" \

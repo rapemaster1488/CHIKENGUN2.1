@@ -112,6 +112,7 @@ if(BUILD_GAME)
         if(WIN32)
             # Наши кастомные пост-эффекты (Cinema4K.glsl, SSAO4K.glsl) написаны на GLSL
             set(URHO3D_OPENGL ON CACHE BOOL "" FORCE)
+            set(URHO3D_D3D11 OFF CACHE BOOL "" FORCE)
             set(URHO3D_WIN32_CONSOLE OFF CACHE BOOL "" FORCE)
         endif()
 

@@ -102,15 +102,7 @@ jobs:
           nix flake show --no-write-lock-file
 
       - name: Build full package via Nix (urho3d + MyShooter + ctest)
-        run: |
-          set -o pipefail
-          if ! nix build .#default --no-link -L --no-write-lock-file 2>&1 | tee /tmp/nix_build.log; then
-            ERRS="$(grep -i -E 'error:|fatal error|CMake Error|undefined reference' /tmp/nix_build.log | head -n 30)"
-            TAIL="${ERRS}"$'\n'"$(tail -n 25 /tmp/nix_build.log)"
-            ESC="$(printf '%s' "$TAIL" | python3 -c 'import sys; s=sys.stdin.read(); print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')"
-            echo "::error title=Nix build failure::$ESC"
-            exit 1
-          fi
+        run: nix build .#default --no-link -L --no-write-lock-file
 
   verify-full-client:
     name: Full Client Build (${{ matrix.os }})
@@ -139,51 +131,26 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/urho3d-sdk
-          key: urho3d-1.9.0-ci-${{ runner.os }}-${{ runner.arch }}-v1
+          key: urho3d-1.9.0-ci-${{ runner.os }}-${{ runner.arch }}-v2
 
       - name: Build full client on Linux & package tarball
         if: matrix.os == 'ubuntu-latest'
         run: |
-          set -o pipefail
-          if ! TEX_SIZE=512 ./build.sh -j4 2>&1 | tee /tmp/build.log; then
-            TAIL="$(tail -n 50 /tmp/build.log | python3 -c 'import sys; s=sys.stdin.read(); print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')"
-            echo "::error title=Linux build failure::$TAIL"
-            exit 1
-          fi
+          TEX_SIZE=512 ./build.sh -j4
           ./tools/package_linux.sh
           test -x build/MyShooter
 
       - name: Build full client on macOS
         if: matrix.os == 'macos-latest'
         run: |
-          set -o pipefail
-          if ! TEX_SIZE=512 ./build.sh -j4 2>&1 | tee /tmp/build.log; then
-            TAIL="$(tail -n 50 /tmp/build.log | python3 -c 'import sys; s=sys.stdin.read(); print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')"
-            echo "::error title=macOS build failure::$TAIL"
-            exit 1
-          fi
+          TEX_SIZE=512 ./build.sh -j4
           test -x build/MyShooter
 
       - name: Build full client on Windows (MSVC + OpenGL Urho3D)
         if: matrix.os == 'windows-latest'
         shell: pwsh
         run: |
-          try {
-            .\build.ps1 *>&1 | Tee-Object -FilePath "$env:TEMP\win_build.log"
-            if ($LASTEXITCODE -ne 0) { throw "build.ps1 exited with $LASTEXITCODE" }
-            if (-not (Test-Path "build-win\Release\MyShooter.exe")) { throw "Missing MyShooter.exe" }
-            if (-not (Test-Path "build-win\Release\Data\Materials\Game\BanyaLog.xml")) { throw "Missing Data sync" }
-            if (-not (Test-Path "build-win\Release\CoreData\Shaders\GLSL\Cinema4K.glsl")) { throw "Missing CoreData sync" }
-          } catch {
-            $errs = ""
-            if (Test-Path "$env:TEMP\win_build.log") {
-              $matches = Select-String -Path "$env:TEMP\win_build.log" -Pattern "CMake Error|fatal error|error [A-Z0-9]+:" -Context 0,8
-              $errBlocks = $matches | Select-Object -First 6 | ForEach-Object { ($_.Line + "`n" + ($_.Context.PostContext -join "`n")) }
-              $tail = (Get-Content "$env:TEMP\win_build.log" -Tail 15) -join "`n"
-              $errs = ($errBlocks -join "`n---`n") + "`n--- TAIL ---`n" + $tail
-            }
-            $msg = ($_ | Out-String) + "`n" + $errs
-            $esc = $msg -replace '%','%25' -replace "`r","" -replace "`n",'%0A'
-            Write-Output "::error title=Windows build failure::$esc"
-            exit 1
-          }
+          .\build.ps1
+          if (-not (Test-Path "build-win\Release\MyShooter.exe")) { throw "Missing MyShooter.exe" }
+          if (-not (Test-Path "build-win\Release\Data\Materials\Game\BanyaLog.xml")) { throw "Missing Data sync" }
+          if (-not (Test-Path "build-win\Release\CoreData\Shaders\GLSL\Cinema4K.glsl")) { throw "Missing CoreData sync" }

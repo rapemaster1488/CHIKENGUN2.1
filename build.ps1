@@ -83,6 +83,7 @@ if (-not $HasSdk -and -not $env:URHO3D_HOME) {
         '-DURHO3D_USE_LIB_DEB=1',
         '-DURHO3D_LIB_TYPE=STATIC',
         '-DURHO3D_OPENGL=ON',
+        '-DURHO3D_D3D11=OFF',
         '-DURHO3D_WIN32_CONSOLE=OFF',
         '-DURHO3D_C++11=ON',
         '-DURHO3D_PCH=OFF',

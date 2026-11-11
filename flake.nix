@@ -103,7 +103,12 @@
                 --replace-warn 'if (ARM AND CMAKE_SYSTEM_NAME STREQUAL Linux)' 'if (ARM AND (CMAKE_SYSTEM_NAME STREQUAL Linux OR CMAKE_SYSTEM_NAME STREQUAL Darwin))'
               ${lib.optionalString stdenv.isDarwin ''
                 substituteInPlace cmake/Modules/UrhoCommon.cmake \
-                  --replace-warn 'set (ARM_CFLAGS "''${ARM_CFLAGS} -march=armv8-a")' 'set (ARM_CFLAGS "''${ARM_CFLAGS}")'
+                  --replace-warn 'set (ARM_CFLAGS "''${ARM_CFLAGS} -march=armv8-a")' 'set (ARM_CFLAGS "''${ARM_CFLAGS}")' \
+                  --replace-warn 'if (ARM)' 'if (IOS OR TVOS)'
+                substituteInPlace Source/Urho3D/CMakeLists.txt \
+                  --replace-warn 'if (APPLE AND NOT ARM)' 'if (APPLE AND NOT IOS AND NOT TVOS)'
+                substituteInPlace Source/ThirdParty/SDL/CMakeLists.txt \
+                  --replace-warn 'if(HAVE_GCC_WERROR_DECLARATION_AFTER_STATEMENT AND NOT ANDROID)' 'if(FALSE)'
                 substituteInPlace Source/ThirdParty/FreeType/src/gzip/ftzconf.h \
                   --replace-warn '#if !defined(MACOS) && !defined(TARGET_OS_MAC)' '#if !defined(MACOS) && (!defined(TARGET_OS_MAC) || !defined(_MACTYPES_))'
                 substituteInPlace Source/ThirdParty/FreeType/src/gzip/zconf.h \
