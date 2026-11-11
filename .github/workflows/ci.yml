@@ -34,6 +34,12 @@ jobs:
           cmake --build build_ci -j
           ctest --test-dir build_ci --output-on-failure
 
+      - name: Headless WebGL2 engine smoke test (~2 min of simulated combat)
+        run: node tools/headless_smoke.js
+
+      - name: Asset integrity check (no 404s in referenced textures/sounds)
+        run: node tools/asset_check.js
+
       - name: Validate XML materials, particle effects, postprocess, launchers & web assets
         run: |
           bash -n build.sh run.sh play.sh play.command tools/syntax_check.sh

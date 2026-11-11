@@ -544,7 +544,6 @@ private:
     SharedPtr<Text> accuracyText_;
     SharedPtr<Text> messageText_;
     SharedPtr<BorderImage> damageOverlay_;
-    SharedPtr<BorderImage> reloadOverlay_;
     
     // Игровые данные
     Vector<TargetData> targets_;
@@ -1253,7 +1252,7 @@ public:
         if (!engineParameters_.Contains(EP_RESOURCE_PREFIX_PATHS))
             engineParameters_[EP_RESOURCE_PREFIX_PATHS] = ".;..;bin;../bin";
 
-        engineParameters_[EP_WINDOW_TITLE] = "CHIKENGUN 2.3 — 4K ULTRA & CYBER EVOLUTION";
+        engineParameters_[EP_WINDOW_TITLE] = "CHIKENGUN 2.5 — ПЕРО СУДЬБЫ (4K ULTRA)";
         engineParameters_[EP_HIGH_DPI] = true;
         engineParameters_[EP_WINDOW_RESIZABLE] = true;
         engineParameters_[EP_TRIPLE_BUFFER] = true;
@@ -2949,7 +2948,9 @@ private:
         sunLight_->SetSpecularIntensity(1.25f);
         sunLight_->SetCastShadows(gfxShadowIdx_ > 0);
         sunLight_->SetShadowCascade(CascadeParameters(14.0f, 38.0f, 88.0f, 165.0f, 0.82f));
-        sunLight_->SetShadowBias(BiasParameters(0.00018f, 0.42f));
+        // FIX(2.5.4): bias 0.00018/0.42 давал shadow acne (рябь и чёрные полосы на поверхностях).
+        // Подняли константное смещение + slope-scaled под 165м каскад — рябь уходит, утечек нет.
+        sunLight_->SetShadowBias(BiasParameters(0.00042f, 0.60f));
         sunLight_->SetShadowIntensity(0.18f);
 
         // --- Заполняющий небесно-сумеречный контровой свет ---
@@ -3558,10 +3559,6 @@ private:
         damageOverlay_->SetColor(Color(1.0f, 0.0f, 0.0f, 0.0f));
         damageOverlay_->SetBlendMode(BLEND_ADD);
         
-        reloadOverlay_ = ui->GetRoot()->CreateChild<BorderImage>();
-        reloadOverlay_->SetSize(sw, sh);
-        reloadOverlay_->SetColor(Color(1.0f, 1.0f, 0.0f, 0.0f));
-        reloadOverlay_->SetBlendMode(BLEND_ADD);
 
         CreateHitMarker();
 
@@ -4400,7 +4397,7 @@ private:
 
             Text* title = helpPanel_->CreateChild<Text>();
             title->SetFont(font_, SF(40));
-            title->SetText("CHIKENGUN 2.3 — 4K ULTRA СПРАВКА");
+            title->SetText("CHIKENGUN 2.5 — ПЕРО СУДЬБЫ: СПРАВКА");
             title->SetTextAlignment(HA_CENTER);
             title->SetPosition(sw / 2 - S(540), sh / 2 - S(280));
             title->SetWidth(S(1080));
@@ -4415,7 +4412,7 @@ private:
             body->SetColor(Color(0.90f, 0.94f, 0.98f, 1.0f));
             StyleCrispText(body);
             body->SetText(
-                "БОЕВОЕ УПРАВЛЕНИЕ 2.3 (4K CYBER EVOLUTION + КОЧЕТ В БАНЬКЕ)\n"
+                "БОЕВОЕ УПРАВЛЕНИЕ 2.5 (ПЕРО СУДЬБЫ + КОЧЕТ В БАНЬКЕ)\n"
                 "  WASD — движение      SHIFT — бег        SPACE — прыжок       CTRL / C — присед\n"
                 "  ALT — рывок          Z — грэппл-крюк    X — орбита ЯЙЦЕГЕДДОН P — БАНЬКА СМОТРЯЩЕГО\n"
                 "  V — удар крылом      G — яйце-граната   T — авто-турель      B — магазин перков\n"
@@ -4659,7 +4656,7 @@ private:
         crosshairLeft_ = nullptr; crosshairRight_ = nullptr;
         ammoText_ = nullptr; healthText_ = nullptr; scoreText_ = nullptr;
         accuracyText_ = nullptr; messageText_ = nullptr;
-        damageOverlay_ = nullptr; reloadOverlay_ = nullptr;
+        damageOverlay_ = nullptr;
         hitMarkerBars_.Clear();
         vignetteEdges_.Clear(); lowHealthVignette_ = nullptr;
         gameOverPanel_ = nullptr; gameOverStatsText_ = nullptr;
@@ -4855,8 +4852,6 @@ private:
         if (weapon_.isReloading_) {
             float rofMul = (1.0f + 0.12f * (float)perkRofLvl_) * (overdriveTimer_ > 0.0f ? 1.6f : 1.0f);
             weapon_.reloadTimer_ -= dt * rofMul;
-            float reloadAlpha = 0.25f + 0.18f * sinf(timeAcc_ * 10.0f);
-            if (reloadOverlay_) reloadOverlay_->SetColor(Color(1.0f, 0.9f, 0.1f, reloadAlpha));
             if (weapon_.reloadTimer_ <= 0) CompleteReload();
         }
         
@@ -5380,7 +5375,7 @@ private:
         tg.pos_ = start;
         tg.vel_ = dir * 19.5f + Vector3(0.0f, 4.4f, 0.0f);
         tg.fuse_ = 1.40f;
-        if (thrownGrenades_.Size() >= MAX_THROWN_GRENADES) {
+        if ((unsigned)thrownGrenades_.Size() >= MAX_THROWN_GRENADES) {
             if (thrownGrenades_[0].node_) thrownGrenades_[0].node_->Remove();
             thrownGrenades_.Erase(0);
         }
@@ -5495,7 +5490,7 @@ private:
         td.pos_ = pos;
         td.ttl_ = 24.0f;
         td.fireTimer_ = 0.20f;
-        if (turrets_.Size() >= MAX_TURRETS) {
+        if ((unsigned)turrets_.Size() >= MAX_TURRETS) {
             if (turrets_[0].node_) turrets_[0].node_->Remove();
             turrets_.Erase(0);
         }
@@ -5746,7 +5741,7 @@ private:
         rm->SetModel(cylModel_ ? cylModel_ : sphereModel_);
         rm->SetMaterial(MakeHDRGlow(Color(1.0f, 0.84f, 0.25f, 0.9f), 2.8f).Get());
         rm->SetCastShadows(false);
-        if (orbitalStrikes_.Size() >= MAX_ORBITAL_STRIKES) {
+        if ((unsigned)orbitalStrikes_.Size() >= MAX_ORBITAL_STRIKES) {
             if (orbitalStrikes_[0].beamNode_) orbitalStrikes_[0].beamNode_->Remove();
             if (orbitalStrikes_[0].ringNode_) orbitalStrikes_[0].ringNode_->Remove();
             orbitalStrikes_.Erase(0);
@@ -6394,7 +6389,7 @@ private:
         pb.damage_ = damage;
         pb.ttl_ = 2.4f;
         pb.bouncesLeft_ = 1;
-        if (playerPlasmaBolts_.Size() >= MAX_PLASMA_BOLTS) {
+        if ((unsigned)playerPlasmaBolts_.Size() >= MAX_PLASMA_BOLTS) {
             if (playerPlasmaBolts_[0].node_) playerPlasmaBolts_[0].node_->Remove();
             playerPlasmaBolts_.Erase(0);
         }
@@ -6784,8 +6779,6 @@ private:
         weapon_.isReloading_ = false;
         weapon_.reloadTimer_ = 0.0f;
         
-        reloadOverlay_->SetColor(Color(1.0f, 1.0f, 0.0f, 0.0f));
-        
         ShowMessage("Перезарядка завершена!");
         UpdateAmmoDisplay();
     }
@@ -6907,21 +6900,21 @@ private:
         int sh = GetSubsystem<Graphics>()->GetHeight();
 
         loadSteps_.Clear();
-        loadSteps_.Push("Инициализация 4K HDR конвейера, ACES Filmic и шейдеров CAS");
-        loadSteps_.Push("Загрузка 4K PBR текстур, карт нормалей и шероховатости/металла");
-        loadSteps_.Push("Генерация кубической карты неба 4K и IBL-отражений арены");
-        loadSteps_.Push("Построение арены 256×256, неоновых пилонов и взрывных бочек");
-        loadSteps_.Push("Настройка 4-каскадных теней 4096px, SSAO4K и оружия игрока");
-        loadSteps_.Push("Калибровка тактического радара, телеметрии GPU и 3D-звука");
-        loadSteps_.Push("Все системы 4K ULTRA готовы к бою!");
+        loadSteps_.Push("Инициализация 4K HDR пайплайна, ACES Filmic и шейдера CAS");
+        loadSteps_.Push("Загрузка 4K PBR текстур, нормалей и шероховатости/металла");
+        loadSteps_.Push("Синтез кубической карты неба 4K и IBL-отражений арены");
+        loadSteps_.Push("Построение кибер-арены 256×256, джамп-падов и бочек «ОПАСНО»");
+        loadSteps_.Push("Каскадные тени 4K, перья PBR и арсенал (12 стволов)");
+        loadSteps_.Push("Перки [B], кластерные гранаты, волны 2.5 и 3D-аудио пул");
+        loadSteps_.Push("ПЕРО СУДЬБЫ готово. В бой!");
 
         static const char* kTips[6] = {
-            "СОВЕТ: Попадание в голову курицы наносит 2.0× КРИТИЧЕСКОГО урона (золотой маркер ◆).",
-            "СОВЕТ: Нажми ALT для реактивного рывка, Z — для грэппл-крюка, X — орбитальный удар!",
-            "СОВЕТ: Стреляй по красным бочкам «ОПАСНО» — цепная детонация сносит целую волну.",
+            "СОВЕТ: Хедшот курицы — 2.0× КРИТИЧЕСКОГО урона (золотой маркер ★).",
+            "СОВЕТ: ALT или X — реактивный рывок (Jet-Dash) сквозь стаю врагов!",
+            "СОВЕТ: Красные бочки «ОПАСНО» — цепная детонация выносит целую волну.",
             "СОВЕТ: Фиолетовая сфера ОВЕРДРАЙВА удваивает урон всех стволов на 12 секунд.",
-            "СОВЕТ: V — удар кибер-крылом, G — граната, T — турель, B — перки, P — баня, I — осмотр.",
-            "СОВЕТ: F2 включает чистый 4K фоторежим без HUD, F8 — погода, F12 — 4K PNG-скриншот."
+            "СОВЕТ: V — удар кибер-крылом вблизи, L — 3D лазер, G — граната-клёцка.",
+            "СОВЕТ: F8 переключает атмосферу 4K — от золотого заката до кровавого затмения."
         };
         loadingTipIdx_ = rand() % 6;
 
@@ -6972,7 +6965,7 @@ private:
         // Верхний статус движка
         Text* sysTag = loadingPanel_->CreateChild<Text>();
         sysTag->SetFont(font_, SF(15));
-        sysTag->SetText("URHO3D 4K PBR ENGINE   •   ACES FILMIC HDR   •   CAS 4K SHARPENING   •   SSAO4K");
+        sysTag->SetText("URHO3D 4K PBR   •   ACES FILMIC HDR   •   SSAO4K   •   CAS 4K   •   ПЕРО СУДЬБЫ 2.5");
         sysTag->SetTextAlignment(HA_CENTER);
         sysTag->SetPosition(sw / 2 - S(500), S(28));
         sysTag->SetWidth(S(1000));
@@ -6981,13 +6974,13 @@ private:
 
         // Кибер-эмблема (геометрический значок куриного гребня/прицела)
         BorderImage* embOuter = loadingPanel_->CreateChild<BorderImage>();
-        embOuter->SetPosition(sw / 2 - S(34), sh / 2 - S(215));
-        embOuter->SetSize(S(68), S(8));
-        embOuter->SetColor(Color(1.0f, 0.30f, 0.22f, 0.95f));
+        embOuter->SetPosition(sw / 2 - S(52), sh / 2 - S(215));
+        embOuter->SetSize(S(104), S(6));
+        embOuter->SetColor(Color(1.0f, 0.78f, 0.22f, 0.95f)); // золотое перо
 
         loadingTitleText_ = loadingPanel_->CreateChild<Text>();
         loadingTitleText_->SetFont(font_, SF(60));
-        loadingTitleText_->SetText("CHIKENGUN 2.3");
+        loadingTitleText_->SetText("CHIKENGUN 2.5");
         loadingTitleText_->SetTextAlignment(HA_CENTER);
         loadingTitleText_->SetPosition(sw / 2 - S(410), sh / 2 - S(198));
         loadingTitleText_->SetWidth(S(820));
@@ -6996,7 +6989,7 @@ private:
 
         loadingSubText_ = loadingPanel_->CreateChild<Text>();
         loadingSubText_->SetFont(font_, SF(19));
-        loadingSubText_->SetText("4 K   U L T R A   E D I T I O N     |     C Y B E R   A R E N A");
+        loadingSubText_->SetText("П Е Р О   С У Д Ь Б Ы     |     C Y B E R   A R E N A");
         loadingSubText_->SetTextAlignment(HA_CENTER);
         loadingSubText_->SetPosition(sw / 2 - S(410), sh / 2 - S(124));
         loadingSubText_->SetWidth(S(820));
@@ -7087,11 +7080,11 @@ private:
         if (loadingSpecText_) {
             static const char* shortNames[6] = {
                 "Шейдеры 4K HDR / SSAO4K / ACES / CAS",
-                "Пакет 4K PBR текстур (Diffuse + Normal + RoughMetal)",
-                "Кубическая карта неба Sky4K и IBL-отражения",
-                "Геометрия кибер-арены 256×256, джамп-пады и взрывные бочки",
-                "Каскадные тени 4096px, камера и арсенал (12 стволов, 10 PBR-скинов)",
-                "Тактический радар 110м, большая 256м арена и 3D-аудио пул"
+                "Пакет 4K PBR (Diffuse + Normal + RoughMetal)",
+                "Sky4K кубемапа и IBL-отражения арены",
+                "Арена 256×256, джамп-пады, бочки «ОПАСНО»",
+                "Тени 4K, перья PBR, арсенал (12 стволов)",
+                "Волны 2.5 «ПЕРО СУДЬБЫ», перки и радар 110 м"
             };
             String list;
             for (int i = 0; i < 6; ++i) {
@@ -7414,7 +7407,7 @@ private:
 
         Text* title = armoryPanel_->CreateChild<Text>();
         title->SetFont(font_, SF(36));
-        title->SetText("АРСЕНАЛ 4K PBR — CHIKENGUN 2.3");
+        title->SetText("АРСЕНАЛ 4K PBR — CHIKENGUN 2.5");
         title->SetTextAlignment(HA_CENTER);
         title->SetPosition(sw / 2 - S(360), S(32));
         title->SetWidth(S(720));
@@ -7863,8 +7856,8 @@ private:
         }
 
         Text* title = mainMenuPanel_->CreateChild<Text>();
-        title->SetFont(font_, SF(60));
-        title->SetText("CHIKENGUN 2.3");
+        title->SetFont(font_, SF(64));
+        title->SetText("CHIKENGUN 2.5");
         title->SetTextAlignment(HA_CENTER);
         title->SetPosition(sw / 2 - S(420), sh / 2 - S(284));
         title->SetWidth(S(840));
@@ -7878,8 +7871,8 @@ private:
         menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.9f));
 
         Text* sub = mainMenuPanel_->CreateChild<Text>();
-        sub->SetFont(font_, SF(15));
-        sub->SetText("[ 4K ULTRA ]  •  [ БАНЬКА ]  •  [ КАЗИК ]  •  [ МИНИИГРЫ ]");
+        sub->SetFont(font_, SF(16));
+        sub->SetText("[ 2.5 ПЕРО СУДЬБЫ ]  •  [ БАНЬКА ]  •  [ КАЗИК ]  •  [ МИНИИГРЫ ]");
         sub->SetTextAlignment(HA_CENTER);
         sub->SetPosition(sw / 2 - S(440), sh / 2 - S(190));
         sub->SetWidth(S(880));
@@ -8031,7 +8024,6 @@ private:
         if (hudAmmoBarFill_) hudAmmoBarFill_->SetVisible(vis);
         if (radarBg_) radarBg_->SetVisible(vis);
         if (damageOverlay_) damageOverlay_->SetVisible(vis);
-        if (reloadOverlay_) reloadOverlay_->SetVisible(vis);
         if (!vis) {
             if (bossBarBg_) bossBarBg_->SetVisible(false);
             if (bossBarFill_) bossBarFill_->SetVisible(false);
@@ -8594,7 +8586,7 @@ private:
         pd.vel_ = dir * 26.0f; // скорость заметно ниже пули — игрок успевает увернуться
         pd.ttl_ = 3.0f;
         pd.damage_ = damage;
-        if (enemyProjectiles_.Size() >= MAX_ENEMY_PROJECTILES) {
+        if ((unsigned)enemyProjectiles_.Size() >= MAX_ENEMY_PROJECTILES) {
             if (enemyProjectiles_[0].node_) enemyProjectiles_[0].node_->Remove();
             enemyProjectiles_.Erase(0);
         }
@@ -9632,7 +9624,7 @@ private:
         outerBg->SetSize(sw, sh);
         outerBg->SetColor(Color(0.09f, 0.06f, 0.04f, 0.97f));
 
-        // Верхняя плашка интеграции CHIKENGUN 2.3
+        // Верхняя плашка интеграции CHIKENGUN 2.5
         BorderImage* topStrip = banyaPanel_->CreateChild<BorderImage>();
         topStrip->SetPosition(0, 0);
         topStrip->SetSize(sw, S(40));
@@ -10368,7 +10360,7 @@ private:
                        : (banyaBuffTier_ == 1) ? "• БАННЫЙ ЗАКАЛ (+25HP/+25БР)"
                                                : "нет баффа";
         if (banyaBadgeText_) {
-            banyaBadgeText_->SetText("CHIKENGUN 2.3  •  КОШЕЛЁК: " + String(wallet) + "¤  •  БАФФ АРЕНЫ: " + buffStr +
+            banyaBadgeText_->SetText("CHIKENGUN 2.5  •  КОШЕЛЁК: " + String(wallet) + "¤  •  БАФФ АРЕНЫ: " + buffStr +
                                      "  •  ОТКРЫТО КОНЦОВОК: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + "/14");
         }
 

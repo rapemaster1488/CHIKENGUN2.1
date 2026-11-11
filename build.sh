@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# Сборка CHIKENGUN 2.3 — 4K ULTRA & CYBER EVOLUTION EDITION (Urho3D C++17)
+# Сборка CHIKENGUN 2.5 — ПЕРО СУДЬБЫ [4K ULTRA] (Urho3D C++17)
 # Автоматически находит Urho3D / SDL2 / Bullet3, синхронизирует шейдеры,
 # PBR-материалы и звуки, генерирует 4K PBR текстуры (4096x4096) + 360° Skybox4K
 # + 4K Loading Art и компилирует build/MyShooter.
@@ -174,6 +174,6 @@ echo "[3/3] Компиляция src/MyApp.cpp -> build/MyShooter..."
     -lGL -lX11 -lpthread -lrt -ldl -lm
 
 echo "================================================================"
-echo "Готово! Запускайте CHIKENGUN 2.3 [4K ULTRA EDITION]:"
+echo "Готово! Запускайте CHIKENGUN 2.5 [ПЕРО СУДЬБЫ]:"
 echo "  ./run.sh   или   ./build/MyShooter"
 echo "================================================================"

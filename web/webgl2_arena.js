@@ -38,6 +38,37 @@
       }
       return out;
     },
+    // 2.5: ортографическая проекция для shadow map (солнце → вся арена 96x96 + стены)
+    ortho(out, l, r, b, t, n, f) {
+      out.fill(0);
+      out[0] = 2 / (r - l);
+      out[5] = 2 / (t - b);
+      out[10] = -2 / (f - n);
+      out[12] = -(r + l) / (r - l);
+      out[13] = -(t + b) / (t - b);
+      out[14] = -(f + n) / (f - n);
+      out[15] = 1;
+      return out;
+    },
+    // 2.5: классический lookAt (z направлен от target к eye), стилем как viewFPS
+    viewLookAt(out, ex, ey, ez, tx, ty, tz) {
+      let zx = ex - tx, zy = ey - ty, zz = ez - tz;
+      const zl = Math.hypot(zx, zy, zz) || 1; zx /= zl; zy /= zl; zz /= zl;
+      // up ≈ (0,1,0); если смотрим почти вертикально — берём (1,0,0)
+      const ux = 0, uy = 1, uz = 0;
+      let xx = uy * zz - uz * zy, xy = uz * zx - ux * zz, xz = ux * zy - uy * zx;
+      if (Math.hypot(xx, xy, xz) < 0.001) { xx = zz; xy = 0; xz = -zx; }
+      const xl = Math.hypot(xx, xy, xz) || 1; xx /= xl; xy /= xl; xz /= xl;
+      const yx = zy * xz - zz * xy, yy = zz * xx - zx * xz, yz = zx * xy - zy * xx;
+      out[0]=xx; out[1]=yx; out[2]=zx; out[3]=0;
+      out[4]=xy; out[5]=yy; out[6]=zy; out[7]=0;
+      out[8]=xz; out[9]=yz; out[10]=zz;out[11]=0;
+      out[12]=-(xx*ex + xy*ey + xz*ez);
+      out[13]=-(yx*ex + yy*ey + yz*ez);
+      out[14]=-(zx*ex + zy*ey + zz*ez);
+      out[15]=1;
+      return out;
+    },
     viewFPS(out, ex, ey, ez, yaw, pitch, roll = 0) {
       // Forward = (+sin(yaw)*cos(pitch), +sin(pitch), +cos(yaw)*cos(pitch))
       const cy = Math.cos(yaw), sy = Math.sin(yaw);
@@ -108,6 +139,7 @@
   out vec3 vNormal;
   out vec3 vTangent;
   out vec2 vUV;
+  out vec2 vClip;
 
   void main() {
     vec4 wp = uModel * vec4(aPos, 1.0);
@@ -117,6 +149,7 @@
     vTangent = normalize(nm * aTangent);
     vUV = aUV * uUVScale;
     gl_Position = uVP * wp;
+    vClip = gl_Position.xy / max(gl_Position.w, 0.0001);
   }`;
 
   const FS_PBR = `#version 300 es
@@ -125,11 +158,15 @@
   in vec3 vNormal;
   in vec3 vTangent;
   in vec2 vUV;
+  in vec2 vClip;
 
   uniform sampler2D uAlbedoMap;
   uniform sampler2D uNormalMap;
   uniform sampler2D uRoughMetalMap;
   uniform samplerCube uEnvCube;
+  uniform sampler2D uShadowMap;   // 2.5: directional sun shadow map
+  uniform mat4 uLightVP;          // 2.5: light view-projection for shadow pass
+  uniform float uUseShadows;      // 1 = FBO поднялось и тени активны
 
   uniform vec4  uTint;        // rgb + alpha
   uniform vec3  uEmissive;    // HDR linear emissive
@@ -158,6 +195,7 @@
     vec3 albedo = uTint.rgb;
     float rough = clamp(uPbrOverride.x, 0.06, 0.98);
     float metal = clamp(max(uPbrOverride.y, 0.0), 0.0, 1.0);
+    float ao = 1.0;
 
     if (uUseTex > 0.5) {
       vec3 texCol = pow(texture(uAlbedoMap, vUV).rgb, vec3(2.2));
@@ -167,9 +205,12 @@
       vec3 tn = texture(uNormalMap, vUV).xyz * 2.0 - 1.0;
       tn.xy *= 0.85;
       N = normalize(T * tn.x + B * tn.y + N * tn.z);
+      // Urho3D RoughMetal-пакер (как у нативного клиента и генератора):
+      // R = roughness, G = metallic, B = AO
       vec3 rm = texture(uRoughMetalMap, vUV).rgb;
-      rough = clamp(rm.g * uPbrOverride.x, 0.06, 0.98);
-      metal = (uPbrOverride.y >= 0.0) ? uPbrOverride.y : clamp(rm.b, 0.0, 1.0);
+      rough = clamp(rm.r * uPbrOverride.x, 0.06, 0.98);
+      metal = (uPbrOverride.y >= 0.0) ? uPbrOverride.y : clamp(rm.g, 0.0, 1.0);
+      ao = rm.b;
     }
 
     vec3 V = normalize(uCamPos - vWorldPos);
@@ -186,7 +227,30 @@
     float D = a2 / max(3.14159 * denom * denom, 0.0001);
     vec3 F = F0 + (1.0 - F0) * pow(1.0 - max(dot(H, V), 0.0), 5.0);
     vec3 kD = (1.0 - F) * (1.0 - metal);
-    vec3 sunLit = (kD * albedo / 3.14159 + D * F * 0.28) * uSunColor * NdotL;
+    // 2.5: Directional sun shadow (PCF 3x3, front-face culling в depth pass убирает acne)
+    float sunShadow = 1.0;
+    if (uUseShadows > 0.5) {
+      // normal-offset: сдвигаем точку вдоль нормали — убирает acne/полосы на гранях
+      vec3 wpOff = vWorldPos + N * 0.035;
+      vec4 lp = uLightVP * vec4(wpOff, 1.0);
+      vec3 ls = lp.xyz / max(lp.w, 0.0001);
+      vec2 suv = ls.xy * 0.5 + 0.5;
+      float cur = ls.z * 0.5 + 0.5;
+      if (suv.x > 0.002 && suv.x < 0.998 && suv.y > 0.002 && suv.y < 0.998 && cur < 1.0) {
+        float ndl = max(dot(N, normalize(uSunDir)), 0.0);
+        float bias = clamp(0.0045 * (1.0 - ndl), 0.0012, 0.0090);
+        vec2 texel = vec2(1.0 / 1024.0);
+        float acc = 0.0;
+        for (int y = -1; y <= 1; y++) {
+          for (int x = -1; x <= 1; x++) {
+            float stored = texture(uShadowMap, suv + vec2(float(x), float(y)) * texel).r;
+            acc += (stored > cur - bias) ? 1.0 : 0.0;
+          }
+        }
+        sunShadow = mix(0.45, 1.0, acc / 9.0);
+      }
+    }
+    vec3 sunLit = (kD * albedo / 3.14159 + D * F * 0.28) * uSunColor * NdotL * sunShadow;
 
     // 4 Dynamic Point Lights (muzzle, explosions, orbital beam, jump-pads)
     vec3 ptLit = vec3(0.0);
@@ -203,12 +267,14 @@
       float specP = pow(max(dot(N, Hp), 0.0), mix(96.0, 8.0, rough));
       ptLit += (albedo * (1.0 - metal * 0.6) * nl + F0 * specP * 0.8) * uPointCol[i] * att;
     }
+    ptLit = min(ptLit, vec3(2.6));   // 2.5.3: дульная вспышка не должна выжигать кадр в жёлтый
 
     // Hemisphere + Cubemap IBL reflection
     vec3 R = reflect(-V, N);
     vec3 envSample = pow(texture(uEnvCube, R).rgb, vec3(2.2)) * uSkyAmb * 1.45;
     float hemi = N.y * 0.5 + 0.5;
-    vec3 amb = kD * albedo * uSkyAmb * mix(0.38, 1.05, hemi) + F * envSample * (1.0 - rough * 0.72);
+    // AO (канал B RoughMetal-карты) затеняет окружённое/ambient освещение, солнце не трогаем
+    vec3 amb = (kD * albedo * uSkyAmb * mix(0.38, 1.05, hemi) + F * envSample * (1.0 - rough * 0.72)) * mix(0.35, 1.0, ao);
 
     vec3 color = amb + sunLit + ptLit + uEmissive;
 
@@ -217,9 +283,13 @@
     float fogF = 1.0 - exp(-pow(dist * uFogDensity, 1.65));
     color = mix(color, uFogColor, clamp(fogF, 0.0, 0.92));
 
-    // ACES Filmic HDR + Gamma 2.2
+    // ACES Filmic HDR + Gamma 2.2 (+ текстурная альфа для blob-теней)
     vec3 mapped = pow(ACESFilm(color * 1.08), vec3(1.0 / 2.2));
-    fragColor = vec4(mapped, uTint.a);
+    float texA = (uUseTex > 0.5) ? texture(uAlbedoMap, vUV).a : 1.0;
+    // vignette: мягкое затемнение углов (тоннельный эффект арены)
+    float vig = 1.0 - smoothstep(0.42, 1.32, dot(vClip, vClip));
+    mapped *= mix(0.66, 1.0, vig);
+    fragColor = vec4(mapped, uTint.a * texA);
   }`;
 
   const VS_SKY = `#version 300 es
@@ -387,7 +457,8 @@
       "uTint","uEmissive","uPbrOverride","uUseTex","uCamPos","uSunDir","uSunColor",
       "uSkyAmb","uFogColor","uFogDensity",
       "uPointPos[0]","uPointPos[1]","uPointPos[2]","uPointPos[3]",
-      "uPointCol[0]","uPointCol[1]","uPointCol[2]","uPointCol[3]"
+      "uPointCol[0]","uPointCol[1]","uPointCol[2]","uPointCol[3]",
+      "uShadowMap","uLightVP","uUseShadows"
     ].forEach(n => U[n] = gl.getUniformLocation(pbrProg, n));
 
     const USky = {
@@ -405,8 +476,9 @@
     };
 
     // Load 2D PBR Texture Trios + Sky4K Cubemap (with instant procedural Canvas2D fallback for file:// / offline boots)
-    const isFileProto = location.protocol === "file:";
+    const isFileProto = (typeof location !== "undefined") && location.protocol === "file:";
     function uploadCanvasTex(tex, cnv) {
+      if (!cnv) return false;
       gl.bindTexture(gl.TEXTURE_2D, tex);
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cnv);
       gl.generateMipmap(gl.TEXTURE_2D);
@@ -415,12 +487,14 @@
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
       gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
       if (extAniso) gl.texParameterf(gl.TEXTURE_2D, extAniso.TEXTURE_MAX_ANISOTROPY_EXT, maxAniso);
+      return true;
     }
 
     function makeProcCanvas(kind, channel) {
       const c = document.createElement("canvas");
       c.width = c.height = 128;
-      const g = c.getContext("2d");
+      const g = c.getContext && c.getContext("2d");
+      if (!g || typeof g.strokeRect !== "function") return null;
       if (channel === "norm") {
         g.fillStyle = "rgb(128,128,255)";
         g.fillRect(0, 0, 128, 128);
@@ -490,11 +564,20 @@
     const flatNorm = makeFallbackTex(128, 128, 255);
     const defRM    = makeFallbackTex(255, 140, 20);
 
-    function loadTex2D(url, fallback, procKind, procChannel) {
+    // 2.4/2.5: сначала пробуем 1024px TexturesHD (Diffuse/Normal/RoughMetal), при 404 — фолбэк на Data/Textures
+    function loadTex2D(url, fallback, fallbackUrl, procKind, procChannel) {
       const tex = gl.createTexture();
-      uploadCanvasTex(tex, makeProcCanvas(procKind, procChannel));
-      if (isFileProto) return tex;
+      const procOk = procKind ? uploadCanvasTex(tex, makeProcCanvas(procKind, procChannel)) : false;
+      if (isFileProto) return procOk ? tex : fallback;
+      if (!procOk) {
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255,255,255,255]));
+      }
       const img = new Image();
+      let triedFallback = false;
+      img.onerror = () => {
+        if (fallbackUrl && !triedFallback) { triedFallback = true; img.src = fallbackUrl; }
+      };
       img.onload = () => {
         try {
           gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -512,10 +595,14 @@
     }
 
     function loadMaterialSet(prefix) {
+      const sd = (kind) => `Data/Textures/${prefix}${kind}.png`;
+      const hd = (kind) => `Data/TexturesHD/${prefix}${kind}.png`;
+      // В TexturesHD лежат все 7 старых сетов (1024px); BanyaLog/BanyaRooster уже 1024px в Data/Textures
+      const hasHD = ["FloorTile", "StoneHD", "MetalPanel", "BrushedMetal", "CrateWood", "FeatherPBR", "HazardMetal"].includes(prefix);
       return {
-        diff: loadTex2D(`Data/Textures/${prefix}Diffuse.png`, whiteTex, prefix, "diff"),
-        norm: loadTex2D(`Data/Textures/${prefix}Normal.png`, flatNorm, prefix, "norm"),
-        rm:   loadTex2D(`Data/Textures/${prefix}RoughMetal.png`, defRM, prefix, "rm")
+        diff: loadTex2D(hasHD ? hd("Diffuse") : sd("Diffuse"), whiteTex, hasHD ? sd("Diffuse") : null, prefix, "diff"),
+        norm: loadTex2D(hasHD ? hd("Normal") : sd("Normal"), flatNorm, hasHD ? sd("Normal") : null, prefix, "norm"),
+        rm:   loadTex2D(hasHD ? hd("RoughMetal") : sd("RoughMetal"), defRM, hasHD ? sd("RoughMetal") : null, prefix, "rm")
       };
     }
 
@@ -534,7 +621,8 @@
     function makeSkyFaceCanvas(target) {
       const c = document.createElement("canvas");
       c.width = c.height = 128;
-      const g = c.getContext("2d");
+      const g = c.getContext && c.getContext("2d");
+      if (!g || typeof g.createLinearGradient !== "function") return null;
       if (target === gl.TEXTURE_CUBE_MAP_POSITIVE_Y) {
         g.fillStyle = "#0e1d3b"; g.fillRect(0, 0, 128, 128);
       } else if (target === gl.TEXTURE_CUBE_MAP_NEGATIVE_Y) {
@@ -566,7 +654,9 @@
     let cubeLoaded = 0;
     const cubeImgs = new Array(6);
     cubeFaces.forEach(([target, url], idx) => {
-      gl.texImage2D(target, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, makeSkyFaceCanvas(target));
+      const skyCnv = makeSkyFaceCanvas(target);
+      if (skyCnv) gl.texImage2D(target, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, skyCnv);
+      else gl.texImage2D(target, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([18,36,68,255]));
       if (isFileProto) return;
       const im = new Image();
       im.onload = () => {
@@ -585,15 +675,95 @@
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
     gl.texParameteri(gl.TEXTURE_CUBE_MAP, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 
+    // 2.4: радиальная градиентная текстура для мягких blob-теней под динамикой.
+    // Если canvas 2D недоступен (headless/старый браузер) — будет null, теней не будет.
+    const shadowRM = makeFallbackTex(255, 0, 255); // R=rough 1, G=metal 0, B=AO 1
+    let shadowMat = null;
+    try {
+      const cv = document.createElement("canvas");
+      cv.width = cv.height = 128;
+      const ctx = cv.getContext && cv.getContext("2d");
+      if (ctx) {
+        const grd = ctx.createRadialGradient(64, 64, 8, 64, 64, 62);
+        grd.addColorStop(0.00, "rgba(0,0,0,0.92)");
+        grd.addColorStop(0.45, "rgba(0,0,0,0.55)");
+        grd.addColorStop(0.80, "rgba(0,0,0,0.18)");
+        grd.addColorStop(1.00, "rgba(0,0,0,0)");
+        ctx.fillStyle = grd;
+        ctx.fillRect(0, 0, 128, 128);
+        const shadowTex = gl.createTexture();
+        gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, cv);
+        gl.generateMipmap(gl.TEXTURE_2D);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        shadowMat = { diff: shadowTex, norm: flatNorm, rm: shadowRM };
+      }
+    } catch (_) { shadowMat = null; }
+
+    // ---------- 2.5a. Sun-Shadow (directional depth map, orthographic) ----------
+    // Если depth-FBO не собрался (старые драйверы/несовместимый iGPU) — тени просто выключаются
+    // (uUseShadows=0), рендер идентичен 2.4. ?noshadows=1 — принудительный выключатель.
+    const SHADOW_RES = 1024;
+    const urlShadowsDisabled = (typeof location !== "undefined" && location.search) ? /[?&]noshadows=1/.test(location.search) : false;
+    let shadowFB = null, shadowDepthTex = null, sunShadowsOn = false;
+    try {
+      shadowDepthTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, shadowDepthTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, SHADOW_RES, SHADOW_RES, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      shadowFB = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFB);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, shadowDepthTex, 0);
+      if (gl.drawBuffers) gl.drawBuffers([gl.NONE]);
+      if (gl.readBuffer) gl.readBuffer(gl.NONE);
+      sunShadowsOn = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE && !urlShadowsDisabled;
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    } catch (_) { sunShadowsOn = false; }
+
+    const VS_DEPTH = `#version 300 es
+    precision highp float;
+    layout(location=0) in vec3 aPos;
+    uniform mat4 uLightVP;
+    uniform mat4 uModel;
+    void main() { gl_Position = uLightVP * uModel * vec4(aPos, 1.0); }`;
+    const FS_DEPTH = `#version 300 es
+    precision highp float;
+    void main() {}`;
+    const depthProg = compileProg(VS_DEPTH, FS_DEPTH);
+    const UDepth = {
+      lightVP: gl.getUniformLocation(depthProg, "uLightVP"),
+      model:   gl.getUniformLocation(depthProg, "uModel")
+    };
+    function depthDraw(meshName, modelMat) {
+      const m = meshes[meshName];
+      gl.bindVertexArray(m.vao);
+      gl.uniformMatrix4fv(UDepth.model, false, modelMat);
+      gl.drawElements(gl.TRIANGLES, m.count, gl.UNSIGNED_SHORT, 0);
+    }
+
     // ---------- 5. Static 3D Arena Architecture & AABB Colliders ----------
     const staticProps = []; // { mesh, mat, x,y,z, ry, sx,sy,sz, uvs:[u,v], tint, emissive, rough, metal }
     const colliders   = []; // { cx, cy, cz, hx, hy, hz }
 
-    function addProp(mesh, mat, x, y, z, sx, sy, sz, uvs = [1,1], collide = true, tint = [1,1,1,1], emissive = [0,0,0], rough = 1.0, metal = -1) {
+    // 2.4: появились yaw/rx/rz — повороты статических пропсов (трубы, антенны, обломки)
+    function addProp(mesh, mat, x, y, z, sx, sy, sz, uvs = [1,1], collide = true, tint = [1,1,1,1], emissive = [0,0,0], rough = 1.0, metal = -1, yaw = 0, rx = 0, rz = 0) {
       const m = M4.ident();
-      M4.trs(m, x, y, z, 0, 0, 0, sx, sy, sz);
+      M4.trs(m, x, y, z, yaw, rx, rz, sx, sy, sz);
       staticProps.push({ mesh, mat, model: m, uvs, tint, emissive, rough, metal });
-      if (collide) colliders.push({ cx: x, cy: y, cz: z, hx: sx*0.5, hy: sy*0.5, hz: sz*0.5 });
+      if (collide) {
+        // AABB-коллайдер: для поворотов, близких к 90°, меняем местами extents
+        const quarter = Math.round(yaw / (Math.PI / 2));
+        const near90 = Math.abs(yaw - quarter * Math.PI / 2) < 0.35;
+        const swap = near90 && (Math.abs(quarter) % 2 === 1);
+        const hx = (swap ? sz : sx) * 0.5, hz = (swap ? sx : sz) * 0.5;
+        colliders.push({ cx: x, cy: y, cz: z, hx, hy: sy*0.5, hz });
+      }
     }
 
     // Floor 96x96m
@@ -632,10 +802,86 @@
       if (i % 3 === 0) addProp("box", MATS.crate, cx + 0.5, 2.7, cz, 1.6, 1.8, 1.6, [1, 1]);
     });
 
-    // 4 Stadium Floodlight Towers
+    // 4 Stadium Floodlight Towers (2.4: + поперечная балка, парные лампы, красный маяк)
     [[-38,-38],[38,-38],[-38,38],[38,38]].forEach(([tx, tz]) => {
       addProp("cyl", MATS.metal, tx, 9, tz, 1.2, 18, 1.2, [1, 6]);
-      addProp("box", null, tx, 18.2, tz, 4.2, 1.1, 1.4, [1,1], false, [1,0.95,0.85,1], [3.6, 3.3, 2.8], 0.15, 0.9);
+      addProp("box", MATS.panel, tx, 16.3, tz, 3.6, 0.65, 1.0, [2, 1], false, [0.38, 0.44, 0.56, 1], [0, 0, 0], 0.4, 0.82);
+      addProp("box", null, tx, 17.85, tz, 1.15, 0.55, 1.55, [1,1], false, [1,0.95,0.85,1], [4.2, 3.9, 3.1], 0.12, 0.85);
+      addProp("box", null, tx, 18.55, tz, 0.5, 0.4, 0.5, [1,1], false, [1,0.14,0.14,1], [3.4, 0.22, 0.18], 0.3, 0.5);
+    });
+
+    // ============ 2.4 ARENA OVERHAUL ============
+    // Центральный ритуальный круг «Перо Судьбы» (плоский — не мешает движению и стрельбе)
+    addProp("cyl", MATS.panel, 0, 0.05, 0, 10.5, 0.10, 10.5, [5, 5], false, [0.30, 0.42, 0.60, 1], [0.02, 0.10, 0.16], 0.3, 0.85);
+    addProp("cyl", null, 0, 0.13, 0, 7.4, 0.07, 7.4, [1, 1], false, [0.16, 0.85, 1.0, 1], [0.15, 1.35, 1.75], 0.15, 0.85);
+    addProp("cyl", null, 0, 0.175, 0, 3.3, 0.09, 3.3, [1, 1], false, [1.0, 0.82, 0.3, 1], [2.0, 1.4, 0.28], 0.2, 0.9);
+    // 4 столба-маячка по диагоналям круга (укрытия)
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2 + Math.PI / 4;
+      const px = Math.cos(a) * 8.4, pz = Math.sin(a) * 8.4;
+      addProp("cyl", MATS.metal, px, 0.55, pz, 0.55, 1.1, 0.55, [1, 1], true, [0.45, 0.55, 0.72, 1], [0.08, 0.5, 0.65], 0.3, 0.9);
+      addProp("box", null, px, 1.17, pz, 0.62, 0.16, 0.62, [1, 1], false, [0.2, 0.95, 1, 1], [0.3, 1.9, 2.3], 0.15, 0.85);
+    }
+
+    // Полуразрушенные стены на осях — укрытия и разрыватели длинных прострелов
+    const RUIN_WALLS = [
+      { x: 0,    z: 12.5,  sx: 5.4,  sz: 1.15, h: 1.5 },
+      { x: 0,    z: -12.5, sx: 5.4,  sz: 1.15, h: 1.5 },
+      { x: 12.5, z: 0,     sx: 1.15, sz: 5.4,  h: 1.5 },
+      { x: -12.5,z: 0,     sx: 1.15, sz: 5.4,  h: 1.5 },
+      { x: 0,    z: 27.5,  sx: 7.2,  sz: 1.0,  h: 2.3 },
+      { x: 0,    z: -27.5, sx: 7.2,  sz: 1.0,  h: 2.3 }
+    ];
+    RUIN_WALLS.forEach(rw => {
+      addProp("box", MATS.stone, rw.x, rw.h * 0.5, rw.z, rw.sx, rw.h, rw.sz, [Math.max(rw.sx, rw.sz) * 0.8, rw.h * 0.8], true);
+      // рваный «оплавленный» неоновый верх обломка
+      addProp("box", null, rw.x, rw.h + 0.04, rw.z, rw.sx * 0.55, 0.1, rw.sz * 0.92, [1, 1], false, [1, 0.62, 0.16, 1], [1.7, 0.72, 0.1], 0.3, 0.6);
+    });
+
+    // Бетонные ежи (жёлтый hazard) по ближним диагоналям — противо-чарджер/камикадзе
+    [[8.2, 8.2], [-8.2, -8.2], [8.2, -8.2], [-8.2, 8.2]].forEach(([hx, hz]) => {
+      addProp("box", MATS.hazard, hx, 0.42, hz, 1.5, 0.84, 1.5, [1, 1], true);
+    });
+
+    // Неоновые арки-ворота на южном и северном подходах
+    [22.5, -22.5].forEach(az => {
+      [-2.7, 2.7].forEach(ox => {
+        addProp("box", MATS.panel, ox, 1.9, az, 0.7, 3.8, 0.7, [1, 3], true, [0.32, 0.38, 0.50, 1], [0.05, 0.35, 0.5], 0.35, 0.85);
+      });
+      addProp("box", MATS.panel, 0, 4.05, az, 6.4, 0.55, 0.9, [4, 1], false, [0.30, 0.36, 0.48, 1], [0, 0, 0], 0.35, 0.85);
+      addProp("box", null, 0, 4.05, az, 6.5, 0.16, 0.95, [1, 1], false, [0.2, 0.95, 1, 1], [0.3, 2.3, 2.7], 0.15, 0.9);
+    });
+
+    // Антенны, маяки и вент-короба на крышах 4 кибер-бункеров
+    [[-22,-22],[22,-22],[-22,22],[22,22]].forEach(([bx, bz]) => {
+      addProp("cyl", MATS.metal, bx - 2.1, 5.3, bz + 0.4, 0.16, 4.2, 0.16, [1, 3], false);
+      addProp("box", null, bx - 2.1, 7.55, bz + 0.4, 0.48, 0.34, 0.48, [1, 1], false, [1, 0.2, 0.2, 1], [2.6, 0.3, 0.25], 0.3, 0.5);
+      addProp("cyl", MATS.metal, bx + 1.4, 3.6, bz - 0.9, 0.5, 0.78, 0.5, [1, 1], false);
+      addProp("cone", null, bx + 1.4, 4.14, bz - 0.9, 0.68, 0.5, 0.68, [1, 1], false, [0.72, 0.78, 0.88, 1], [0, 0, 0], 0.35, 0.7);
+    });
+
+    // Трубы вдоль внутренних стен + жёлтые вентили (2.4)
+    [47.0, -47.0].forEach(off => {
+      // труба вдоль оси X (north/south)
+      addProp("cyl", MATS.metal, 0, 1.18, off, 0.48, 88, 0.48, [10, 1], false, [0.55, 0.60, 0.72, 1], [0, 0, 0], 0.32, 0.9, 0, 0, Math.PI / 2);
+      // труба вдоль оси Z (east/west)
+      addProp("cyl", MATS.metal, off, 1.18, 0, 0.48, 88, 0.48, [10, 1], false, [0.55, 0.60, 0.72, 1], [0, 0, 0], 0.32, 0.9, 0, Math.PI / 2, 0);
+      [-33, -11, 11, 33].forEach(t => {
+        // вентиль на X-трубе (ось Z)
+        addProp("cyl", MATS.hazard, t, 1.18, (off - Math.sign(off) * 0.32), 0.36, 0.16, 0.36, [1, 1], false, [0.9, 0.75, 0.2, 1], [0, 0, 0], 0.5, 0.4, 0, Math.PI / 2, 0);
+        // вентиль на Z-трубе (ось X)
+        addProp("cyl", MATS.hazard, (off - Math.sign(off) * 0.32), 1.18, t, 0.36, 0.16, 0.36, [1, 1], false, [0.9, 0.75, 0.2, 1], [0, 0, 0], 0.5, 0.4, 0, 0, Math.PI / 2);
+      });
+    });
+
+    // Светящиеся «взлётные полосы» от круга к 4 аркам (эмиссив, без коллизий)
+    [[0, 31.5, 0], [0, -31.5, 0], [31.5, 0, 1], [-31.5, 0, 1]].forEach(([gx, gz, rot]) => {
+      addProp("box", null, gx, 0.035, gz, rot ? 15 : 0.55, 0.035, rot ? 0.55 : 15, [1, 1], false, [0.15, 0.8, 1, 1], [0.08, 0.75, 0.95], 0.25, 0.2);
+    });
+
+    // Обломки «техномусора» на полу (визуальный слой)
+    [[-16, -8, 0.3], [14, 9, 1.1], [-6, 18, 0.8], [5, -17, 2.0], [18, -16, 1.6], [-18, 15, 0.5]].forEach(([dx, dz, ry], i) => {
+      addProp("box", MATS.hazard, dx, 0.17, dz, 0.95 + (i % 3) * 0.4, 0.34, 0.72, [1, 1], false, [0.92, 0.78, 0.25, 1], [0, 0, 0], 0.65, 0.35, ry);
     });
 
     // 3D Wooden Steamhouse «Банька Смотрящего» at (-18, 0, -34) — enter with [P]!
@@ -713,6 +959,8 @@
 
     const S = {
       x: 0, y: 1.75, z: -26, vx: 0, vy: 0, vz: 0, yaw: 0, pitch: 0.04,
+      sunShadows: sunShadowsOn,   // 2.5: статус directional shadow map (для F3-телеметрии)
+      cluckCd: 2.5,               // 2.5: таймер атмосферных отдалённых кудахтаний
       onGround: true, fromPad: false, crouch: false, sensMul: savedSens,
       hp: 100 + initBonusHp, maxHp: 100 + initBonusHp, armor: Math.min(100, 50 + initBonusArm),
       score: 0, highScore: savedHi, credits: savedCred, banyaBuff: savedBuff, banyaDoorPos: BANYA_DOOR,
@@ -726,7 +974,7 @@
       grenCd: 0, turretCd: 0, meleeCd: 0, meleeT: 0, overdriveT: 0, slowMo: 0, shake: 0,
       perks: [0, 0, 0, 0], achiev: savedAch,
       multiKill: 0, multiT: 0,
-      barrels: [], pads: [], chickens: [], orbs: [], enemyEggs: [], grenades: [], turrets: [], beams: [], particles: [], pickups: [],
+      barrels: [], pads: [], chickens: [], corpses: [], orbs: [], enemyEggs: [], grenades: [], turrets: [], beams: [], particles: [], pickups: [],
       weather: Array.from({ length: 42 }, () => ({ ox: (Math.random()-0.5)*34, oy: Math.random()*13, oz: (Math.random()-0.5)*34, sp: 2+Math.random()*3, ph: Math.random()*6.28 })),
       showFps: false, fps: 60, drawCalls: 0
     };
@@ -760,6 +1008,33 @@
         if (t >= 0.05 && t < best) { best = t; hit = true; }
       }
       return hit ? best : -1;
+    }
+
+    // 2.4: курицы уважают статические AABB-укрытия. Свободное движение +
+    // выталкивание по оси минимальной пенетрации (2 прохода): курица скользит
+    // вдоль стены и никогда не застревает внутри коллайдера (включая нокаут-
+    // импульсы и спавн внахлёст). Дроны-валькирии летают выше и коллизий не замечают.
+    function resolveChickenMove(c, mx, mz) {
+      if (c.type === "drone") return [c.x + mx, c.z + mz];
+      let nx = c.x + mx, nz = c.z + mz;
+      const R = 0.42, bodyBot = c.y + 0.15, bodyTop = c.y + (c.type === "boss" ? 2.1 : 1.3);
+      for (let iter = 0; iter < 2; iter++) {
+        let pushed = false;
+        for (let i = 0; i < colliders.length; i++) {
+          const col = colliders[i];
+          if (col.cy - col.hy > bodyTop || col.cy + col.hy < bodyBot) continue;
+          const dx = nx - col.cx, dz = nz - col.cz;
+          const px = (col.hx + R) - Math.abs(dx);
+          const pz = (col.hz + R) - Math.abs(dz);
+          if (px > 0 && pz > 0) {
+            if (px < pz) nx = col.cx + (dx >= 0 ? 1 : -1) * (col.hx + R);
+            else         nz = col.cz + (dz >= 0 ? 1 : -1) * (col.hz + R);
+            pushed = true;
+          }
+        }
+        if (!pushed) break;
+      }
+      return [nx, nz];
     }
 
     function saveCredits() {
@@ -803,8 +1078,20 @@
       const bossWave = (num % 5 === 0);
       const cnt = Math.min(4 + num * 2, 16);
       for (let i = 0; i < cnt; i++) {
-        const a = (i / cnt) * Math.PI * 2 + Math.random() * 0.4;
+        let a = (i / cnt) * Math.PI * 2 + Math.random() * 0.4;
         const r = 20 + Math.random() * 18;
+        // 2.4: не спавним курицу внутри статических укрытий (баня, руины, бункеры)
+        for (let tries = 0; tries < 8; tries++) {
+          const tx = Math.cos(a) * r, tz = Math.sin(a) * r;
+          let inside = false;
+          for (let j = 0; j < colliders.length; j++) {
+            const col = colliders[j];
+            if (col.cy - col.hy > 1.3) continue;
+            if (Math.abs(tx - col.cx) < col.hx + 0.6 && Math.abs(tz - col.cz) < col.hz + 0.6) { inside = true; break; }
+          }
+          if (!inside) break;
+          a = Math.random() * Math.PI * 2;
+        }
         let type = "melee";
         if (bossWave && i === 0) type = "boss";
         else {
@@ -817,7 +1104,7 @@
         const hp = type === "boss" ? 560 + num * 30 : type === "drone" ? 90 : type === "kamikaze" ? 55 : 95 + num * 10;
         S.chickens.push({
           x: Math.cos(a) * r, y: type === "drone" ? 4.4 : 0, z: Math.sin(a) * r,
-          type, hp, maxHp: hp, phase: Math.random() * 6.28, atkCd: 1.0 + Math.random(), enraged: false, beepT: 0.4
+          type, hp, maxHp: hp, phase: Math.random() * 6.28, atkCd: 1.0 + Math.random(), enraged: false, beepT: 0.4, strafeSeed: Math.random() * 6.28
         });
       }
       if (bossWave) opts.playSfx("RoosterBoss.wav", 0.9);
@@ -863,6 +1150,10 @@
     function damageChicken(c, dmg, headshot) {
       if (c.hp <= 0) return;
       c.hp -= dmg;
+      // 2.4: импульс отбрасывания + flinch для анимации
+      const awayX = c.x - S.x, awayZ = c.z - S.z, awayD = Math.hypot(awayX, awayZ) || 1;
+      if (c.type !== "boss") { c.x += (awayX / awayD) * 0.22; c.z += (awayZ / awayD) * 0.22; }
+      c.flinchT = 0.22;
       opts.flashHit(headshot, c.hp <= 0);
       opts.spawnDmgNum(c.x, c.y + 1.8, c.z, Math.round(dmg), headshot);
       if (headshot) {
@@ -870,11 +1161,14 @@
         opts.playSfx("Headshot.wav", 0.72);
         if (S.headshots >= 10) unlockAch(1, "КУРИНЫЙ СНАЙПЕР (10 ХЭДШОТОВ)");
       } else {
-        opts.playSfx("ChickenHurt.wav", 0.45);
+        opts.playSfx("ChickenHurt.wav", 0.4 + Math.random() * 0.14);
       }
+      // 2.5: короткий взмах крыльев при попадании (хлёст воздуха) — родной ассет движка
+      opts.playSfx("WingSlap.wav", 0.22);
 
       const fCol = c.type === "kamikaze" ? [1.8,0.4,0.1] : c.type === "drone" ? [0.2,1.6,2.2] : [1.2,1.2,1.15];
-      for (let i = 0; i < (c.hp <= 0 ? 14 : 3); i++) {
+      const burstN = c.hp <= 0 ? (c.type === "boss" ? 34 : 14) : 3;
+      for (let i = 0; i < burstN; i++) {
         const a = Math.random() * 6.28;
         S.particles.push({
           x: c.x, y: c.y + 1.0, z: c.z,
@@ -884,6 +1178,12 @@
       }
 
       if (c.hp <= 0) {
+        // 2.4: тело падает и лежит на арене несколько секунд
+        S.corpses.push({
+          x: c.x, y: c.y, z: c.z,
+          yaw: Math.atan2(awayX, awayZ), sc: c.type === "boss" ? 1.85 : c.type === "kamikaze" ? 0.82 : 1.0,
+          type: c.type, ttl: 4.2, spin: (Math.random() - 0.5) * 0.8
+        });
         opts.playSfx(c.type === "boss" ? "RoosterBoss.wav" : "ChickenDie.wav", 0.78);
         S.kills++;
         const mut = MUTATORS[S.mutator];
@@ -902,7 +1202,11 @@
           opts.pushFeed("🚀 АЭРО-ФРАГ В ПОЛЁТЕ! +100");
           unlockAch(3, "НЕБЕСНЫЙ ПЕТУХ");
         }
-        if (c.type === "boss") { S.slowMo = 0.42; unlockAch(6, "УБИЙЦА МЕГА-ИНДЮКА"); }
+        if (c.type === "boss") {
+          S.slowMo = 0.42; unlockAch(6, "УБИЙЦА МЕГА-ИНДЮКА");
+          addFlashLight(c.x, 1.6, c.z, 2.8, 2.1, 0.9, 24, 0.55);   // золотая «корона»
+          opts.showBanner("👑 МЕГА-ИНДЮК ПОВЕРЖЕН!");
+        }
         if (c.type === "kamikaze" || mut.boom) explodeAt(c.x, 0.6, c.z, c.type === "kamikaze" ? 6.5 : 4.2, c.type === "kamikaze" ? 120 : 55);
 
         S.multiKill = S.multiT > 0 ? S.multiKill + 1 : 1;
@@ -942,7 +1246,7 @@
       opts.playSfx(w.sfx, 0.75);
 
       const [fx, fy, fz] = getAimDir(0);
-      addFlashLight(S.x + fx * 1.1, S.y - 0.1 + fy * 1.1, S.z + fz * 1.1, w.color[0]*3, w.color[1]*3, w.color[2]*3, 9, 0.06);
+      addFlashLight(S.x + fx * 1.1, S.y - 0.1 + fy * 1.1, S.z + fz * 1.1, w.color[0]*1.6, w.color[1]*1.6, w.color[2]*1.6, 6.5, 0.05);
 
       const banyaDmgMul = S.banyaBuff >= 2 ? 1.15 : 1.0;
       const dmgMul = (1 + 0.15 * S.perks[2]) * banyaDmgMul * (S.overdriveT > 0 ? 2.0 : 1.0);
@@ -1259,6 +1563,7 @@
 
     // ---------- 9. Draw Helpers ----------
     const vpMat = M4.ident(), projMat = M4.ident(), viewMat = M4.ident(), skyVP = M4.ident(), tmpM = M4.ident();
+    const lightProjMat = M4.ident(), lightViewMat = M4.ident(), lightVPMat = M4.ident();
 
     function drawMesh(meshName, matSet, modelMat, uvs, tint, emissive, rough, metal) {
       const m = meshes[meshName];
@@ -1453,6 +1758,8 @@
         S.grenades = S.grenades.filter(g => {
           g.fuse -= dt; g.vy -= 19 * dt;
           g.x += g.vx*dt; g.y += g.vy*dt; g.z += g.vz*dt;
+          // 2.5: тонкий дымный след гранаты
+          if (Math.random() < dt * 9) S.particles.push({ x: g.x, y: g.y, z: g.z, vx: (Math.random()-0.5)*0.4, vy: 0.6, vz: (Math.random()-0.5)*0.4, col: [0.6, 0.6, 0.66], sz: 0.11, ttl: 0.45 });
           if (g.y < 0.22) { g.y = 0.22; g.vy = Math.abs(g.vy)*0.55; g.vx *= 0.78; g.vz *= 0.78; }
           if (g.fuse <= 0) { explodeAt(g.x, g.y, g.z, 9.0, 175 * (1 + 0.15*S.perks[2])); return false; }
           return true;
@@ -1503,6 +1810,8 @@
             }
           }
           c.phase += dt * 8.5;
+          if (c.flinchT > 0) c.flinchT -= dt;
+          if (c.lungeT > 0) c.lungeT -= dt;
           const dx = S.x - c.x, dz = S.z - c.z, d = Math.hypot(dx, dz) || 1;
           const baseSpd = (c.type === "kamikaze" ? 6.2 : c.type === "charger" ? 4.6 : c.type === "drone" ? 3.4 : 2.8) * mutSpd * (c.enraged ? 1.32 : 1.0);
 
@@ -1514,8 +1823,10 @@
           if (c.type === "shooter" || c.type === "drone") {
             const sx = -dz / d, sz = dx / d;
             const approach = d > 15 ? 1 : (d < 8 ? -0.6 : 0);
-            c.x += (dx/d * approach + sx * Math.sin(c.phase*0.25) * 0.7) * baseSpd * dt;
-            c.z += (dz/d * approach + sz * Math.sin(c.phase*0.25) * 0.7) * baseSpd * dt;
+            const mv = resolveChickenMove(c,
+              (dx/d * approach + sx * Math.sin(c.phase*0.25) * 0.7) * baseSpd * dt,
+              (dz/d * approach + sz * Math.sin(c.phase*0.25) * 0.7) * baseSpd * dt);
+            c.x = mv[0]; c.z = mv[1];
             if (c.type === "drone") c.y = 4.2 + Math.sin(c.phase * 0.35) * 0.65;
             c.atkCd -= dt;
             if (c.atkCd <= 0 && d < 32) {
@@ -1524,14 +1835,23 @@
               S.enemyEggs.push({ x: c.x, y: ey, z: c.z, vx: dx/len*19, vy: ((S.y-0.2)-ey)/len*19, vz: dz/len*19, dmg: 10, ttl: 2.5 });
             }
           } else {
-            if (d > 1.7) { c.x += (dx/d)*baseSpd*dt; c.z += (dz/d)*baseSpd*dt; }
+            if (d > 1.7) {
+              // 2.5: рыскание при сближении (weaving) — ходоки/чарджеры/боссы вьются, у камикадзе почти нет
+              const weave = c.type === "boss" ? 0.42 : c.type === "charger" ? 0.3 : c.type === "kamikaze" ? 0.12 : 0.55;
+              const sway = Math.sin(c.phase * 0.5 + (c.strafeSeed || 0)) * weave;
+              const perpX = -dz / d, perpZ = dx / d;
+              const mv = resolveChickenMove(c, ((dx / d) + perpX * sway) * baseSpd * dt, ((dz / d) + perpZ * sway) * baseSpd * dt);
+              c.x = mv[0]; c.z = mv[1];
+            }
             c.atkCd -= dt;
             if (d <= 2.1 && c.atkCd <= 0) {
               c.atkCd = c.enraged ? 0.85 : 1.15;
+              c.lungeT = 0.28;
               if (c.type === "kamikaze") { c.hp = 0; explodeAt(c.x, 0.5, c.z, 6.0, 38); hurtPlayer(26); }
               else hurtPlayer(c.type === "boss" ? (c.enraged ? 30 : 22) : 12);
             } else if (c.type === "boss" && c.atkCd <= 0 && d > 6) {
               c.atkCd = c.enraged ? 1.5 : 2.3;
+              c.lungeT = 0.34;
               const spreadSet = c.enraged ? [-0.18, 0, 0.18] : [0];
               spreadSet.forEach(ang => {
                 const ca = Math.cos(ang), sa = Math.sin(ang);
@@ -1546,6 +1866,17 @@
         S.chickens = S.chickens.filter(c => c.hp > 0);
         if (aliveCnt === 0) spawnWave(S.wave + 1);
         opts.updateBossHud(bossRef);
+        // 2.5: атмосферные отдалённые кудахтания — стая «живая» за пределами видимости
+        S.cluckCd -= dt;
+        if (S.cluckCd <= 0) {
+          S.cluckCd = 3.5 + Math.random() * 4.5;
+          let nd = Infinity;
+          S.chickens.forEach(c => { const d = Math.hypot(c.x - S.x, c.z - S.z); if (d < nd) nd = d; });
+          if (isFinite(nd)) {
+            const vol = Math.max(0.05, Math.min(0.5, 0.55 - nd * 0.010));
+            opts.playSfx(Math.random() < 0.5 ? "Chicken_Cluck.wav" : "Chicken_Cluck2.wav", vol);
+          }
+        }
       } else {
         // Menu orbit camera!
         const t = now * 0.00022;
@@ -1562,6 +1893,15 @@
         S.hp = Math.max(0, S.hp - (raw - takeA));
         S.shake = Math.min(0.3, S.shake + 0.12);
         opts.flashDamage();
+        // 2.5: дуга-индикатор направления угрозы (на ближайшего живого врага)
+        let bd = Infinity, bx = 0, bz = 0, found = false;
+        S.chickens.forEach(c => { const d = Math.hypot(c.x - S.x, c.z - S.z); if (d < bd) { bd = d; bx = c.x; bz = c.z; found = true; } });
+        if (found && typeof opts.flashDamageFrom === "function") {
+          const fx = Math.sin(S.yaw), fz = Math.cos(S.yaw);
+          const rx = Math.cos(S.yaw), rz = -Math.sin(S.yaw);
+          const dxA = bx - S.x, dzA = bz - S.z;
+          opts.flashDamageFrom(Math.atan2(dxA * rx + dzA * rz, dxA * fx + dzA * fz));
+        }
         if (S.hp <= 0) {
           S.hp = S.maxHp; S.armor = 50;
           opts.pushFeed("⚡ РЕЗЕРВНЫЙ КИБЕР-КЛОН АКТИВИРОВАН!");
@@ -1571,6 +1911,7 @@
       // Decay FX
       S.beams = S.beams.filter(b => (b.ttl -= dt) > 0);
       S.orbitalStrikes = S.orbitalStrikes.filter(o => (o.ttl -= dt) > 0);
+      S.corpses = S.corpses.filter(cp => (cp.ttl -= dt) > 0);
       S.particles = S.particles.filter(p => {
         p.ttl -= dt; p.vy -= 16 * dt;
         p.x += p.vx*dt; p.y = Math.max(0.06, p.y + p.vy*dt); p.z += p.vz*dt;
@@ -1589,6 +1930,44 @@
       gl.enable(gl.CULL_FACE);
 
       const atm = ATMOSPHERES[S.atmIdx];
+
+      // 2.5.3: явный тёмный clear (формально и для надёжности на кривых драйверах)
+      gl.clearColor(0.015, 0.03, 0.07, 1.0);
+
+      // 2.5a) Sun shadow map (depth-only, ортографический охват всей арены)
+      if (sunShadowsOn) {
+        const ld = atm.sunDir;
+        M4.viewLookAt(lightViewMat, ld[0] * 175, ld[1] * 175, ld[2] * 175, 0, 0, 0);
+        M4.ortho(lightProjMat, -80, 80, -80, 80, 20, 400);
+        M4.mul(lightVPMat, lightProjMat, lightViewMat);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, shadowFB);
+        gl.viewport(0, 0, SHADOW_RES, SHADOW_RES);
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+        gl.enable(gl.CULL_FACE);
+        gl.cullFace(gl.FRONT);   // классика против acne: пишем только задние грани
+        gl.depthFunc(gl.LEQUAL);
+        gl.useProgram(depthProg);
+        gl.uniformMatrix4fv(UDepth.lightVP, false, lightVPMat);
+        for (let i = 0; i < staticProps.length; i++) depthDraw(staticProps[i].mesh, staticProps[i].model);
+        S.barrels.forEach(b => { if (b.alive) { M4.trs(tmpM, b.x, 0.85, b.z, 0, 0, 0, 1.15, 1.7, 1.15); depthDraw("cyl", tmpM); } });
+        S.turrets.forEach(t => { M4.trs(tmpM, t.x, 0.95, t.z, t.yaw, 0, 0, 0.65, 1.9, 0.95); depthDraw("cone", tmpM); });
+        S.pads.forEach(p => { M4.trs(tmpM, p.x, 0.12, p.z, 0, 0, 0, 2.9, 0.24, 2.9); depthDraw("cyl", tmpM); });
+        // курицы — аппроксимация объёмом туловища (дёшево, для солнечной тени достаточно)
+        S.chickens.forEach(c => {
+          const sc = c.type === "boss" ? 1.85 : c.type === "kamikaze" ? 0.82 : 1.0;
+          const yawC = Math.atan2(S.x - c.x, S.z - c.z);
+          M4.trs(tmpM, c.x, (c.y || 0) + 0.95 * sc, c.z, yawC, 0, 0, 1.5 * sc, 1.6 * sc, 1.15 * sc);
+          depthDraw("box", tmpM);
+        });
+        S.corpses.forEach(cp => {
+          M4.trs(tmpM, cp.x, 0.45 * cp.sc, cp.z, cp.yaw || 0, 0, 0, 1.5 * cp.sc, 0.85 * cp.sc, 1.1 * cp.sc);
+          depthDraw("box", tmpM);
+        });
+        gl.cullFace(gl.BACK);
+        gl.depthFunc(gl.LESS);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.viewport(0, 0, canvas.width, canvas.height);   // вернуть viewport основного пасса
+      }
       const baseFov = S.aiming ? (WEAPONS[S.wep].zoom || 62) : (S.dashT > 0 || S.grappleOn ? 98 : 88);
       M4.persp(projMat, baseFov * Math.PI / 180, canvas.width / Math.max(1, canvas.height), 0.12, 260.0);
 
@@ -1623,6 +2002,13 @@
       gl.uniform1i(U.uNormalMap, 1);
       gl.uniform1i(U.uRoughMetalMap, 2);
       gl.uniform1i(U.uEnvCube, 3);
+      gl.uniform1i(U.uShadowMap, 4);
+      gl.uniform1f(U.uUseShadows, sunShadowsOn ? 1.0 : 0.0);
+      if (sunShadowsOn) {
+        gl.uniformMatrix4fv(U.uLightVP, false, lightVPMat);
+        gl.activeTexture(gl.TEXTURE4);
+        gl.bindTexture(gl.TEXTURE_2D, shadowDepthTex);
+      }
       gl.uniform3f(U.uCamPos, camX, camY, camZ);
       gl.uniform3fv(U.uSunDir, atm.sunDir);
       gl.uniform3fv(U.uSunColor, atm.sunCol);
@@ -1644,6 +2030,26 @@
       for (let i = 0; i < staticProps.length; i++) {
         const p = staticProps[i];
         drawMesh(p.mesh, p.mat, p.model, p.uvs, p.tint, p.emissive, p.rough, p.metal);
+      }
+
+      // 2.4: Blob-тени под динамическими объектами (контактное затемнение)
+      if (shadowMat) {
+        gl.enable(gl.BLEND);
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+        gl.depthMask(false);
+        const drawBlobShadow = (sx, sz, radius, height, strength) => {
+          const h = Math.max(0, height || 0);
+          const fade = Math.max(0.15, 1.0 - h / 7.5);           // выше → тень бледнее
+          const spread = 1.0 + h * 0.10;                        // и чуть шире
+          M4.trs(tmpM, sx, 0.06, sz, 0, 0, 0, radius * 2 * spread, 0.012, radius * 2 * spread);
+          drawMesh("box", shadowMat, tmpM, [1, 1], [1, 1, 1, strength * fade], [0, 0, 0], 1.0, -1);
+        };
+        S.chickens.forEach(c => drawBlobShadow(c.x, c.z, c.type === "boss" ? 2.0 : c.type === "drone" ? 1.3 : 1.0, c.y || 0, 0.5));
+        S.corpses.forEach(cp => drawBlobShadow(cp.x, cp.z, 1.1 * cp.sc, 0, 0.4));
+        S.barrels.forEach(b => { if (b.alive) drawBlobShadow(b.x, b.z, 0.72, 0, 0.42); });
+        S.turrets.forEach(t => drawBlobShadow(t.x, t.z, 0.68, 0, 0.4));
+        gl.depthMask(true);
+        gl.disable(gl.BLEND);
       }
 
       // Overhead Spinning Holographic Sky-Ring
@@ -1683,55 +2089,147 @@
         drawMesh("box", MATS.panel, tmpM, [1,1], [0.3,0.85,1,1], [0.1,0.8,1.1], 0.25, 0.88);
       });
 
-      // 3D Articulated Cyber-Chickens (6 Breeds!)
+      // 3D Articulated Cyber-Chickens (6 Breeds!) — 2.4: ноги с шагом, хвост-веер, шея,
+      // выпад клювом при атаке, откидывание при попадании, ярость босса пульсирует
       S.chickens.forEach(c => {
-        const sc = c.type === "boss" ? 1.85 : c.type === "kamikaze" ? 0.82 : 1.0;
-        const yawC = Math.atan2(S.x - c.x, S.z - c.z);
+        const scBase = c.type === "boss" ? 1.85 : c.type === "kamikaze" ? 0.82 : 1.0;
+        const ragePulse = c.enraged ? 1.0 + 0.055 * Math.sin(now * 0.012) : 1.0;
+        const sc = scBase * ragePulse;
+        const dpX = S.x - c.x, dpZ = S.z - c.z, distP = Math.hypot(dpX, dpZ);
+        const panic = c.type === "kamikaze" && distP < 7 ? 1.0 + 0.07 * Math.sin(now * 0.03) : 1.0;
+        const yawC = Math.atan2(dpX, dpZ);
         const cy = Math.cos(yawC), sy = Math.sin(yawC);
+        const fwdX = sy, fwdZ = cy;
         const waddle = Math.sin(c.phase) * 0.08;
+        const flinchK = c.flinchT > 0 ? Math.sin((Math.min(0.22, Math.max(0, c.flinchT)) / 0.22) * Math.PI) : 0;
+        const lungeDen = c.type === "boss" ? 0.34 : 0.28;
+        const lungeK = c.lungeT > 0 ? Math.sin((1 - Math.min(1, Math.max(0, c.lungeT) / lungeDen)) * Math.PI) : 0;
+        const bodyBack = flinchK * 0.34;
+        const bodyX = c.x - fwdX * bodyBack, bodyZ = c.z - fwdZ * bodyBack;
+        const bodyPitch = -flinchK * 0.5;
+        const breathe = 1.0 + 0.028 * Math.sin(now * 0.004 + c.phase * 0.3);
         const tint = c.type === "kamikaze" ? [1.0,0.34,0.14,1] : c.type === "drone" ? [0.32,0.88,1.0,1]
                    : c.type === "charger"  ? [0.92,0.48,0.18,1] : c.type === "shooter" ? [0.22,0.25,0.34,1]
                    : c.type === "boss"     ? [0.95,0.76,0.28,1] : [0.96,0.95,0.90,1];
         const emBody = c.enraged ? [1.4, 0.15, 0.1] : [0,0,0];
 
-        // Body ellipsoid
-        M4.trs(tmpM, c.x, c.y + 0.85*sc, c.z, yawC, 0, waddle, 0.95*sc, 0.88*sc, 1.18*sc);
+        // Ноги + лапы (чередующийся шаг; дрон поджимает лапы)
+        const legSwing = c.type === "drone" ? -0.62 : Math.sin(c.phase) * 0.72;
+        const hipY = c.y + 0.42 * sc, legLen = 0.46 * sc;
+        const legW = (c.type === "boss" ? 0.17 : 0.095) * sc;
+        [-1, 1].forEach(side => {
+          const swing = legSwing * side;
+          const hipX = c.x + cy * side * 0.30 * sc, hipZ = c.z - sy * side * 0.30 * sc;
+          const legM = M4.ident();
+          M4.trs(legM, hipX, hipY, hipZ, yawC, swing, 0, 1, 1, 1);
+          const legOff = M4.ident();
+          M4.trs(legOff, 0, -legLen * 0.5, 0, 0, 0, 0, legW, legLen, legW);
+          M4.mul(legM, legM, legOff);
+          drawMesh("cyl", null, legM, [1,1], [0.98, 0.62, 0.12, 1], [0,0,0], 0.45, 0.2);
+          const footY = hipY - legLen * Math.cos(swing) + 0.045;
+          const footFwd = -Math.sin(swing) * legLen;
+          M4.trs(tmpM, hipX + fwdX * footFwd, footY, hipZ + fwdZ * footFwd, yawC, 0, 0, 0.20 * sc, 0.09 * sc, 0.30 * sc);
+          drawMesh("box", null, tmpM, [1,1], [0.82, 0.47, 0.07, 1], [0,0,0], 0.5, 0.15);
+        });
+
+        // Body ellipsoid (дыхание + паника камикадзе + flinch-откидывание)
+        M4.trs(tmpM, bodyX, c.y + 0.88*sc, bodyZ, yawC, bodyPitch, waddle, 0.95*sc*breathe*panic, 0.88*sc/breathe, 1.18*sc*panic);
         drawMesh("sph", MATS.feather, tmpM, [2,2], tint, emBody, 0.72, 0.05);
 
-        // Head
-        const hx = c.x + sy*0.42*sc, hy = c.y + 1.48*sc + Math.abs(Math.sin(c.phase))*0.06, hz = c.z + cy*0.42*sc;
-        M4.trs(tmpM, hx, hy, hz, yawC, 0, 0, 0.56*sc, 0.56*sc, 0.58*sc);
+        // Кибер-пластина «задней брони» сзади
+        M4.trs(tmpM, bodyX - fwdX*0.52*sc, c.y + 0.74*sc, bodyZ - fwdZ*0.52*sc, yawC, bodyPitch, 0, 0.52*sc, 0.3*sc, 0.18*sc);
+        drawMesh("box", MATS.panel, tmpM, [1,1], [0.3, 0.35, 0.45, 1], c.type === "drone" ? [0.1, 0.7, 0.9] : [0, 0, 0], 0.3, 0.88);
+
+        // Хвост — веер из трёх перьев
+        const tailBob = Math.sin(c.phase * 0.5 + 1.3) * 0.09;
+        [-0.5, 0, 0.5].forEach((fan, ti) => {
+          const tailY = c.y + (1.04 + (ti === 1 ? 0.08 : 0)) * sc;
+          const td = 0.8;
+          M4.trs(tmpM, bodyX - fwdX*0.60*sc, tailY, bodyZ - fwdZ*0.60*sc, yawC + fan*0.6, -0.98 + tailBob + (ti === 1 ? -0.12 : 0), fan*0.55, 0.30*sc, 0.55*sc, 0.09*sc);
+          drawMesh("box", MATS.feather, tmpM, [1,1], [tint[0]*td, tint[1]*td, tint[2]*td, 1], [0,0,0], 0.72, 0.05);
+        });
+
+        // Шея (перьевое кольцо)
+        M4.trs(tmpM, bodyX + fwdX*0.14*sc, c.y + 1.24*sc, bodyZ + fwdZ*0.14*sc, yawC, 0.4 + bodyPitch*0.5, 0, 0.32*sc, 0.28*sc, 0.32*sc);
+        drawMesh("cyl", MATS.feather, tmpM, [1,1], tint, emBody, 0.7, 0.05);
+
+        // Head (выпад вперёд при атаке)
+        const headLunge = lungeK * 0.38 * sc;
+        const hx = bodyX + sy*0.42*sc + fwdX*headLunge, hy = c.y + 1.50*sc + Math.abs(Math.sin(c.phase))*0.06 + lungeK*0.04, hz = bodyZ + cy*0.42*sc + fwdZ*headLunge;
+        M4.trs(tmpM, hx, hy, hz, yawC, bodyPitch + lungeK*0.6, 0, 0.56*sc, 0.56*sc, 0.58*sc);
         drawMesh("sph", MATS.feather, tmpM, [1,1], tint, emBody, 0.68, 0.05);
 
         // Red Comb (or Golden Crown for Boss!)
-        M4.trs(tmpM, hx, hy + 0.34*sc, hz, yawC, 0, 0, 0.16*sc, 0.28*sc, 0.36*sc);
+        M4.trs(tmpM, hx, hy + 0.34*sc, hz, yawC, bodyPitch + lungeK*0.6, 0, 0.16*sc, 0.28*sc, 0.36*sc);
         drawMesh("box", null, tmpM, [1,1], c.type === "boss" ? [1,0.85,0.2,1] : [0.9,0.1,0.18,1],
                  c.type === "boss" ? [2.2,1.6,0.2] : [0.5,0.02,0.04], 0.25, c.type === "boss" ? 0.95 : 0.1);
 
         // Orange Beak
-        M4.trs(tmpM, hx + sy*0.34*sc, hy - 0.03*sc, hz + cy*0.34*sc, yawC, Math.PI*0.5, 0, 0.20*sc, 0.32*sc, 0.20*sc);
+        M4.trs(tmpM, hx + sy*0.34*sc + fwdX*headLunge*0.4, hy - 0.03*sc, hz + cy*0.34*sc + fwdZ*headLunge*0.4, yawC, Math.PI*0.5 + bodyPitch + lungeK*0.45, 0, 0.20*sc, 0.32*sc, 0.20*sc);
         drawMesh("cone", null, tmpM, [1,1], [1.0,0.68,0.12,1], [0,0,0], 0.35, 0.1);
 
+        // Красная бородка под клювом
+        M4.trs(tmpM, hx + sy*0.26*sc, hy - 0.20*sc, hz + cy*0.26*sc, yawC, bodyPitch + lungeK*0.5, 0, 0.10*sc, 0.16*sc, 0.08*sc);
+        drawMesh("box", null, tmpM, [1,1], [0.92, 0.10, 0.14, 1], [0.35, 0.01, 0.02], 0.4, 0.1);
+
         // Cyber Glowing Visor
-        M4.trs(tmpM, hx + sy*0.24*sc, hy + 0.06*sc, hz + cy*0.24*sc, yawC, 0, 0, 0.42*sc, 0.11*sc, 0.14*sc);
+        M4.trs(tmpM, hx + sy*0.24*sc, hy + 0.06*sc, hz + cy*0.24*sc, yawC, bodyPitch + lungeK*0.6, 0, 0.42*sc, 0.11*sc, 0.14*sc);
         drawMesh("box", null, tmpM, [1,1], [1,0.2,0.2,1], c.type === "drone" ? [0.2,2.4,2.8] : [2.8,0.25,0.3], 0.1, 0.9);
 
-        // Flapping Wings
-        const flap = Math.sin(c.phase * (c.type === "drone" ? 2.2 : 1.0)) * 0.45;
+        // Flapping Wings (размах при flinch; дрон машет быстрее)
+        const flapAmp = c.type === "drone" ? 2.2 : 1.0;
+        const flap = Math.sin(c.phase * flapAmp) * (0.45 + flinchK * 0.42);
         [-1, 1].forEach(side => {
-          M4.trs(tmpM, c.x + cy*side*0.52*sc, c.y + 0.90*sc, c.z - sy*side*0.52*sc, yawC, 0, side*flap, 0.22*sc, 0.46*sc, 0.78*sc);
+          M4.trs(tmpM, bodyX + cy*side*0.52*sc, c.y + 0.92*sc, bodyZ - sy*side*0.52*sc, yawC, bodyPitch, side*(flap + flinchK*0.3), 0.22*sc, 0.46*sc, 0.78*sc);
           drawMesh("box", MATS.feather, tmpM, [1,1], tint, [0,0,0], 0.7, 0.05);
         });
 
-        // Special breed gear: Kamikaze C4 blinking beacon or Drone jetpack glow
+        // Special breed gear: Kamikaze C4 blinking beacon / Drone gyro-halo / Boss golden pauldrons
         if (c.type === "kamikaze") {
-          const blink = (Math.sin(now * 0.025) > 0) ? 3.2 : 0.3;
-          M4.trs(tmpM, c.x, c.y + 1.32*sc, c.z - cy*0.15, yawC, 0, 0, 0.35, 0.25, 0.35);
+          const near = distP < 7;
+          const blink = (Math.sin(now * (near ? 0.055 : 0.025)) > 0) ? 3.6 : 0.35;
+          M4.trs(tmpM, bodyX, c.y + 1.34*sc, bodyZ - cy*0.15, yawC, 0, 0, 0.35*panic, 0.25*panic, 0.35*panic);
           drawMesh("box", null, tmpM, [1,1], [1,0.2,0.1,1], [blink, 0.2, 0.1], 0.2, 0.8);
         } else if (c.type === "drone") {
-          M4.trs(tmpM, c.x - sy*0.45, c.y + 0.55, c.z - cy*0.45, yawC, 0, 0, 0.55, 0.35, 0.32);
+          M4.trs(tmpM, bodyX - sy*0.45, c.y + 0.55, bodyZ - cy*0.45, yawC, 0, 0, 0.55, 0.35, 0.32);
           drawMesh("cyl", null, tmpM, [1,1], [0.2,0.9,1,1], [0.3, 2.4, 2.8], 0.2, 0.9);
+          // гироскопическое «кольцо-нимб» над дроном
+          M4.trs(tmpM, bodyX, c.y + 1.02*sc, bodyZ, yawC, 0, 0, 0.72*sc, 0.06*sc, 0.72*sc);
+          drawMesh("cyl", null, tmpM, [1,1], [0.45, 0.85, 1, 1], [0.2, 1.5, 1.9], 0.25, 0.75);
+        } else if (c.type === "boss") {
+          // золотые наплечники Мега-Индюка
+          [-1, 1].forEach(side => {
+            M4.trs(tmpM, bodyX + cy*side*0.55*sc, c.y + 1.16*sc, bodyZ - sy*side*0.55*sc, yawC, 0, side*0.22, 0.44*sc, 0.20*sc, 0.52*sc);
+            drawMesh("box", MATS.metal, tmpM, [1,1], [0.78, 0.62, 0.22, 1], [0.9, 0.62, 0.08], 0.26, 0.93);
+          });
         }
+      });
+
+      // 2.4: Трупы кибер-куриц — опрокинуты, остывают и уходят под пол
+      S.corpses.forEach(cp => {
+        const fall = Math.min(1, (4.2 - cp.ttl) / 0.5);
+        const ease = 1 - Math.pow(1 - fall, 3);
+        const sink = cp.ttl < 1.15 ? (1.15 - cp.ttl) * 0.5 : 0;
+        const sc = cp.sc;
+        const cy0 = Math.cos(cp.yaw), sy0 = Math.sin(cp.yaw);
+        const dropFrom = cp.y || 0;
+        const bodyTop = dropFrom + 0.88 * sc;
+        const bodyY = bodyTop + (0.34 * sc - bodyTop) * ease - sink;
+        const dead = cp.type === "kamikaze" ? [0.55,0.22,0.12,1] : cp.type === "drone" ? [0.20,0.38,0.46,1]
+                   : cp.type === "charger"  ? [0.50,0.30,0.16,1] : cp.type === "shooter" ? [0.16,0.17,0.22,1]
+                   : cp.type === "boss"     ? [0.52,0.43,0.20,1] : [0.44,0.44,0.42,1];
+        // тело на спине
+        M4.trs(tmpM, cp.x, bodyY, cp.z, cp.yaw, -1.45 * ease, cp.spin, 0.95*sc, 0.80*sc, 1.18*sc);
+        drawMesh("sph", MATS.feather, tmpM, [2,2], dead, [0,0,0], 0.8, 0.02);
+        // голова, отвалившаяся набок
+        const headTop = dropFrom + 1.5 * sc;
+        const headY = headTop + (0.24 * sc - headTop) * ease - sink;
+        const hx = cp.x + cy0 * 1.0 * sc, hz = cp.z - sy0 * 1.0 * sc;
+        M4.trs(tmpM, hx, Math.max(0.24 * sc - sink, headY), hz, cp.yaw + cp.spin * 1.7, -1.5, cp.spin, 0.52*sc, 0.48*sc, 0.52*sc);
+        drawMesh("sph", MATS.feather, tmpM, [1,1], dead, [0,0,0], 0.8, 0.02);
+        // обломок гребня
+        M4.trs(tmpM, cp.x - cy0 * 0.85 * sc, 0.07 * sc - sink, cp.z + sy0 * 0.85 * sc, cp.yaw + cp.spin, 0, cp.spin * 2, 0.16*sc, 0.07*sc, 0.3*sc);
+        drawMesh("box", null, tmpM, [1,1], [0.66,0.08,0.11,1], [0,0,0], 0.5, 0.1);
       });
 
       // Plasma Orbs, Enemy Eggs, Grenades & Particles
@@ -1815,6 +2313,30 @@
           M4.trs(vmId, wx, wy + 0.10, wz + 0.02, inspYaw, Math.PI * 0.5 + S.recoil * 0.6, 0, 0.055, 0.26, 0.055);
           drawMesh("cyl", MATS.metal, vmId, [1,1], [0.15,0.18,0.22,1], [0.1,0.5,0.7], 0.2, 0.92);
         }
+
+        // ---- 2.4 VIEWMODEL KIT: дульный тормоз, мушка, целики, лазер-диод, зарядка, скин-кольцо ----
+        // дульный тормоз (вдоль ствола)
+        M4.trs(vmId, wx, wy + 0.045, wz - w.len*0.62, inspYaw, Math.PI*0.5 + S.recoil*0.6, 0, 0.052, 0.16, 0.052);
+        drawMesh("cyl", MATS.metal, vmId, [1,1], [0.20, 0.22, 0.28, 1], [0,0,0], 0.28, 0.95);
+        // мушка
+        M4.trs(vmId, wx, wy + 0.115, wz - w.len*0.40, inspYaw, S.recoil*0.6, 0, 0.018, 0.075, 0.018);
+        drawMesh("box", null, vmId, [1,1], [0.9, 0.75, 0.2, 1], [0.5, 0.35, 0.05], 0.3, 0.7);
+        // целик (задняя прицельная планка)
+        M4.trs(vmId, wx, wy + 0.105, wz + w.len*0.17, inspYaw, S.recoil*0.6, 0, 0.075, 0.05, 0.025);
+        drawMesh("box", MATS.metal, vmId, [1,1], [0.30, 0.32, 0.40, 1], [0,0,0], 0.3, 0.9);
+        // лазерный диод (пульсирует, гаснет если лазер выключен)
+        const laserPulse = S.laserOn ? 1.6 + Math.sin(now*0.02) * 0.5 : 0.15;
+        M4.trs(vmId, wx + 0.075, wy + 0.012, wz - w.len*0.18, inspYaw, S.recoil*0.6, 0, 0.024, 0.024, 0.06);
+        drawMesh("box", null, vmId, [1,1], [0.1, 0.9, 0.25, 1], [0.12*laserPulse, 0.9*laserPulse, 0.3*laserPulse], 0.2, 0.6);
+        // зарядная рукоять слева
+        M4.trs(vmId, wx - 0.085, wy + 0.02, wz + w.len*0.12, inspYaw, S.recoil*0.6, 0, 0.05, 0.028, 0.09);
+        drawMesh("box", MATS.metal, vmId, [1,1], [0.55, 0.60, 0.70, 1], [0,0,0], 0.35, 0.9);
+        // скин-кольцо на стволе у казённой части (светится в цвет скина)
+        M4.trs(vmId, wx, wy + 0.045, wz + w.len*0.30, inspYaw, Math.PI*0.5 + S.recoil*0.6, 0, 0.056, 0.07, 0.056);
+        drawMesh("cyl", null, vmId, [1,1], [sk.accent[0], sk.accent[1], sk.accent[2], 1], [sk.accent[0]*0.85, sk.accent[1]*0.85, sk.accent[2]*0.85], 0.18, 0.85);
+        // выброс гильзы (тёмная прорезь справа)
+        M4.trs(vmId, wx + 0.055, wy + 0.078, wz + w.len*0.02, inspYaw, S.recoil*0.6, 0, 0.012, 0.035, 0.095);
+        drawMesh("box", null, vmId, [1,1], [0.08, 0.09, 0.11, 1], [0,0,0], 0.4, 0.6);
       }
 
       opts.syncHud(S, WEAPONS[S.wep], SKINS[S.skin], ATMOSPHERES[S.atmIdx], MUTATORS[S.mutator], vpMat);

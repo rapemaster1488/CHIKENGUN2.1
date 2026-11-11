@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Быстрый запуск CHIKENGUN 2.3 [4K ULTRA EDITION]:
+# Быстрый запуск CHIKENGUN 2.5 «ПЕРО СУДЬБЫ» [4K ULTRA]:
 # 1) С уже собранным build/MyShooter (или флагом --native при наличии Urho3D) — нативный C++17 движок;
 # 2) Если Urho3D/компилятор на машине не установлены (или передан --web) — запуск zero-dependency WebGL2 3D версии.
 set -e
