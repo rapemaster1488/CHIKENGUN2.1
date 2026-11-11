@@ -1085,6 +1085,18 @@ private:
     Vector<SharedPtr<Text>> loadingCheckRows_;
     Vector<String> loadSteps_;
 
+    // === 2.5.5 SPLASH INTRO: koch.studios → powered by fall.os → CHICHKENCUM 2.1 ===
+    bool splashActive_ = false;
+    int splashStage_ = 0;
+    float splashTimer_ = 0.0f;
+    SharedPtr<UIElement> splashPanel_;
+    SharedPtr<Text> splashText_;
+    SharedPtr<BorderImage> splashLine_;
+    SharedPtr<Scene> splashScene_;
+    SharedPtr<Node> kochMusicNode_;
+    SoundSource* kochThemeSrc_ = nullptr;   // компонент временной сцены — владеется нодой
+    SoundSource* splashSfxSrc_ = nullptr;
+
     // Быстрый загрузочный оверлей десантирования при входе в режим (АРЕНА / ТИР)
     bool deployActive_ = false;
     float deployTimer_ = 0.0f;
@@ -1394,6 +1406,10 @@ public:
         loadProgress_ = 0.02f;
         loadTargetProgress_ = 0.12f;
         bootStageTimer_ = 0.0f;
+
+        // 2.5.5: эпичная интро-заставка koch.studios → powered by fall.os → CHICHKENCUM 2.1
+        // (рисует поверх загрузочного экрана, музыка перетекает в фазу загрузки)
+        CreateSplashIntro();
     }
 
 private:
@@ -1502,7 +1518,7 @@ private:
         if (!waveStartSound_) waveStartSound_ = cache->GetResource<Sound>("Sounds/WaveStart.wav");
 
         Sound* music = cache->GetResource<Sound>("Music/Game_Theme_Loop.ogg");
-        if (music && cameraNode_ && !musicSource_) {
+        if (music && cameraNode_ && !musicSource_ && !kochThemeSrc_) {   // интро-тема ещё играет — основная петля вступит после неё
             music->SetLooped(true);
             musicSource_ = cameraNode_->CreateComponent<SoundSource>();
             if (musicSource_) {
@@ -4688,7 +4704,8 @@ private:
 
         // Пошаговая 4K-загрузка игры с живой отрисовкой прогресс-бара на GPU
         if (loadingScreenActive_) {
-            UpdateBootLoading(dt);
+            if (splashActive_) UpdateSplashIntro(dt);
+            else               UpdateBootLoading(dt);
             return;
         }
 
@@ -7029,6 +7046,7 @@ private:
         if (loadingFadeAlpha_ > 0.0f) {
             loadingFadeAlpha_ -= dt;
             float a = Clamp(loadingFadeAlpha_ / 0.42f, 0.0f, 1.0f);
+            if (kochThemeSrc_) kochThemeSrc_->SetGain(musicVolume_ * a * a);
             if (loadingPanel_) loadingPanel_->SetOpacity(a * a);
             if (loadingFadeAlpha_ <= 0.0f) {
                 HideLoadingScreen();
@@ -7039,6 +7057,12 @@ private:
     }
 
     void HideLoadingScreen() {
+        // Останавливаем интро-тему «koch.studios» и включаем основную петлю арены
+        if (kochThemeSrc_) { kochThemeSrc_->Stop(); kochThemeSrc_ = nullptr; }
+        splashSfxSrc_ = nullptr;
+        kochMusicNode_ = nullptr;
+        splashScene_ = nullptr;
+        StartAmbientLoop();
         if (loadingPanel_) {
             loadingPanel_->Remove();
             loadingPanel_ = nullptr;
@@ -7054,6 +7078,197 @@ private:
         loadingBarFill_ = nullptr;
         loadingBarShimmer_ = nullptr;
         loadingScreenActive_ = false;
+    }
+
+    // =========================================================================
+    // 2.5.5 SPLASH INTRO — «koch.studios» → «powered by fall.os» → «CHICHKENCUM 2.1»
+    // Чёрный экран, неоновые надписи появляются в такт музыке. Скип: клик / Space / Enter / Esc.
+    // =========================================================================
+    int SplashLineY(int stage) const {
+        int sh = GetSubsystem<Graphics>()->GetHeight();
+        return sh / 2 + (stage == 2 ? S(46) : (stage == 1 ? S(16) : S(20)));
+    }
+
+    void SplashEnterStage(int stage) {
+        auto* cache = GetSubsystem<ResourceCache>();
+        if (!cache || !splashSfxSrc_) return;
+        // koch.studios — тихий клик; fall.os — нарастание поверпапа; CHICHKENCUM — петушиный клич
+        const char* snd = stage == 0 ? "Sounds/UI_Select.wav"
+                        : stage == 1 ? "Sounds/Powerup.wav"
+                                     : "Sounds/Chicken_Boss.wav";
+        if (Sound* s = cache->GetResource<Sound>(snd)) {
+            splashSfxSrc_->Stop();
+            splashSfxSrc_->SetGain(stage == 2 ? 0.9f : 0.7f);
+            splashSfxSrc_->Play(s);
+        }
+    }
+
+    void ConfigureSplashStage(int stage) {
+        if (!splashText_ || !splashLine_) return;
+        const int sw = GetSubsystem<Graphics>()->GetWidth();
+        splashLine_->SetPosition(sw / 2, SplashLineY(stage));
+        splashLine_->SetSize(0, Max(2, S(stage == 2 ? 4.0f : 3.0f)));
+        if (stage == 0) {
+            splashText_->SetFont(font_, SF(36));
+            splashText_->SetText("k o c h . s t u d i o s");
+            splashText_->SetPosition(sw / 2 - S(720), GetSubsystem<Graphics>()->GetHeight() / 2 - S(44));
+            splashText_->SetColor(Color(0.92f, 0.97f, 1.0f, 0.0f));
+            splashLine_->SetColor(Color(0.20f, 0.92f, 1.0f, 0.0f));   // неоновый циан
+        } else if (stage == 1) {
+            splashText_->SetFont(font_, SF(27));
+            splashText_->SetText("powered by fall.os");
+            splashText_->SetPosition(sw / 2 - S(720), GetSubsystem<Graphics>()->GetHeight() / 2 - S(40));
+            splashText_->SetColor(Color(0.68f, 0.74f, 0.86f, 0.0f));
+            splashLine_->SetColor(Color(1.0f, 0.56f, 0.16f, 0.0f));   // осенний оранжевый
+        } else {
+            splashText_->SetFont(font_, SF(76));
+            splashText_->SetText("CHICHKENCUM 2.1");
+            splashText_->SetPosition(sw / 2 - S(720), GetSubsystem<Graphics>()->GetHeight() / 2 - S(62));
+            splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));     // белым → остынет в золото
+            splashLine_->SetColor(Color(1.0f, 0.36f, 0.14f, 0.0f));   // раскалённый красный
+        }
+    }
+
+    void CreateSplashIntro() {
+        auto* ui = GetSubsystem<UI>();
+        auto* gfx = GetSubsystem<Graphics>();
+        auto* cache = GetSubsystem<ResourceCache>();
+        if (!ui || !gfx || !cache) return;
+        if (!font_) {
+            font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
+        }
+        const int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+
+        splashPanel_ = ui->GetRoot()->CreateChild<UIElement>("KochSplashIntro");
+        splashPanel_->SetSize(sw, sh);
+        splashPanel_->SetPriority(1200);   // поверх загрузочного экрана (1000)
+
+        BorderImage* bg = splashPanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.0f, 0.0f, 0.0f, 1.0f));
+
+        splashText_ = splashPanel_->CreateChild<Text>();
+        splashText_->SetFont(font_, SF(36));
+        splashText_->SetTextAlignment(HA_CENTER);
+        splashText_->SetPosition(sw / 2 - S(720), sh / 2 - S(44));
+        splashText_->SetWidth(S(1440));
+        splashText_->SetColor(Color(0.92f, 0.97f, 1.0f, 0.0f));
+        StyleCrispText(splashText_, true);
+
+        splashLine_ = splashPanel_->CreateChild<BorderImage>();
+        splashLine_->SetPosition(sw / 2, sh / 2 + S(20));
+        splashLine_->SetSize(0, Max(2, S(3.0f)));
+        splashLine_->SetColor(Color(0.20f, 0.92f, 1.0f, 0.0f));
+
+        // Временная сцена для музыки: главная сцена игры создаётся лишь на шаге 3 загрузки
+        splashScene_ = SharedPtr<Scene>(new Scene(context_));
+        kochMusicNode_ = SharedPtr<Node>(splashScene_->CreateChild("KochTheme"));
+        if (kochMusicNode_) {
+            kochThemeSrc_ = kochMusicNode_->CreateComponent<SoundSource>();
+            splashSfxSrc_ = kochMusicNode_->CreateComponent<SoundSource>();
+            if (kochThemeSrc_) {
+                if (Sound* theme = cache->GetResource<Sound>("Music/KochSplashTheme.wav")) {
+                    theme->SetLooped(false);
+                    kochThemeSrc_->SetGain(musicVolume_);
+                    kochThemeSrc_->Play(theme);
+                } else {
+                    kochThemeSrc_ = nullptr;   // нет файла — заставка покажется немой, основная музыка вступит как обычно
+                }
+            }
+        }
+
+        splashStage_ = 0;
+        splashTimer_ = 0.0f;
+        splashActive_ = true;
+        ConfigureSplashStage(0);
+        SplashEnterStage(0);
+    }
+
+    void EndSplashIntro() {
+        if (splashPanel_) { splashPanel_->Remove(); splashPanel_ = nullptr; }
+        splashText_ = nullptr;
+        splashLine_ = nullptr;
+        splashActive_ = false;
+        splashTimer_ = 0.0f;
+        splashStage_ = 0;
+        // Музыка (kochThemeSrc_ во временной сцене) продолжает играть поверх фазы загрузки
+        // и плавно затухает вместе с экраном загрузки (блок fade в UpdateBootLoading).
+    }
+
+    void UpdateSplashIntro(float dt) {
+        auto* input = GetSubsystem<Input>();
+        if (input) {   // скип заставки
+            if (input->GetMouseButtonDown(MOUSEB_LEFT) || input->GetMouseButtonDown(MOUSEB_RIGHT) ||
+                input->GetKeyPress(KEY_SPACE) || input->GetKeyPress(KEY_RETURN) ||
+                input->GetKeyPress(KEY_ESCAPE)) {
+                EndSplashIntro();
+                return;
+            }
+        }
+        splashTimer_ += dt;
+        const int sw = GetSubsystem<Graphics>()->GetWidth();
+
+        static const float kDur[3]   = { 1.30f, 1.20f, 2.55f };
+        static const float kIn[3]    = { 0.32f, 0.26f, 0.09f };
+        static const float kOutAt[3] = { 1.02f, 0.94f, 2.18f };
+        static const int   kLineW[3] = { 300, 200, 840 };
+
+        const int stage = splashStage_;
+        const float t = splashTimer_;
+        float inT  = Clamp(t / kIn[stage], 0.0f, 1.0f);
+        float outT = Clamp((t - kOutAt[stage]) / (kDur[stage] - kOutAt[stage]), 0.0f, 1.0f);
+        float aIn  = inT * inT * (3.0f - 2.0f * inT);
+        float aOut = 1.0f - outT * outT * (3.0f - 2.0f * outT);
+        float alpha = Clamp(aIn * aOut, 0.0f, 1.0f);
+
+        // Базовый цвет стадии. CHICHKENCUM вспыхивает белым и остывает в золото
+        Color base = stage == 0 ? Color(0.92f, 0.97f, 1.0f, 1.0f)
+                   : stage == 1 ? Color(0.68f, 0.74f, 0.86f, 1.0f)
+                                : Color(1.0f, 0.78f, 0.16f, 1.0f);
+        if (stage == 2) {
+            float flash = Clamp(t / 0.55f, 0.0f, 1.0f);
+            flash = flash * flash * (3.0f - 2.0f * flash);
+            base = Color(1.0f, Lerp(1.0f, 0.78f, flash), Lerp(1.0f, 0.16f, flash), 1.0f);
+        }
+        base.a_ = alpha;
+        if (splashText_) splashText_->SetColor(base);
+
+        // Неоновая линия раскрывается от центра (easeOutQuad)
+        float lineT = Clamp(t / 0.45f, 0.0f, 1.0f);
+        lineT = 1.0f - (1.0f - lineT) * (1.0f - lineT);
+        const int w = (int)(S(kLineW[stage]) * lineT);
+        if (splashLine_) {
+            splashLine_->SetPosition(sw / 2 - w / 2, SplashLineY(stage));
+            splashLine_->SetSize(Max(0, w), Max(2, S(stage == 2 ? 4.0f : 3.0f)));
+            Color lc = stage == 0 ? Color(0.20f, 0.92f, 1.0f, 1.0f)
+                     : stage == 1 ? Color(1.0f, 0.56f, 0.16f, 1.0f)
+                                  : Color(1.0f, 0.36f, 0.14f, 1.0f);
+            lc.a_ = 0.95f * alpha;
+            splashLine_->SetColor(lc);
+        }
+
+        if (t >= kDur[stage]) {
+            splashTimer_ = 0.0f;
+            ++splashStage_;
+            if (splashStage_ > 2) { EndSplashIntro(); return; }
+            ConfigureSplashStage(splashStage_);
+            SplashEnterStage(splashStage_);
+        }
+    }
+
+    void StartAmbientLoop() {
+        if (musicSource_) return;
+        auto* cache = GetSubsystem<ResourceCache>();
+        if (!cache || !cameraNode_) return;
+        Sound* mus = cache->GetResource<Sound>("Music/Game_Theme_Loop.ogg");
+        if (!mus) return;
+        mus->SetLooped(true);
+        if (!musicSource_) musicSource_ = cameraNode_->CreateComponent<SoundSource>();
+        if (musicSource_) {
+            musicSource_->SetGain(musicVolume_);
+            musicSource_->Play(mus);
+        }
     }
 
     // Короткий тактический экран высадки при старте миссии («ТИР» / «АРЕНА»)
