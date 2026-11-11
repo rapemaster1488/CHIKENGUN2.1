@@ -27,11 +27,17 @@ function Require-Command([string]$Name, [string]$Hint) {
 
 Require-Command "cmake" "Установите CMake (winget install Kitware.CMake)"
 
+function Invoke-Checked {
+    param([scriptblock]$Script, [string]$ErrMsg)
+    & $Script
+    if ($LASTEXITCODE -ne 0) { throw "$ErrMsg (exit code $LASTEXITCODE)" }
+}
+
 if ($TestsOnly) {
     Write-Host "[Tests] Конфигурация и запуск C++17 модульных тестов..."
-    cmake -S $Root -B $BuildDir -DBUILD_GAME=OFF -DTEX_SIZE=$TexSize
-    cmake --build $BuildDir --config Release --parallel $Jobs --target gen_textures_4k test_core
-    ctest --test-dir $BuildDir -C Release --output-on-failure
+    Invoke-Checked { cmake -S $Root -B $BuildDir -DBUILD_GAME=OFF -DTEX_SIZE=$TexSize } "CMake configure failed"
+    Invoke-Checked { cmake --build $BuildDir --config Release --parallel $Jobs --target gen_textures_4k test_core } "CMake build failed"
+    Invoke-Checked { ctest --test-dir $BuildDir -C Release --output-on-failure } "CTest failed"
     exit 0
 }
 
@@ -44,7 +50,7 @@ $Python = if (Get-Command "python" -ErrorAction SilentlyContinue) { "python" }
 if ($Python) {
     if (-not (Test-Path "$Root\Data\Sounds\BanyaSteam.wav") -or -not (Test-Path "$Root\Data\Sounds\Shot_Railgun.wav")) {
         Write-Host "[1/3] Генерация звуков (tools/gen_sounds.py)..."
-        & $Python "$Root\tools\gen_sounds.py"
+        Invoke-Checked { & $Python "$Root\tools\gen_sounds.py" } "Sound generation failed"
     }
 }
 
@@ -64,39 +70,41 @@ if (-not $HasSdk -and -not $env:URHO3D_HOME) {
     New-Item -ItemType Directory -Force -Path (Join-Path $Root ".cache") | Out-Null
     if (-not (Test-Path "$UrhoSrc\.git")) {
         if (Test-Path $UrhoSrc) { Remove-Item -Recurse -Force $UrhoSrc }
-        git clone --depth 1 --branch 1.9.0 https://github.com/urho3d/Urho3D.git $UrhoSrc
+        Invoke-Checked { git clone --depth 1 --branch 1.9.0 https://github.com/urho3d/Urho3D.git $UrhoSrc } "git clone Urho3D failed"
     }
-    cmake -S $UrhoSrc -B $UrhoBld `
-        -DCMAKE_BUILD_TYPE=Release `
-        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
-        -DCMAKE_INSTALL_PREFIX="$LocalSdk" `
-        -DLIB_SUFFIX="" `
-        -DURHO3D_USE_LIB_DEB=1 `
-        -DURHO3D_LIB_TYPE=STATIC `
-        -DURHO3D_OPENGL=ON `
-        -DURHO3D_WIN32_CONSOLE=OFF `
-        -DURHO3D_C++11=ON `
-        -DURHO3D_PCH=OFF `
-        -DURHO3D_SAMPLES=OFF `
-        -DURHO3D_TOOLS=OFF `
-        -DURHO3D_LUA=OFF `
-        -DURHO3D_LUAJIT=OFF `
-        -DURHO3D_ANGELSCRIPT=OFF `
-        -DURHO3D_NETWORK=OFF `
-        -DURHO3D_DATABASE_ODBC=OFF `
-        -DURHO3D_DATABASE_SQLITE=OFF `
-        -DURHO3D_URHO2D=OFF `
-        -DURHO3D_WEBP=OFF `
-        -DURHO3D_TESTING=OFF `
-        -DURHO3D_DOCS=OFF
-    cmake --build $UrhoBld --config Release --parallel $Jobs
-    cmake --install $UrhoBld --config Release
+    Invoke-Checked {
+        cmake -S $UrhoSrc -B $UrhoBld `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
+            -DCMAKE_INSTALL_PREFIX="$LocalSdk" `
+            -DLIB_SUFFIX="" `
+            -DURHO3D_USE_LIB_DEB=1 `
+            -DURHO3D_LIB_TYPE=STATIC `
+            -DURHO3D_OPENGL=ON `
+            -DURHO3D_WIN32_CONSOLE=OFF `
+            -DURHO3D_C++11=ON `
+            -DURHO3D_PCH=OFF `
+            -DURHO3D_SAMPLES=OFF `
+            -DURHO3D_TOOLS=OFF `
+            -DURHO3D_LUA=OFF `
+            -DURHO3D_LUAJIT=OFF `
+            -DURHO3D_ANGELSCRIPT=OFF `
+            -DURHO3D_NETWORK=OFF `
+            -DURHO3D_DATABASE_ODBC=OFF `
+            -DURHO3D_DATABASE_SQLITE=OFF `
+            -DURHO3D_URHO2D=OFF `
+            -DURHO3D_WEBP=OFF `
+            -DURHO3D_TESTING=OFF `
+            -DURHO3D_DOCS=OFF
+    } "Urho3D CMake configure failed"
+    Invoke-Checked { cmake --build $UrhoBld --config Release --parallel $Jobs } "Urho3D build failed"
+    Invoke-Checked { cmake --install $UrhoBld --config Release } "Urho3D install failed"
     Remove-Item -Recurse -Force $UrhoBld -ErrorAction SilentlyContinue
 }
 
 Write-Host "[2/3] Сборка CHIKENGUN 2.5 (MyShooter.exe + gen_textures_4k + test_core)..."
-cmake -S $Root -B $BuildDir -DBUILD_GAME=ON -DAUTO_FETCH_URHO3D=ON -DTEX_SIZE=$TexSize -DURHO3D_HOME="$LocalSdk"
-cmake --build $BuildDir --config Release --parallel $Jobs
+Invoke-Checked { cmake -S $Root -B $BuildDir -DBUILD_GAME=ON -DAUTO_FETCH_URHO3D=ON -DTEX_SIZE=$TexSize -DURHO3D_HOME="$LocalSdk" } "Project CMake configure failed"
+Invoke-Checked { cmake --build $BuildDir --config Release --parallel $Jobs } "Project CMake build failed"
 
 $GenExe = @("$BuildDir\Release\gen_textures_4k.exe", "$BuildDir\gen_textures_4k.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
 $AppExe = @("$BuildDir\Release\MyShooter.exe", "$BuildDir\MyShooter.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -109,7 +117,7 @@ $CurStamp = if (Test-Path $StampFile) { (Get-Content $StampFile -Raw).Trim() } e
 
 if ($GenExe -and $CurStamp -ne "$TexSize") {
     Write-Host "[3/3] Генерация PBR текстур (${TexSize}x${TexSize}) -> $TexOut..."
-    & $GenExe $TexOut $TexSize
+    Invoke-Checked { & $GenExe $TexOut $TexSize } "Texture generation failed"
 }
 
 Write-Host "Готово! Запуск: .\run.bat"
