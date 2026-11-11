@@ -160,12 +160,6 @@ check_missing_tools() {
         [ "$has_sdl" -eq 0 ] && missing+=("sdl2-dev")
         [ "$has_gl" -eq 0 ] && missing+=("opengl-dev")
         [ "$has_x11" -eq 0 ] && missing+=("x11-dev")
-    elif [ "$OS_NAME" = "Darwin" ] && [ -n "${CXX:-}" ]; then
-        if ! (command -v pkg-config >/dev/null 2>&1 && pkg-config --exists sdl2 2>/dev/null) && \
-           ! has_cpp_header "SDL2/SDL.h" && \
-           [ ! -d "/opt/homebrew/include/SDL2" ] && [ ! -d "/usr/local/include/SDL2" ]; then
-            missing+=("sdl2")
-        fi
     fi
     echo "${missing[*]:-}"
 }
