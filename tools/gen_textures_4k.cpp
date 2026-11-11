@@ -660,6 +660,217 @@ PbrSet genHazardMetal4K(int S) {
     return out;
 }
 
+// 8. BanyaLog — 4K оцилиндрованный липовый/кедровый сруб баньки с конопаткой и влажным блеском пара
+PbrSet genBanyaLog4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    const float numLogs = 6.0f;
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        float logPos = v * numLogs;
+        int logIdx = static_cast<int>(std::floor(logPos)) % static_cast<int>(numLogs);
+        float ly = logPos - std::floor(logPos);
+        float cy = ly - 0.5f; // -0.5..0.5
+
+        // Цилиндрический профиль бревна + паз с конопаткой
+        float edgeDist = std::fabs(cy) * 2.0f; // 0 в центре бревна, 1 в пазу
+        float cyl = std::sqrt(std::max(0.0f, 1.0f - std::min(1.0f, edgeDist * edgeDist * 0.94f)));
+        float seamMask = smoothstep(0.84f, 0.96f, edgeDist);
+        float logRand  = hash01(logIdx, 3, 16, 16, 701u);
+        float knotU1   = hash01(logIdx, 7, 16, 16, 751u);
+        float knotV1   = 0.34f + 0.32f * hash01(logIdx, 9, 16, 16, 761u);
+        float knotU2   = std::fmod(knotU1 + 0.38f + 0.24f * hash01(logIdx, 13, 16, 16, 769u), 1.0f);
+        float knotV2   = 0.34f + 0.32f * hash01(logIdx, 15, 16, 16, 773u);
+
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+            float uShift = std::fmod(u + logRand * 0.67f, 1.0f);
+
+            // Пара реалистичных сучков с индивидуальными координатами для каждого венца
+            auto evalKnot = [&](float ku, float kv, float rx, float ry) {
+                float du = std::fmod(u - ku + 1.5f, 1.0f) - 0.5f;
+                float dv = (ly - kv);
+                return std::sqrt((du / rx) * (du / rx) + (dv / ry) * (dv / ry));
+            };
+            float k1 = evalKnot(knotU1, knotV1, 0.028f, 0.11f);
+            float k2 = evalKnot(knotU2, knotV2, 0.024f, 0.095f);
+            float knotDist = std::min(k1, k2);
+            float knotCore = 1.0f - smoothstep(0.28f, 0.95f, knotDist);
+            float knotRing = 1.0f - smoothstep(0.65f, 1.60f, knotDist);
+            float knotWarp = std::exp(-knotDist * 1.65f) * 0.72f;
+
+            // Продольные волокна липы и годичные кольца (целые периоды по uShift -> 0 швов!)
+            float warp = tileFbm(uShift, v * 2.0f, 6, 4, 709u + static_cast<uint32_t>(logIdx) * 23u);
+            float grainFine = tileNoise(uShift * 14.0f, v * 2.0f, 128, 719u);
+            float rings = 0.5f + 0.5f * std::sin((cy * 9.5f + warp * 4.2f + knotWarp) * 6.28318f + logRand * 6.28f);
+
+            // Волокнистая конопатка (золотистый мох / пакля) в пазах между венцами
+            float moss = tileFbm(u * 4.0f, v * 24.0f, 32, 3, 727u);
+            float mossFib = tileNoise(u * 28.0f, v * 10.0f, 64, 731u);
+
+            // Влажные банные потёки пара по тёплой древесине (целый период по u!)
+            float steamRun = smoothstep(0.58f, 0.82f, tileFbm(u * 2.0f, v * 1.0f, 16, 3, 739u));
+
+            // Тонкие трещинки усушки вдоль бревна
+            float crackNoise = std::fabs(tileFbm(uShift * 2.0f, v * 2.0f, 16, 3, 743u) - 0.5f);
+            float crack = (1.0f - smoothstep(0.0035f, 0.012f, crackNoise)) * smoothstep(0.45f, 0.72f, grainFine);
+
+            float woodTone = 0.57f + rings * 0.16f + (grainFine - 0.5f) * 0.07f + (logRand - 0.5f) * 0.07f;
+            woodTone = lerpf(woodTone, 0.44f, knotRing * 0.35f);
+            woodTone = lerpf(woodTone, 0.25f, knotCore * 0.80f);
+            woodTone *= (1.0f - crack * 0.42f);
+            woodTone *= (0.62f + 0.38f * cyl);
+            woodTone *= lerpf(1.0f, 0.83f, steamRun * 0.55f); // мокрая древесина чуть темнее и насыщеннее
+
+            float wr = clamp01(woodTone * 1.12f);
+            float wg = clamp01(woodTone * 0.76f);
+            float wb = clamp01(woodTone * 0.42f);
+
+            // Цвет пакли/мха
+            float mr = clamp01((0.34f + moss * 0.18f + mossFib * 0.10f));
+            float mg = clamp01((0.28f + moss * 0.14f + mossFib * 0.06f));
+            float mb = clamp01((0.12f + moss * 0.07f));
+
+            float r = lerpf(wr, mr, seamMask);
+            float g = lerpf(wg, mg, seamMask);
+            float b = lerpf(wb, mb, seamMask);
+
+            float hWood = 0.22f + cyl * 0.64f + rings * 0.06f + grainFine * 0.04f - crack * 0.12f - knotCore * 0.04f;
+            float hSeam = 0.08f + moss * 0.09f + mossFib * 0.04f;
+            float h = lerpf(hWood, hSeam, seamMask);
+
+            float roughWood = clamp01(0.62f - rings * 0.08f - steamRun * 0.36f + knotCore * 0.08f);
+            float rough = lerpf(roughWood, 0.94f, seamMask);
+            float ao = clamp01((0.55f + 0.45f * cyl) * lerpf(1.0f, 0.48f, seamMask));
+
+            hf[static_cast<size_t>(y) * S + x] = h;
+            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            out.diff[idx + 0] = toByte(r);
+            out.diff[idx + 1] = toByte(g);
+            out.diff[idx + 2] = toByte(b);
+            out.roughMetal[idx + 0] = toByte(rough);
+            out.roughMetal[idx + 1] = toByte(0.0f);
+            out.roughMetal[idx + 2] = toByte(ao);
+        }
+    });
+    heightToNormal(hf, S, 2.35f, out.norm);
+    return out;
+}
+
+// 9. BanyaRooster — 4K PBR распаренное золотисто-огненное оперение Кочета в баньке с каплями пара
+PbrSet genBanyaRooster4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    const float rows = 14.0f;
+    const float cols = 10.0f;
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+
+            // Перья растут сверху вниз: верхний ряд накладывается ЗАКРУГЛЁННЫМ кончиком поверх основания нижнего!
+            float bestScore = -1e9f;
+            float bestPx = 0.0f, bestPy = 0.4f, bestEdge = 0.6f, bestSeed = 0.5f;
+            int baseRow = static_cast<int>(std::floor(v * rows));
+            for (int dr = -2; dr <= 0; ++dr) {
+                int rIdx = baseRow + dr;
+                float ry = v * rows - rIdx; // 0..2.99
+                float shift = (rIdx & 1) ? 0.5f : 0.0f;
+                float uCol = u * cols + shift;
+                int baseCol = static_cast<int>(std::floor(uCol));
+                for (int dc = -1; dc <= 1; ++dc) {
+                    int cIdx = baseCol + dc;
+                    float cx = (uCol - cIdx) * 2.0f - 1.0f; // -1..1
+                    float cy = ry / 1.65f;                  // длинное каплевидное перо с нахлёстом на 1.65 ряда
+                    if (cy < 0.0f || cy > 1.0f) continue;
+
+                    // Плавная миндалевидная форма пера (широкое у основания/середины, мягкий круглый кончик внизу)
+                    float widthCurve = (cy < 0.30f)
+                        ? 1.18f
+                        : 1.18f * std::pow(std::max(0.0f, 1.0f - (cy - 0.30f) / 0.70f), 0.52f);
+                    float distNorm = std::fabs(cx) / std::max(0.02f, widthCurve);
+                    if (distNorm <= 1.0f) {
+                        // Меньший rIdx (верхний ряд) лежит ПОВЕРХ большего rIdx -> никаких прямых верхних срезов!
+                        float score = -float(rIdx) + (1.0f - distNorm) * 0.08f;
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestPx = cx / std::max(0.08f, widthCurve); // -1..1 внутри пера
+                            bestPy = cy;
+                            bestEdge = clamp01(1.0f - distNorm);
+                            bestSeed = hash01(cIdx, rIdx, static_cast<int>(cols), static_cast<int>(rows), 907u);
+                        }
+                    }
+                }
+            }
+
+            float ax = std::fabs(bestPx);
+            float shaft = std::exp(-bestPx * bestPx * 110.0f) * smoothstep(0.95f, 0.18f, bestPy);
+            float barbs = 0.5f + 0.5f * std::sin((ax * 26.0f - bestPy * 22.0f + bestSeed * 2.0f) * 6.28318f);
+            float microBarbs = 0.5f + 0.5f * std::sin((ax * 90.0f - bestPy * 72.0f) * 6.28318f);
+            float fluff = tileFbm(u, v, 24, 4, 919u);
+
+            // Капельки банного пота / конденсата поверх перьев
+            float dropD = tileWorley(u, v, 14, 941u);
+            float dropR = 0.125f;
+            float dropMask = 1.0f - smoothstep(dropR * 0.72f, dropR, dropD);
+            float dropDome = dropMask > 0.01f ? std::sqrt(std::max(0.0f, 1.0f - (dropD / dropR) * (dropD / dropR))) * dropMask : 0.0f;
+
+            // Тёплая палитра Кочета в баньке: кремово-золотой центр + огненно-медный кант по краю и кончику пера
+            float rimBand = smoothstep(0.42f, 0.0f, bestEdge) * smoothstep(0.12f, 0.45f, bestPy);
+            float tipWarm = smoothstep(0.55f, 0.98f, bestPy);
+            float coreR = lerpf(0.99f, 0.95f, bestSeed);
+            float coreG = lerpf(0.91f, 0.79f, bestSeed);
+            float coreB = lerpf(0.73f, 0.52f, bestSeed);
+
+            float rimR = lerpf(0.89f, 0.78f, bestSeed);
+            float rimG = lerpf(0.42f, 0.25f, bestSeed);
+            float rimB = lerpf(0.14f, 0.09f, bestSeed);
+
+            float rimMix = clamp01(rimBand * 0.75f + tipWarm * 0.40f);
+            float r = lerpf(coreR, rimR, rimMix);
+            float g = lerpf(coreG, rimG, rimMix);
+            float b = lerpf(coreB, rimB, rimMix);
+
+            // Прожилки бородок и светлый блестящий стержень пера
+            float barbShade = 0.90f + barbs * 0.08f + microBarbs * 0.04f + (fluff - 0.5f) * 0.05f;
+            r *= barbShade; g *= barbShade; b *= barbShade;
+            r = lerpf(r, 1.00f, shaft * 0.55f);
+            g = lerpf(g, 0.95f, shaft * 0.55f);
+            b = lerpf(b, 0.82f, shaft * 0.55f);
+
+            // Мягкая тень нахлёста по краю и кончику пера + блик капель воды
+            float edgeShadow = 0.74f + 0.26f * smoothstep(0.0f, 0.30f, bestEdge);
+            r *= edgeShadow; g *= edgeShadow; b *= edgeShadow;
+            r = clamp01(r + dropDome * 0.09f);
+            g = clamp01(g + dropDome * 0.10f);
+            b = clamp01(b + dropDome * 0.13f);
+
+            float h = 0.26f + 0.42f * smoothstep(0.0f, 0.48f, bestEdge) * (1.0f - bestPy * 0.20f)
+                      + shaft * 0.18f + barbs * 0.07f + microBarbs * 0.03f + fluff * 0.04f + dropDome * 0.34f;
+            float rough = clamp01(0.45f - shaft * 0.18f + (1.0f - barbs) * 0.10f - dropMask * 0.39f);
+            float metal = lerpf(0.04f, 0.11f, rimMix); // лёгкий шёлково-медный отлив петушиного пера
+            float ao = clamp01(0.68f + 0.32f * smoothstep(0.0f, 0.34f, bestEdge));
+
+            hf[static_cast<size_t>(y) * S + x] = h;
+            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            out.diff[idx + 0] = toByte(r);
+            out.diff[idx + 1] = toByte(g);
+            out.diff[idx + 2] = toByte(b);
+            out.roughMetal[idx + 0] = toByte(rough);
+            out.roughMetal[idx + 1] = toByte(metal);
+            out.roughMetal[idx + 2] = toByte(ao);
+        }
+    });
+    heightToNormal(hf, S, 1.85f, out.norm);
+    return out;
+}
+
 // ============================================================================
 // Бесшовный 6-гранный 360° Skybox + IBL Cubemap (закат + кибер-мегаполис + звёзды)
 // ============================================================================
@@ -875,20 +1086,23 @@ int main(int argc, char** argv) {
 
     std::printf("[4K PBR Generator] Generating %dx%d PBR texture suite -> %s ...\n", S, S, outDir.c_str());
 
-    auto saveSet = [&](const char* name, PbrSet&& s) {
-        savePngStandalone(outDir + "/" + name + "Diffuse.png", S, S, s.diff);
-        savePngStandalone(outDir + "/" + name + "Normal.png", S, S, s.norm);
-        savePngStandalone(outDir + "/" + name + "RoughMetal.png", S, S, s.roughMetal);
-        std::printf("  [OK] %-14s (%dx%d Diffuse + Normal + RoughMetal)\n", name, S, S);
+    auto saveSet = [&](const char* name, int textureSize, PbrSet&& s) {
+        savePngStandalone(outDir + "/" + name + "Diffuse.png", textureSize, textureSize, s.diff);
+        savePngStandalone(outDir + "/" + name + "Normal.png", textureSize, textureSize, s.norm);
+        savePngStandalone(outDir + "/" + name + "RoughMetal.png", textureSize, textureSize, s.roughMetal);
+        std::printf("  [OK] %-14s (%dx%d Diffuse + Normal + RoughMetal)\n", name, textureSize, textureSize);
     };
 
-    saveSet("StoneHD",      genStone4K(S));
-    saveSet("FloorTile",    genFloor4K(S));
-    saveSet("MetalPanel",   genMetalPanel4K(S));
-    saveSet("BrushedMetal", genBrushedMetal4K(S));
-    saveSet("CrateWood",    genCrateWood4K(S));
-    saveSet("FeatherPBR",   genFeather4K(std::min(S, 2048)));
-    saveSet("HazardMetal",  genHazardMetal4K(std::min(S, 2048)));
+    const int smallSize = std::min(S, 2048);
+    saveSet("StoneHD",      S,         genStone4K(S));
+    saveSet("FloorTile",    S,         genFloor4K(S));
+    saveSet("MetalPanel",   S,         genMetalPanel4K(S));
+    saveSet("BrushedMetal", S,         genBrushedMetal4K(S));
+    saveSet("CrateWood",    S,         genCrateWood4K(S));
+    saveSet("FeatherPBR",   smallSize, genFeather4K(smallSize));
+    saveSet("HazardMetal",  smallSize, genHazardMetal4K(smallSize));
+    saveSet("BanyaLog",     S,         genBanyaLog4K(S));
+    saveSet("BanyaRooster", S,         genBanyaRooster4K(S));
 
     int cubeS = 1024; // IBL.glsl использует cubeMapSize = 1024.0 (точные mip-уровни 0..10)
     genSkyCubemap(outDir, cubeS);

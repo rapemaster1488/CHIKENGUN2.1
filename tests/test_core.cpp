@@ -78,6 +78,14 @@ int main(int argc, char** argv) {
 
         assert(Lite::RayBoxT<TestVec3>({0, 5, -5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
         assert(Lite::RayBoxT<TestVec3>({0, 1,  5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
+
+        // Изнутри AABB нужен выход, а не нулевая дистанция до самого старта.
+        float inside = Lite::RayBoxT<TestVec3>({0, 1, 0}, {2, 0, 0}, {0, 1, 0}, {1, 1, 1});
+        assert(std::fabs(inside - 0.5f) < 1e-4f);
+        assert(Lite::RayBoxT<TestVec3>({0, 1, 0}, {0, 0, 0}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
+        // На грани луч наружу попадает в t=0, внутрь — до дальней грани.
+        assert(std::fabs(Lite::RayBoxT<TestVec3>({1, 1, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 1})) < 1e-4f);
+        assert(std::fabs(Lite::RayBoxT<TestVec3>({1, 1, 0}, {-1, 0, 0}, {0, 1, 0}, {1, 1, 1})) < 1e-4f);
     }
 
     std::cout << "[test_core] 2/10 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
@@ -346,11 +354,19 @@ int main(int argc, char** argv) {
         assert(Arcade::PixelArcadeSim::ComputeCreditsReward(100, true) == 20);
     }
 
-    std::cout << "[test_core] 10/10 Проверка базовых PBR текстур и генератора..." << std::endl;
+    std::cout << "[test_core] 10/10 Проверка базовых PBR текстур, материалов баньки и генератора..." << std::endl;
     if (fs::exists("Data/Textures/Skybox4K.xml")) {
         CheckPngFile("Data/Textures/StoneHDDiffuse.png", 512, 512);
+        CheckPngFile("Data/Textures/BanyaLogDiffuse.png", 1024, 1024);
+        CheckPngFile("Data/Textures/BanyaLogNormal.png", 1024, 1024);
+        CheckPngFile("Data/Textures/BanyaLogRoughMetal.png", 1024, 1024);
+        CheckPngFile("Data/Textures/BanyaRoosterDiffuse.png", 1024, 1024);
+        CheckPngFile("Data/Textures/BanyaRoosterNormal.png", 1024, 1024);
+        CheckPngFile("Data/Textures/BanyaRoosterRoughMetal.png", 1024, 1024);
         CheckPngFile("Data/Textures/Sky4K_PosZ.png", 1024, 1024);
         CheckPngFile("Data/Textures/LoadingBg4K.png", 1920, 1080);
+        assert(fs::exists("Data/Materials/Game/BanyaLog.xml"));
+        assert(fs::exists("Data/Materials/Game/BanyaRooster.xml"));
     }
     if (argc > 1 && fs::exists(argv[1])) {
         fs::path tmpOut = fs::temp_directory_path() / "chikengun_test_tex";
@@ -360,6 +376,12 @@ int main(int argc, char** argv) {
         assert(rc == 0 && "gen_textures_4k завершился с ошибкой");
         CheckPngFile(tmpOut / "StoneHDDiffuse.png", 256, 256);
         CheckPngFile(tmpOut / "HazardMetalRoughMetal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaLogDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaLogNormal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaLogRoughMetal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaRoosterDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaRoosterNormal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaRoosterRoughMetal.png", 256, 256);
         assert(fs::exists(tmpOut / "Skybox4K.xml"));
         fs::remove_all(tmpOut);
     }

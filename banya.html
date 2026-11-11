@@ -423,22 +423,32 @@
   .cg-end-chip svg { width: 16px; height: 16px; flex-shrink: 0; }
   .cg-end-chip .cnt { margin-left: auto; font-size: 10.5px; opacity: .7; }
 
+  /* ---- 4K PBR Texture Overlay for Banya & Rooster ---- */
+  .pbr-layer { opacity: 0; transition: opacity .3s ease; pointer-events: none; }
+  .stage.pbr4k .pbr-layer { opacity: 1; }
+  .cg-pill.pbr-on {
+    border-color: rgba(46, 242, 255, .58);
+    background: rgba(46, 242, 255, .14);
+    color: #b8faff;
+  }
+
 </style>
 </head>
 <body>
   <div class="cg-topbar" id="cgTopBar">
-    <div class="cg-brand">🐔 CHIKENGUN 2.3 × КОЧЕТ В БАНЬКЕ</div>
+    <div class="cg-brand">🐔 CHIKENGUN 2.3 × КОЧЕТ В БАНЬКЕ <span style="font-size:10.5px;padding:2px 7px;border-radius:6px;background:rgba(46,242,255,.16);border:1px solid rgba(46,242,255,.45);color:#8df7ff">4K PBR</span></div>
     <div class="cg-pills">
       <span class="cg-pill" title="Общий кошелёк с 3D Кибер-Ареной">Кошелёк: <b id="cgWalletVal">100₵</b></span>
       <span class="cg-pill" id="cgBuffBadge" title="Бонус в 3D Кибер-Арене за победу в баньке">Бафф Арены: <b>нет</b></span>
       <span class="cg-pill clickable" id="cgSeenPill" title="Открыть статистику и коллекцию 14 концовок [6]">Концовки: <b id="cgSeenVal">0/14</b></span>
+      <button class="cg-pill clickable pbr-on" id="cgPbrToggle" type="button" title="Включить/выключить 4K PBR текстуры сруба и Кочета">✨ 4K PBR: ВКЛ</button>
       <button class="cg-back" id="cgRestartQuickBtn" type="button" style="background:rgba(255,214,164,.12);border-color:rgba(255,206,150,.32)" title="Начать заход заново">↻ Заново</button>
       <button class="cg-back" id="cgBackBtn" type="button">← В Арену</button>
     </div>
   </div>
 <div class="wrap">
   <div class="stagewrap">
-  <div class="stage" id="stage">
+  <div class="stage pbr4k" id="stage">
     <svg class="scene" viewBox="0 0 1000 640" preserveAspectRatio="xMidYMid meet" aria-label="Банька: кочет парится на полке">
       <defs>
         <linearGradient id="logGrad" x1="0" y1="0" x2="1" y2="0">
@@ -450,6 +460,22 @@
           <rect width="74" height="640" fill="none" stroke="rgba(28,15,6,.55)" stroke-width="2" transform="translate(1,0)"/>
           <path d="M22 0 V640 M52 0 V640" stroke="rgba(50,28,14,.22)" stroke-width="1"/>
           <path d="M30 120 q14 40 2 90 M60 380 q-12 30 -2 70" stroke="rgba(38,20,9,.20)" stroke-width="2" fill="none"/>
+        </pattern>
+        <pattern id="banyaLogTex" width="420" height="360" patternUnits="userSpaceOnUse">
+          <rect width="420" height="360" fill="url(#logGrad)"/>
+          <image href="Data/Textures/BanyaLogDiffuse.png" x="0" y="0" width="420" height="360" preserveAspectRatio="none"/>
+        </pattern>
+        <pattern id="roosterPbrTex" width="128" height="128" patternUnits="userSpaceOnUse">
+          <rect width="128" height="128" fill="#f6e4c4"/>
+          <image href="Data/Textures/BanyaRoosterDiffuse.png" x="0" y="0" width="128" height="128" preserveAspectRatio="xMidYMid slice"/>
+        </pattern>
+        <pattern id="roosterWingTex" width="96" height="96" patternUnits="userSpaceOnUse" patternTransform="rotate(-14)">
+          <rect width="96" height="96" fill="#ecd2ac"/>
+          <image href="Data/Textures/BanyaRoosterDiffuse.png" x="0" y="0" width="96" height="96" preserveAspectRatio="xMidYMid slice"/>
+        </pattern>
+        <pattern id="benchWoodTex" width="240" height="200" patternUnits="userSpaceOnUse">
+          <rect width="240" height="200" fill="#c7955e"/>
+          <image href="Data/Textures/CrateWoodDiffuse.png" x="0" y="0" width="240" height="200" preserveAspectRatio="none"/>
         </pattern>
 
         <linearGradient id="wallShade" x1="0" y1="0" x2="0" y2="1">
@@ -535,6 +561,7 @@
 
       <!-- WALL -->
       <rect x="0" y="0" width="1000" height="640" fill="url(#planks)"/>
+      <rect class="pbr-layer" x="0" y="0" width="1000" height="640" fill="url(#banyaLogTex)" opacity=".92"/>
       <rect x="0" y="0" width="1000" height="640" fill="url(#wallShade)"/>
 
       <!-- ceiling -->
@@ -638,7 +665,9 @@
       <!-- BENCH -->
       <g id="bench">
         <rect x="418" y="336" width="588" height="20" rx="5" fill="url(#benchTop)"/>
+        <rect class="pbr-layer" x="418" y="336" width="588" height="20" rx="5" fill="url(#benchWoodTex)" opacity=".32" style="mix-blend-mode:multiply"/>
         <rect x="418" y="354" width="588" height="24" rx="4" fill="url(#benchFace)"/>
+        <rect class="pbr-layer" x="418" y="354" width="588" height="24" rx="4" fill="url(#benchWoodTex)" opacity=".45" style="mix-blend-mode:multiply"/>
         <rect x="418" y="336" width="588" height="3" fill="rgba(255,230,190,.30)"/>
         <g fill="url(#benchFace)">
           <rect x="432" y="374" width="20" height="146" rx="3"/>
@@ -720,8 +749,10 @@
             </g>
             <!-- body -->
             <ellipse cx="0" cy="-74" rx="52" ry="46" transform="rotate(-8 0 -74)" fill="url(#bodyGrad)"/>
+            <ellipse class="pbr-layer" cx="0" cy="-74" rx="52" ry="46" transform="rotate(-8 0 -74)" fill="url(#roosterPbrTex)" opacity=".72" style="mix-blend-mode:multiply"/>
             <ellipse cx="26" cy="-56" rx="36" ry="34" fill="url(#bodyShade)"/>
             <ellipse cx="-22" cy="-94" rx="26" ry="19" fill="rgba(255,255,255,.45)"/>
+            <ellipse class="pbr-layer" cx="-18" cy="-86" rx="30" ry="20" transform="rotate(-14 -18 -86)" fill="rgba(255,236,196,.28)"/>
             <!-- wing -->
             <!-- towel wrap -->
             <path d="M-52 -74 C -58 -52 -54 -32 -32 -25 C -24 -21 -14 -25 -6 -21 C 4 -25 12 -19 22 -23 C 34 -27 44 -34 48 -48 C 52 -60 48 -70 42 -78 C 18 -70 -24 -70 -52 -74 Z" fill="url(#towelGrad)"/>
@@ -734,6 +765,7 @@
             <path d="M-32 -60 q8 3 11 11" fill="none" stroke="rgba(150,120,85,.18)" stroke-width="2"/>
             <path d="M30 -68 q10 -2 13 8 q-9 6 -13 -8 Z" fill="rgba(210,190,160,.55)"/>
             <path d="M10 -96 C 40 -94 56 -78 57 -60 C 50 -44 26 -40 14 -48 C 4 -62 -2 -80 10 -96 Z" fill="#ecd6b2"/>
+            <path class="pbr-layer" d="M10 -96 C 40 -94 56 -78 57 -60 C 50 -44 26 -40 14 -48 C 4 -62 -2 -80 10 -96 Z" fill="url(#roosterWingTex)" opacity=".78" style="mix-blend-mode:multiply"/>
             <path d="M10 -96 C 40 -94 56 -78 57 -60 C 50 -44 26 -40 14 -48 C 4 -62 -2 -80 10 -96 Z" fill="none" stroke="rgba(168,136,98,.32)" stroke-width="2"/>
             <g stroke="rgba(168,136,98,.45)" stroke-width="2" fill="none">
               <path d="M18 -84 C 34 -82 46 -74 50 -64"/>
@@ -742,10 +774,12 @@
             </g>
             <!-- neck -->
             <ellipse cx="-30" cy="-124" rx="17" ry="26" transform="rotate(20 -30 -124)" fill="url(#bodyGrad)"/>
+            <ellipse class="pbr-layer" cx="-30" cy="-124" rx="17" ry="26" transform="rotate(20 -30 -124)" fill="url(#roosterPbrTex)" opacity=".65" style="mix-blend-mode:multiply"/>
             <ellipse cx="-46" cy="-136" rx="19" ry="7" fill="rgba(176,136,96,.16)"/>
             <!-- head -->
             <g id="headGroup">
               <circle cx="-46" cy="-158" r="23" fill="url(#bodyGrad)"/>
+              <circle class="pbr-layer" cx="-46" cy="-158" r="23" fill="url(#roosterPbrTex)" opacity=".55" style="mix-blend-mode:multiply"/>
               <!-- comb -->
               <path d="M-63 -176 L -59 -197 L -52 -182 L -45 -202 L -38 -183 L -30 -197 L -24 -170 C -36 -163 -54 -163 -63 -176 Z" fill="url(#combGrad)"/>
               <path d="M-56 -190 L -53 -184 M-41 -192 L -38 -184" stroke="rgba(255,255,255,.28)" stroke-width="2.4" stroke-linecap="round"/>
@@ -2297,6 +2331,22 @@
   if (endToArenaBtn) endToArenaBtn.addEventListener('click', goBackToChickenGun);
   if (cgRestartQuickBtn) cgRestartQuickBtn.addEventListener('click', () => { closeStats(); reset(); });
   if (cgSeenPill) cgSeenPill.addEventListener('click', () => statsOverlay.classList.contains('show') ? closeStats() : openStats());
+  const cgPbrToggle = document.getElementById('cgPbrToggle');
+  if (cgPbrToggle) {
+    let pbrOn = true;
+    try { pbrOn = localStorage.getItem('cg23_banya_4k') !== '0'; } catch (_) {}
+    const syncPbrBtn = () => {
+      stage.classList.toggle('pbr4k', pbrOn);
+      cgPbrToggle.classList.toggle('pbr-on', pbrOn);
+      cgPbrToggle.textContent = pbrOn ? '✨ 4K PBR: ВКЛ' : '✨ 4K PBR: ВЫКЛ';
+    };
+    syncPbrBtn();
+    cgPbrToggle.addEventListener('click', () => {
+      pbrOn = !pbrOn;
+      try { localStorage.setItem('cg23_banya_4k', pbrOn ? '1' : '0'); } catch (_) {}
+      syncPbrBtn();
+    });
+  }
 
   window.addEventListener('message', ev => {
     const d = ev.data;

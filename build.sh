@@ -149,7 +149,7 @@ STAMP_FILE="$ROOT/build/Data/Textures/.4k_pbr_stamp"
 CUR_STAMP=""
 [ -f "$STAMP_FILE" ] && CUR_STAMP="$(cat "$STAMP_FILE" 2>/dev/null || true)"
 
-if [ "$CUR_STAMP" != "$TEX_SIZE" ] || [ ! -f "$ROOT/build/Data/Textures/FloorTileRoughMetal.png" ] || [ ! -f "$ROOT/build/Data/Textures/Skybox4K.xml" ]; then
+if [ "$CUR_STAMP" != "$TEX_SIZE" ] || [ ! -f "$ROOT/build/Data/Textures/FloorTileRoughMetal.png" ] || [ ! -f "$ROOT/build/Data/Textures/BanyaLogDiffuse.png" ] || [ ! -f "$ROOT/build/Data/Textures/BanyaRoosterDiffuse.png" ] || [ ! -f "$ROOT/build/Data/Textures/Skybox4K.xml" ]; then
     echo "[2/3] Генерация 4K PBR текстур (${TEX_SIZE}x${TEX_SIZE}), IBL Skybox4K и 4K Loading Art..."
     "$CXX" -O3 -std=c++17 -pthread "$ROOT/tools/gen_textures_4k.cpp" -o "$ROOT/build/gen_textures_4k"
     "$ROOT/build/gen_textures_4k" "$ROOT/build/Data/Textures" "$TEX_SIZE"

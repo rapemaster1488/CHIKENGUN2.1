@@ -450,6 +450,20 @@
         g.fillStyle = "#7a522e"; g.fillRect(0, 0, 128, 128);
         g.strokeStyle = "#4d3118"; g.lineWidth = 6; g.strokeRect(3, 3, 122, 122);
         g.beginPath(); g.moveTo(6, 6); g.lineTo(122, 122); g.stroke();
+      } else if (kind === "BanyaLog") {
+        g.fillStyle = "#8a5c33"; g.fillRect(0, 0, 128, 128);
+        for (let y = 0; y < 128; y += 21) {
+          g.fillStyle = "#5c391c"; g.fillRect(0, y, 128, 3);
+          g.fillStyle = "#b07946"; g.fillRect(0, y + 6, 128, 7);
+        }
+      } else if (kind === "BanyaRooster") {
+        g.fillStyle = "#f4dfb8"; g.fillRect(0, 0, 128, 128);
+        g.strokeStyle = "#c96f32"; g.lineWidth = 2;
+        for (let r = 0; r < 128; r += 16) {
+          for (let c = (r % 32 ? 8 : 0); c < 128; c += 16) {
+            g.beginPath(); g.arc(c, r, 8, 0, Math.PI); g.stroke();
+          }
+        }
       } else if (kind === "FeatherPBR") {
         g.fillStyle = "#f3eee4"; g.fillRect(0, 0, 128, 128);
         g.strokeStyle = "#dcd3c3"; g.lineWidth = 2;
@@ -506,13 +520,15 @@
     }
 
     const MATS = {
-      floor:   loadMaterialSet("FloorTile"),
-      stone:   loadMaterialSet("StoneHD"),
-      panel:   loadMaterialSet("MetalPanel"),
-      metal:   loadMaterialSet("BrushedMetal"),
-      crate:   loadMaterialSet("CrateWood"),
-      feather: loadMaterialSet("FeatherPBR"),
-      hazard:  loadMaterialSet("HazardMetal")
+      floor:        loadMaterialSet("FloorTile"),
+      stone:        loadMaterialSet("StoneHD"),
+      panel:        loadMaterialSet("MetalPanel"),
+      metal:        loadMaterialSet("BrushedMetal"),
+      crate:        loadMaterialSet("CrateWood"),
+      feather:      loadMaterialSet("FeatherPBR"),
+      hazard:       loadMaterialSet("HazardMetal"),
+      banyaLog:     loadMaterialSet("BanyaLog"),
+      banyaRooster: loadMaterialSet("BanyaRooster")
     };
 
     function makeSkyFaceCanvas(target) {
@@ -624,14 +640,23 @@
 
     // 3D Wooden Steamhouse «Банька Смотрящего» at (-18, 0, -34) — enter with [P]!
     const BANYA_DOOR = { x: -18, z: -30.6 };
-    addProp("box", MATS.crate, -18, 1.9, -34, 6.4, 3.8, 5.6, [3, 2], true, [0.96, 0.78, 0.56, 1], [0,0,0], 0.72, 0.05);
-    addProp("box", MATS.crate, -18, 4.05, -34, 7.3, 0.55, 6.5, [3, 2], false, [0.54, 0.34, 0.20, 1], [0,0,0], 0.78, 0.05);
-    addProp("box", MATS.crate, -18, 4.55, -34, 5.4, 0.45, 3.8, [2, 1], false, [0.46, 0.28, 0.16, 1], [0,0,0], 0.80, 0.05);
+    addProp("box", MATS.banyaLog, -18, 1.9, -34, 6.4, 3.8, 5.6, [2, 1.5], true, [1.0, 0.96, 0.90, 1], [0,0,0], 0.85, 0.0);
+    addProp("box", MATS.banyaLog, -18, 4.05, -34, 7.3, 0.55, 6.5, [2.5, 0.8], false, [0.76, 0.56, 0.38, 1], [0,0,0], 0.88, 0.0);
+    addProp("box", MATS.crate,    -18, 4.55, -34, 5.4, 0.45, 3.8, [2, 1], false, [0.46, 0.28, 0.16, 1], [0,0,0], 0.80, 0.05);
     addProp("cyl", MATS.stone, -19.8, 5.4, -35.2, 0.95, 3.2, 0.95, [1, 2], false);
     addProp("cyl", null, -19.8, 7.05, -35.2, 1.08, 0.22, 1.08, [1,1], false, [1,0.55,0.2,1], [2.8, 1.15, 0.25], 0.2, 0.8);
     addProp("box", null, -18, 1.35, -31.16, 1.55, 2.55, 0.14, [1,1], false, [1,0.74,0.36,1], [2.3, 1.35, 0.42], 0.25, 0.4);
     addProp("box", null, -18, 3.22, -31.12, 3.9, 0.42, 0.16, [1,1], false, [1,0.86,0.45,1], [2.8, 1.95, 0.62], 0.2, 0.8);
     addProp("box", null, -14.76, 2.15, -34, 0.14, 1.1, 1.5, [1,1], false, [0.85,0.95,1,1], [1.2, 1.9, 2.4], 0.15, 0.6);
+    // Полок/лавочка у входа и 3D-Кочет Смотрящего в банном оперении (BanyaRooster 4K PBR)
+    addProp("box", MATS.crate, -15.4, 0.42, -30.55, 1.75, 0.24, 0.85, [1, 1], false, [0.92, 0.72, 0.46, 1], [0,0,0], 0.72, 0.0);
+    addProp("sph", MATS.banyaRooster, -15.4, 1.18, -30.55, 0.96, 0.86, 1.02, [2, 2], false, [1.0, 0.98, 0.94, 1], [0.06, 0.03, 0.01], 0.72, 0.04); // туловище Кочета
+    addProp("cyl", null,              -15.4, 0.95, -30.55, 0.98, 0.42, 0.98, [1, 1], false, [0.98, 0.95, 0.89, 1], [0,0,0], 0.88, 0.0); // полотенце
+    addProp("box", null,              -15.4, 0.82, -30.05, 0.92, 0.07, 0.08, [1, 1], false, [0.78, 0.22, 0.15, 1], [0,0,0], 0.80, 0.0); // кайма полотенца
+    addProp("sph", MATS.banyaRooster, -15.4, 1.76, -30.22, 0.56, 0.54, 0.56, [1.5, 1.5], false, [1.0, 0.98, 0.94, 1], [0.06, 0.03, 0.01], 0.70, 0.04); // голова Кочета
+    addProp("box", null,              -15.4, 2.12, -30.20, 0.14, 0.24, 0.34, [1, 1], false, [0.94, 0.18, 0.14, 1], [0.35, 0.04, 0.02], 0.45, 0.0); // красный гребешок
+    addProp("box", null,              -15.4, 1.72, -29.85, 0.14, 0.12, 0.26, [1, 1], false, [1.00, 0.74, 0.16, 1], [0.18, 0.10, 0.01], 0.35, 0.0); // клюв
+    addProp("box", MATS.banyaRooster, -15.4, 1.48, -31.12, 0.22, 0.62, 0.36, [1, 1], false, [0.16, 0.48, 0.44, 1], [0.02, 0.08, 0.08], 0.38, 0.12); // переливчатый хвост
 
     // ---------- 6. Weapons,Skins, Atmospheres & Mutators ----------
     const WEAPONS = [

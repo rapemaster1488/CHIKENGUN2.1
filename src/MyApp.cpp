@@ -284,9 +284,11 @@ static const WeaponDef WEAPON_DEFS[WEAPON_COUNT] = {
     { "LAUNCHER",150.0f,1.50f,   4,  20, 0.020f, 3.6f, 1, Color( 70, 95, 70) },
     { "RAILGUN",185.0f, 1.32f,   4,  24, 0.0008f,2.9f, 1, Color( 55,195,255) },
     { "PLASMA",  56.0f, 0.19f,  20, 120, 0.013f, 2.1f, 1, Color( 45,240,155) },
-    { "ARC CANNON",210.0f, 1.75f,  3,  18, 0.004f,3.6f, 1, Color(255,190, 45) },
-    { "CRYO LANCE", 78.0f, 0.62f,  8,  48, 0.010f,2.8f, 1, Color( 80,215,255) },
-    { "ION SAW",   92.0f, 0.28f,  24, 144, 0.022f,2.4f, 1, Color(255,105, 35) },
+    // Тяжёлые стволы: ARC — редкий crowd-control, CRYO — контроль темпа,
+    // ION SAW — ближняя высокая скорострельность с падением урона на дистанции.
+    { "ARC CANNON",200.0f, 1.75f,  3,  18, 0.004f,3.6f, 1, Color(255,190, 45) },
+    { "CRYO LANCE", 72.0f, 0.62f,  8,  48, 0.010f,2.8f, 1, Color( 80,215,255) },
+    { "ION SAW",    86.0f, 0.30f,  24, 144, 0.022f,2.4f, 1, Color(255,105, 35) },
 };
 
 struct SkinDef {
@@ -708,6 +710,8 @@ private:
         float burstShots_ = 0.0f;       // очередь выстрелов стрелка
         float burstTimer_ = 0.0f;       // таймер между одиночными в очереди
         float recoilKick_ = 0.0f;       // визуальный «откат» стрелка
+        float cryoSlowTimer_ = 0.0f;    // короткое замедление от CRYO LANCE
+        float cryoSlowMul_ = 1.0f;
         // === Куриная анимация (ходьба, клевки, взмахи) ===
         WeakPtr<Node> headNode_, wingLNode_, wingRNode_, legLNode_, legRNode_, tailNode_;
         float animPhase_ = 0.0f;
@@ -1029,6 +1033,8 @@ private:
     Material* hdCrate_ = nullptr;
     Material* hdFeather_ = nullptr;
     Material* hdHazard_ = nullptr;
+    Material* hdBanyaLog_ = nullptr;
+    Material* hdBanyaRooster_ = nullptr;
     SharedPtr<Material> pbrBaseMat_;
     SharedPtr<Material> glowBaseMat_;
     SharedPtr<Material> critTracerMat_;
@@ -1045,7 +1051,7 @@ private:
     Vector<SharedPtr<Material>> weaponTintMats_;
     ParticleEffect* sparkEffect_ = nullptr;
     ParticleEffect* smokeEffect_ = nullptr;
-    bool haveParticles_ = false; // Spark.pfx/Smoke.pfx реально загружены (пустые .pfx -> багы рендера)
+    bool haveParticles_ = false; // .pfx или безопасный процедурный ParticleEffect доступны
     Font* font_ = nullptr;
     
     // Звуки (процедурно-синтезированные WAV в Data/Sounds)
@@ -1138,6 +1144,11 @@ public:
     static constexpr unsigned MAX_TRACERS = 256;
     static constexpr unsigned MAX_SHOCKWAVES = 96;
     static constexpr unsigned MAX_DEBRIS = 384;
+    static constexpr unsigned MAX_ENEMY_PROJECTILES = 128;
+    static constexpr unsigned MAX_PLASMA_BOLTS = 32;
+    static constexpr unsigned MAX_THROWN_GRENADES = 8;
+    static constexpr unsigned MAX_TURRETS = 8;
+    static constexpr unsigned MAX_ORBITAL_STRIKES = 8;
 
     void QueuePendingRemove(Node* node, float ttl) {
         if (!node) return;
@@ -1179,6 +1190,57 @@ public:
             debrisLite_.Erase(0);
         }
         debrisLite_.Push(debris);
+    }
+
+    // Удаляет все FX, которые относятся к предыдущему забегу. Это важно при
+    // частом переключении «тир/арена»: TTL-очередь сама по себе ограничена,
+    // но не должна держать старые SharedPtr до их естественного истечения.
+    void ClearTransientEffects() {
+        for (unsigned i = 0; i < (unsigned)pendingRemoves_.Size(); ++i)
+            if (pendingRemoves_[i].node_) pendingRemoves_[i].node_->Remove();
+        pendingRemoves_.Clear();
+
+        for (unsigned i = 0; i < (unsigned)tracers_.Size(); ++i)
+            if (tracers_[i].node_) tracers_[i].node_->Remove();
+        tracers_.Clear();
+
+        for (unsigned i = 0; i < (unsigned)shockwaves_.Size(); ++i)
+            if (shockwaves_[i].node_) shockwaves_[i].node_->Remove();
+        shockwaves_.Clear();
+
+        for (unsigned i = 0; i < (unsigned)debrisLite_.Size(); ++i)
+            if (debrisLite_[i].node_) debrisLite_[i].node_->Remove();
+        debrisLite_.Clear();
+
+        for (unsigned i = 0; i < (unsigned)decals_.Size(); ++i)
+            if (decals_[i]) decals_[i]->Remove();
+        decals_.Clear();
+
+        for (unsigned i = 0; i < (unsigned)floatingDmgs_.Size(); ++i)
+            if (floatingDmgs_[i].label_) floatingDmgs_[i].label_->Remove();
+        floatingDmgs_.Clear();
+    }
+
+    // После обновления сцены удаляем записи, чьи узлы были сняты другими
+    // системами в этом же кадре. Так SharedPtr/WeakPtr-реестры не копят
+    // «призраков», а компакция Lite-коллайдеров не попадает в середину рейкаста.
+    void PruneTransientEffectsAfterSceneUpdate() {
+        for (unsigned i = pendingRemoves_.Size(); i-- > 0; ) {
+            Node* n = pendingRemoves_[i].node_.Get();
+            if (!n || !n->GetScene()) pendingRemoves_.Erase(i);
+        }
+        for (unsigned i = tracers_.Size(); i-- > 0; ) {
+            Node* n = tracers_[i].node_.Get();
+            if (!n || !n->GetScene()) tracers_.Erase(i);
+        }
+        for (unsigned i = shockwaves_.Size(); i-- > 0; ) {
+            Node* n = shockwaves_[i].node_.Get();
+            if (!n || !n->GetScene()) shockwaves_.Erase(i);
+        }
+        for (unsigned i = debrisLite_.Size(); i-- > 0; ) {
+            Node* n = debrisLite_[i].node_.Get();
+            if (!n || !n->GetScene()) debrisLite_.Erase(i);
+        }
     }
 
     // =========================================================================
@@ -1481,6 +1543,22 @@ private:
         }
     }
 
+    void Stop() override {
+        // Сохраняем прогресс даже при обычном закрытии окна, а не только
+        // после GAME OVER/изменения меню. SaveSettingsFile() сам выбирает
+        // пользовательскую директорию и atomic fallback.
+        SaveSettingsFile();
+        if (musicSource_) musicSource_->Stop();
+        Application::Stop();
+    }
+
+    bool LoadResources() {
+        LoadCoreModelsAndFont();
+        CreateMaterials();
+        CreateParticleEffects();
+        LoadAudioAssets();
+        return true;
+    }
     // Хранилище и O(1)-кэш дедупликации процедурно клонированных материалов (фикс утечки при долгой игре)
     Vector<SharedPtr<Material>> tintedMatStore_;
     HashMap<unsigned, SharedPtr<Material>> matCache_;
@@ -1683,6 +1761,15 @@ private:
         hdCrate_   = cache->GetResource<Material>("Materials/Game/CrateWood.xml");
         hdFeather_ = cache->GetResource<Material>("Materials/Game/FeatherPBR.xml");
         hdHazard_  = cache->GetResource<Material>("Materials/Game/HazardMetal.xml");
+        auto banyaTexReady = [cache](const char* d, const char* n, const char* r) {
+            return cache->GetResource<Texture2D>(String(d)) &&
+                   cache->GetResource<Texture2D>(String(n)) &&
+                   cache->GetResource<Texture2D>(String(r));
+        };
+        if (banyaTexReady("Textures/BanyaLogDiffuse.png", "Textures/BanyaLogNormal.png", "Textures/BanyaLogRoughMetal.png"))
+            hdBanyaLog_ = cache->GetResource<Material>("Materials/Game/BanyaLog.xml");
+        if (banyaTexReady("Textures/BanyaRoosterDiffuse.png", "Textures/BanyaRoosterNormal.png", "Textures/BanyaRoosterRoughMetal.png"))
+            hdBanyaRooster_ = cache->GetResource<Material>("Materials/Game/BanyaRooster.xml");
         skyTexture_ = cache->GetResource<Texture2D>("Textures/SkyDay.png");
         EnsureSkyCubemap();
 
@@ -1695,6 +1782,8 @@ private:
                 "Textures/CrateWoodDiffuse.png",    "Textures/CrateWoodNormal.png",    "Textures/CrateWoodRoughMetal.png",
                 "Textures/FeatherPBRDiffuse.png",   "Textures/FeatherPBRNormal.png",   "Textures/FeatherPBRRoughMetal.png",
                 "Textures/HazardMetalDiffuse.png",  "Textures/HazardMetalNormal.png",  "Textures/HazardMetalRoughMetal.png",
+                "Textures/BanyaLogDiffuse.png",     "Textures/BanyaLogNormal.png",     "Textures/BanyaLogRoughMetal.png",
+                "Textures/BanyaRoosterDiffuse.png", "Textures/BanyaRoosterNormal.png", "Textures/BanyaRoosterRoughMetal.png",
                 "Textures/SkyDay.png"
             };
             anisoTextures_.Clear();
@@ -1721,6 +1810,8 @@ private:
             tileMat(hdMetal_, 4.0f);    // 4K шлифованная сталь
             tileMat(hdCrate_, 1.0f);    // 4K дубовые ящики со стальной оковкой
             tileMat(hdHazard_, 1.0f);   // 4K взрывоопасные бочки
+            tileMat(hdBanyaLog_, 2.0f);     // 4K липовый сруб баньки
+            tileMat(hdBanyaRooster_, 1.5f); // 4K оперение Кочета Смотрящего
         }
 
         // Мишени тира: насыщенный PBR с лёгким HDR-само-свечением, чтобы читались на любой дистанции
@@ -1799,52 +1890,71 @@ private:
             if (e && !e->GetName().Empty() && e->GetMaterial() != nullptr) { smokeEffect_ = e; break; }
         }
 
+        // Если ни один .pfx не загрузился (Data неполный / битые файлы), строим
+        // эффекты прямо в памяти на базе процедурных ParticleEffect и локальных
+        // материалов ParticleAdditive/ParticleAlphaBlend.
         if (!sparkEffect_) {
-            sparkEffectStore_ = MakeProceduralParticles("Materials/Particle.xml",
-                                                        120, 60.0f, 0.08f, 0.25f, 1.2f, true);
+            sparkEffectStore_ = MakeProceduralParticles("Materials/ParticleAdditive.xml",
+                                                        120, 60.0f, 0.05f, 0.25f, 0.8f, true);
             sparkEffect_ = sparkEffectStore_;
         }
         if (!smokeEffect_) {
-            smokeEffectStore_ = MakeProceduralParticles("Materials/Smoke.xml",
-                                                        60, 24.0f, 0.35f, 0.9f, 1.8f, false);
+            smokeEffectStore_ = MakeProceduralParticles("Materials/ParticleAlphaBlend.xml",
+                                                        80, 30.0f, 0.3f, 0.9f, 1.6f, false);
             smokeEffect_ = smokeEffectStore_;
         }
         haveParticles_ = (sparkEffect_ != nullptr) || (smokeEffect_ != nullptr);
         if (haveParticles_)
             URHO3D_LOGINFO(String("Частицы активны: ") + (sparkEffect_ ? "искры " : "") + (smokeEffect_ ? "дым" : ""));
         else
-            URHO3D_LOGINFO("Частицы не загружены — используются декали и Lite-осколки.");
+            URHO3D_LOGINFO("Частицы недоступны: нет .pfx и материалов — включены Lite-декали/осколки.");
     }
 
     SharedPtr<ParticleEffect> sparkEffectStore_, smokeEffectStore_; // владение fallback-эффектами
 
-    SharedPtr<ParticleEffect> MakeProceduralParticles(const char* matName, int count, float rate,
-                                                      float sizeMin, float sizeMax, float ttl, bool spark) {
+    // Программный ParticleEffect из стоковых материалов проекта.
+    // Нужен как fallback, если .pfx отсутствует в неполной portable-копии Data/.
+    SharedPtr<ParticleEffect> MakeProceduralParticles(const char* materialName, int maxParticles,
+                                                      float emissionRate, float minSize, float maxSize,
+                                                      float ttl, bool additive) {
         auto* cache = GetSubsystem<ResourceCache>();
-        Material* mat = cache ? cache->GetResource<Material>(String(matName)) : nullptr;
-        if (!mat) return SharedPtr<ParticleEffect>();
+        if (!cache) return SharedPtr<ParticleEffect>();
+        Material* material = cache->GetResource<Material>(String(materialName));
+        if (!material)
+            material = cache->GetResource<Material>(additive ? "Materials/ParticleAdditive.xml"
+                                                              : "Materials/ParticleAlphaBlend.xml");
+        if (!material) material = cache->GetResource<Material>("Materials/Particle.xml");
+        if (!material) return SharedPtr<ParticleEffect>();
 
-        SharedPtr<ParticleEffect> fx(new ParticleEffect(context_));
-        fx->SetMaterial(mat);
-        fx->SetNumParticles((unsigned)Max(1, count));
-        fx->SetEmitterType(EMITTER_SPHERE);
-        fx->SetEmitterSize(Vector3(0.25f, 0.25f, 0.25f));
-        fx->SetMinDirection(spark ? Vector3(-1.0f, 0.2f, -1.0f) : Vector3(-0.35f, 0.6f, -0.35f));
-        fx->SetMaxDirection(spark ? Vector3( 1.0f, 1.2f,  1.0f) : Vector3( 0.35f, 1.2f,  0.35f));
-        fx->SetConstantForce(spark ? Vector3(0.0f, -14.0f, 0.0f) : Vector3(0.0f, 1.8f, 0.0f));
-        fx->SetDampingForce(spark ? 0.5f : 1.5f);
-        fx->SetMinEmissionRate(rate * 0.8f);
-        fx->SetMaxEmissionRate(rate);
-        fx->SetMinTimeToLive(ttl * 0.6f);
-        fx->SetMaxTimeToLive(ttl);
-        fx->SetMinVelocity(spark ? 5.0f : 1.2f);
-        fx->SetMaxVelocity(spark ? 11.0f : 2.8f);
-        fx->SetMinParticleSize(Vector2(sizeMin, sizeMin));
-        fx->SetMaxParticleSize(Vector2(sizeMax, sizeMax));
-        fx->SetSizeMul(spark ? 0.6f : 1.4f);
-        fx->AddColorFrame(ColorFrame(spark ? Color(1.0f, 0.85f, 0.35f, 1.0f) : Color(0.7f, 0.7f, 0.7f, 0.45f), 0.0f));
-        fx->AddColorFrame(ColorFrame(spark ? Color(1.0f, 0.35f, 0.05f, 0.0f) : Color(0.25f, 0.25f, 0.25f, 0.0f), ttl));
-        return fx;
+        SharedPtr<ParticleEffect> effect(new ParticleEffect(context_));
+        effect->SetMaterial(material);
+        effect->SetNumParticles((unsigned)Max(1, maxParticles));
+        effect->SetEmitterType(EMITTER_BOX);
+        effect->SetEmitterSize(Vector3(0.25f, 0.25f, 0.25f));
+        effect->SetMinDirection(Vector3(-20.0f, 45.0f, -20.0f));
+        effect->SetMaxDirection(Vector3(20.0f, 90.0f, 20.0f));
+        effect->SetConstantForce(additive ? Vector3(0.0f, -42.0f, 0.0f)
+                                          : Vector3(0.0f, -18.0f, 0.0f));
+        effect->SetDampingForce(0.25f);
+        effect->SetMinEmissionRate(Max(1.0f, emissionRate * 0.70f));
+        effect->SetMaxEmissionRate(Max(1.0f, emissionRate * 1.30f));
+        effect->SetMinParticleSize(Vector2(minSize, minSize));
+        effect->SetMaxParticleSize(Vector2(maxSize, maxSize));
+        effect->SetMinTimeToLive(Max(0.05f, ttl * 0.55f));
+        effect->SetMaxTimeToLive(Max(0.10f, ttl));
+        effect->SetMinVelocity(additive ? 2.0f : 0.8f);
+        effect->SetMaxVelocity(additive ? 6.0f : 3.0f);
+        effect->SetMinRotation(-180.0f);
+        effect->SetMaxRotation(180.0f);
+        effect->SetMinRotationSpeed(-90.0f);
+        effect->SetMaxRotationSpeed(90.0f);
+        effect->SetSizeMul(0.72f);
+        effect->SetNumColorFrames(2);
+        effect->SetColorFrame(0, ColorFrame(additive ? Color(1.0f, 0.82f, 0.40f, 1.0f)
+                                                       : Color(0.82f, 0.90f, 1.0f, 0.55f), 0.0f));
+        effect->SetColorFrame(1, ColorFrame(additive ? Color(1.0f, 0.18f, 0.04f, 0.0f)
+                                                       : Color(0.35f, 0.45f, 0.62f, 0.0f), 1.0f));
+        return effect;
     }
 
 
@@ -2581,19 +2691,40 @@ private:
         {
             SharedPtr<Material> warmGlow = MakeHDRGlow(Color(2.5f, 1.45f, 0.38f, 1.0f));
             SharedPtr<Material> frostWin = MakeHDRGlow(Color(0.85f, 1.45f, 1.95f, 1.0f));
-            Material* woodMat = hdCrate_ ? hdCrate_ : fallbackMat_;
-            Material* pipeMat = hdMetal_ ? hdMetal_ : metalMaterial_;
+            Material* woodMat    = hdBanyaLog_ ? hdBanyaLog_ : (hdCrate_ ? hdCrate_ : fallbackMat_);
+            Material* porchMat   = hdCrate_ ? hdCrate_ : woodMat;
+            Material* pipeMat    = hdMetal_ ? hdMetal_ : metalMaterial_;
+            Material* roosterMat = hdBanyaRooster_ ? hdBanyaRooster_ : (hdFeather_ ? hdFeather_ : woodMat);
+            SharedPtr<Material> towelMat  = MakePBR(Color(246, 240, 224), 0.85f, 0.0f);
+            SharedPtr<Material> combMat   = MakePBR(Color(225, 48, 36), 0.42f, 0.0f);
+            SharedPtr<Material> beakMat   = MakePBR(Color(250, 178, 38), 0.35f, 0.0f);
             Vector3 bp(-28.0f, 0.0f, -34.0f);
             Node* banya = scene_->CreateChild("BanyaCabin");
             banya->SetPosition(bp);
-            // Бревенчатый сруб + двускатная крыша + крыльцо + печная труба
+            // Бревенчатый сруб (BanyaLog 4K PBR) + двускатная крыша + крыльцо + печная труба
             box(banya, Vector3(0.0f, 1.75f, 0.0f),  Vector3(6.8f, 3.5f, 5.8f), woodMat);
             box(banya, Vector3(0.0f, 3.85f, 0.0f),  Vector3(7.4f, 0.65f, 6.4f), woodMat);
             box(banya, Vector3(0.0f, 4.35f, 0.0f),  Vector3(5.2f, 0.55f, 6.2f), woodMat);
-            box(banya, Vector3(0.0f, 0.12f, 3.55f), Vector3(3.4f, 0.24f, 1.5f), woodMat);
+            box(banya, Vector3(0.0f, 0.12f, 3.55f), Vector3(3.4f, 0.24f, 1.5f), porchMat);
             // Светящийся тёплый дверной проём (+Z к центру арены) и запотевшее окошко
             box(banya, Vector3(0.0f, 1.25f, 2.93f), Vector3(1.45f, 2.35f, 0.12f), warmGlow.Get());
             box(banya, Vector3(2.05f, 1.95f, 2.93f), Vector3(1.15f, 0.95f, 0.12f), frostWin.Get());
+            // Лавочка и 3D-Кочет Смотрящего на крыльце в банном оперении (BanyaRooster 4K PBR)
+            box(banya, Vector3(2.25f, 0.42f, 3.45f), Vector3(1.65f, 0.22f, 0.78f), porchMat);
+            auto part = [&](const Vector3& pos, const Vector3& scale, Model* m, Material* mat) {
+                Node* pn = banya->CreateChild("BanyaRoosterPart");
+                pn->SetPosition(pos);
+                pn->SetScale(scale);
+                StaticModel* sm = pn->CreateComponent<StaticModel>();
+                sm->SetModel(m ? m : boxModel_);
+                sm->SetMaterial(mat ? mat : fallbackMat_);
+                sm->SetCastShadows(true);
+            };
+            part(Vector3(2.25f, 1.05f, 3.45f), Vector3(0.88f, 0.80f, 0.94f), sphereModel_, roosterMat);
+            part(Vector3(2.25f, 0.84f, 3.45f), Vector3(0.90f, 0.36f, 0.92f), cylModel_,    towelMat.Get());
+            part(Vector3(2.25f, 1.60f, 3.74f), Vector3(0.50f, 0.48f, 0.50f), sphereModel_, roosterMat);
+            part(Vector3(2.25f, 1.94f, 3.76f), Vector3(0.14f, 0.22f, 0.30f), boxModel_,    combMat.Get());
+            part(Vector3(2.25f, 1.56f, 4.06f), Vector3(0.12f, 0.10f, 0.22f), boxModel_,    beakMat.Get());
             // Стальная труба печи-каменки
             Node* chim = banya->CreateChild("BanyaChimney");
             chim->SetPosition(Vector3(-2.1f, 5.2f, -1.2f));
@@ -4682,10 +4813,6 @@ private:
         }
         pendingRemoves_ = alive;
 
-        if (colliderGarbage_ > 64 ||
-            (colliderGarbage_ > 0 && colliderGarbage_ * 2 >= (int)colliders_.Size()))
-            CompactColliders();
-
         auto* input = GetSubsystem<Input>();
 
         // Таймеры способностей 4K Ultra & Cyber Overload
@@ -4836,7 +4963,15 @@ private:
     }
     
     void HandlePostUpdate(StringHash eventType, VariantMap& eventData) {
-        (void)eventType; (void)eventData;
+        using namespace PostUpdate;
+        (void)eventType;
+        (void)eventData;
+        // Scene/Octree уже закончили кадр: безопасно чистим узлы, удалённые
+        // эффектами, и только теперь компактифицируем Lite-коллайдеры.
+        PruneTransientEffectsAfterSceneUpdate();
+        if (colliderGarbage_ > 64 ||
+            (colliderGarbage_ > 0 && colliderGarbage_ * 2 >= (int)colliders_.Size()))
+            CompactColliders();
     }
     
     void HandleMouseMove(StringHash eventType, VariantMap& eventData) {
@@ -5245,6 +5380,10 @@ private:
         tg.pos_ = start;
         tg.vel_ = dir * 19.5f + Vector3(0.0f, 4.4f, 0.0f);
         tg.fuse_ = 1.40f;
+        if (thrownGrenades_.Size() >= MAX_THROWN_GRENADES) {
+            if (thrownGrenades_[0].node_) thrownGrenades_[0].node_->Remove();
+            thrownGrenades_.Erase(0);
+        }
         thrownGrenades_.Push(tg);
     }
 
@@ -5356,6 +5495,10 @@ private:
         td.pos_ = pos;
         td.ttl_ = 24.0f;
         td.fireTimer_ = 0.20f;
+        if (turrets_.Size() >= MAX_TURRETS) {
+            if (turrets_[0].node_) turrets_[0].node_->Remove();
+            turrets_.Erase(0);
+        }
         turrets_.Push(td);
 
         if (turretDeploySound_) PlaySfx3D(pos, turretDeploySound_, 0.95f);
@@ -5603,6 +5746,11 @@ private:
         rm->SetModel(cylModel_ ? cylModel_ : sphereModel_);
         rm->SetMaterial(MakeHDRGlow(Color(1.0f, 0.84f, 0.25f, 0.9f), 2.8f).Get());
         rm->SetCastShadows(false);
+        if (orbitalStrikes_.Size() >= MAX_ORBITAL_STRIKES) {
+            if (orbitalStrikes_[0].beamNode_) orbitalStrikes_[0].beamNode_->Remove();
+            if (orbitalStrikes_[0].ringNode_) orbitalStrikes_[0].ringNode_->Remove();
+            orbitalStrikes_.Erase(0);
+        }
         orbitalStrikes_.Push(fx);
 
         if (soundSource_ && orbitalSound_) {
@@ -6074,7 +6222,9 @@ private:
         
         PlayMuzzleFlash();
         PlayShootSound();
-        if (currentWeapon_ != W_RAILGUN && currentWeapon_ != W_PLASMA) SpawnShellCasing();
+        const bool isEnergyWeapon = currentWeapon_ == W_RAILGUN || currentWeapon_ == W_PLASMA ||
+                                     currentWeapon_ == W_ARC || currentWeapon_ == W_CRYO || currentWeapon_ == W_SAW;
+        if (!isEnergyWeapon) SpawnShellCasing();
         
         const WeaponDef& wdef = WEAPON_DEFS[currentWeapon_];
         float banyaDmgMul = (banyaBuffTier_ >= 2) ? 1.15f : 1.0f;
@@ -6119,16 +6269,34 @@ private:
         if (!arcCoreMat_) arcCoreMat_ = MakeHDRGlow(Color(2.8f, 1.55f, 0.16f, 1.0f));
         CreateShockwave(hitPoint, arcCoreMat_.Get(), 0.34f);
         int chained = 0;
-        for (unsigned i = 0; i < (unsigned)enemies_.Size() && chained < 3; ++i) {
-            EnemyData& enemy = enemies_[i];
-            if (!enemy.alive_ || !enemy.node_ || (hitTag == Collision::ENEMY && enemy.node_ == static_cast<Node*>(hitPtr))) continue;
+        Vector<unsigned> chainedIndices;
+        // Не порядок массива, а ближайшие цели: цепь должна быть предсказуемой
+        // при разных порядках спавна волн и не «пролетать» мимо ближайшей курицы.
+        while (chained < 3) {
+            int bestIndex = -1;
+            float bestDist = 7.5f;
+            for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
+                EnemyData& candidate = enemies_[i];
+                if (!candidate.alive_ || !candidate.node_ ||
+                    (hitTag == Collision::ENEMY && candidate.node_ == static_cast<Node*>(hitPtr))) continue;
+                bool alreadyChained = false;
+                for (unsigned ci = 0; ci < (unsigned)chainedIndices.Size(); ++ci)
+                    if (chainedIndices[ci] == i) { alreadyChained = true; break; }
+                if (alreadyChained) continue;
+                float candidateDist = (candidate.node_->GetPosition() + Vector3(0, 0.85f, 0) - hitPoint).Length();
+                if (candidateDist <= bestDist) {
+                    bestDist = candidateDist;
+                    bestIndex = (int)i;
+                }
+            }
+            if (bestIndex < 0) break;
+            EnemyData& enemy = enemies_[(unsigned)bestIndex];
             Vector3 enemyPoint = enemy.node_->GetPosition() + Vector3(0, 0.85f, 0);
-            float dist = (enemyPoint - hitPoint).Length();
-            if (dist > 7.5f) continue;
-            float chainDamage = damage * (0.58f - 0.08f * (float)chained);
+            float chainDamage = damage * (0.54f - 0.09f * (float)chained);
             SpawnTracer(hitPoint, enemyPoint);
             DamageEnemy(enemy, chainDamage);
             SpawnFloatingDamage(enemyPoint, (int)chainDamage, false);
+            chainedIndices.Push((unsigned)bestIndex);
             ++chained;
         }
         if (chained > 0) {
@@ -6226,6 +6394,10 @@ private:
         pb.damage_ = damage;
         pb.ttl_ = 2.4f;
         pb.bouncesLeft_ = 1;
+        if (playerPlasmaBolts_.Size() >= MAX_PLASMA_BOLTS) {
+            if (playerPlasmaBolts_[0].node_) playerPlasmaBolts_[0].node_->Remove();
+            playerPlasmaBolts_.Erase(0);
+        }
         playerPlasmaBolts_.Push(pb);
     }
 
@@ -6290,10 +6462,13 @@ private:
         Vector3 shootDirection = spreadRot * Vector3(0.0f, 0.0f, 1.0f);
         
         Vector3 startPos = cameraNode_->GetPosition();
-        Vector3 endPos = startPos + shootDirection * GameConstants::BULLET_RANGE;
+        // ION SAW — ближний энергетический диск, а не универсальная винтовка:
+        // после 36 м он затухает и больше не достаёт дальние цели.
+        const float rayRange = (currentWeapon_ == W_SAW) ? 36.0f : GameConstants::BULLET_RANGE;
+        Vector3 endPos = startPos + shootDirection * rayRange;
         
         float hitDist = 0.0f; Vector3 hitPosition; Vector3 hitNormal; int hitTag = -1; void* hitPtr = nullptr;
-        bool anyHit = RaycastLite(startPos, shootDirection, GameConstants::BULLET_RANGE,
+        bool anyHit = RaycastLite(startPos, shootDirection, rayRange,
                                   Collision::STATIC_MASK | Collision::TARGET_MASK | Collision::ENEMY_MASK | Collision::BARREL_MASK | Collision::MOVING_TARGET_MASK, hitDist, hitPosition, &hitTag, &hitPtr, &hitNormal);
         if (anyHit) {
             SpawnTracer(startPos + shootDirection * 0.6f, hitPosition);
@@ -6306,11 +6481,18 @@ private:
                 AddCameraShake(0.12f);
                 ShowHitMarker(false);
             } else {
-                CheckTargetHit(hitTag, hitPtr, hitPosition, damage);
+                float appliedDamage = damage;
+                if (currentWeapon_ == W_SAW) {
+                    float distanceT = Clamp(hitDist / rayRange, 0.0f, 1.0f);
+                    appliedDamage *= Lerp(1.0f, 0.42f, distanceT);
+                }
+                CheckTargetHit(hitTag, hitPtr, hitPosition, appliedDamage);
             }
         } else {
-            SpawnTracer(startPos + shootDirection * 0.6f, startPos + shootDirection * 55.0f);
-            CreateImpactEffect(endPos, Vector3(0, 1, 0));
+            const float tracerRange = Min(rayRange, 55.0f);
+            SpawnTracer(startPos + shootDirection * 0.6f, startPos + shootDirection * tracerRange);
+            // Промах не должен оставлять пулевую дыру в воздухе.
+            CreateImpactEffect(endPos, Vector3::ZERO);
         }
         return anyHit;
     }
@@ -6390,6 +6572,12 @@ private:
                         if (killed) PushKillFeed("[CRIT] КРИТИЧЕСКИЙ ХЭДШОТ!");
                     }
                     DamageEnemy(e, finalDmg, headshot);
+                    if (currentWeapon_ == W_CRYO && e.alive_) {
+                        // Попадание крио-лучом режет скорость, но не стакается
+                        // бесконечно: свежий импульс только продлевает эффект.
+                        e.cryoSlowTimer_ = Max(e.cryoSlowTimer_, 1.35f);
+                        e.cryoSlowMul_ = 0.52f;
+                    }
                     break;
                 }
             }
@@ -6418,8 +6606,18 @@ private:
 
     void DestroyTarget(TargetData& target) {
         target.isActive_ = false;
-        RemoveColliderLite(target.colliderIdx_); // мишень больше не участвует в рейкастах
+        const int removedCollider = target.colliderIdx_;
+        RemoveColliderLite(removedCollider); // мишень больше не участвует в рейкастах
         target.colliderIdx_ = -1;
+        // Движущаяся мишень держит SharedPtr в отдельном Lite-реестре.
+        // Убираем запись сразу после уничтожения, а не оставляем «призрак»
+        // до следующего полного ResetRangeTargets().
+        for (unsigned mi = movingTargetsLite_.Size(); mi-- > 0; ) {
+            if (movingTargetsLite_[mi].colliderIdx_ == removedCollider) {
+                movingTargetsLite_.Erase(mi);
+                break;
+            }
+        }
         
         // Комбо-очки (серия убийств подряд)
         AddScoreWithCombo(target.scoreValue_);
@@ -6508,10 +6706,11 @@ private:
     }
 
     void CreateImpactEffect(const Vector3& position, const Vector3& normal) {
+        const bool hasSurface = normal.LengthSquared() > 0.001f;
         if (haveParticles_ && sparkEffect_) {
             Node* effectNode = scene_->CreateChild("ImpactEffect");
             effectNode->SetPosition(position);
-            effectNode->LookAt(position + normal);
+            effectNode->LookAt(position + (hasSurface ? normal : Vector3::UP));
 
             ParticleEmitter* emitter = effectNode->CreateComponent<ParticleEmitter>();
             emitter->SetEffect(sparkEffect_);
@@ -6519,8 +6718,8 @@ private:
             QueuePendingRemove(effectNode, 1.0f);
         }
 
-        // Отверстие от пули на поверхности (видно, куда именно попал)
-        CreateBulletDecal(position, normal);
+        // Отверстие от пули только на реальной поверхности, не в точке промаха.
+        if (hasSurface) CreateBulletDecal(position, normal);
     }
     
     void CreateExplosionEffect(const Vector3& position) {
@@ -7477,13 +7676,20 @@ private:
             if (!dir.Empty() && !fs->DirExists(dir)) fs->CreateDir(dir);
             String tmp = dst + ".tmp";
             if (!xml->SaveFile(tmp)) return false;
-            if (fs->FileExists(dst)) fs->Delete(dst);
+            // На POSIX rename() заменяет dst атомарно. Не удаляем старый
+            // файл заранее: при сбое записи пользователь должен сохранить
+            // предыдущие рабочие настройки.
             if (fs->Rename(tmp, dst)) return true;
-            // Некоторые файловые системы не разрешают rename поверх файла.
+            // Windows MoveFile не заменяет существующий dst. Только после
+            // неудачного атомарного пути используем совместимый fallback;
+            // если удаление не удалось, старый файл остаётся нетронутым.
+            if (fs->FileExists(dst) && fs->Delete(dst) && fs->Rename(tmp, dst)) return true;
+            // Крайний fallback для файловых систем без rename-overwrite.
             if (xml->SaveFile(dst)) {
                 if (fs->FileExists(tmp)) fs->Delete(tmp);
                 return true;
             }
+            if (fs->FileExists(tmp)) fs->Delete(tmp);
             return false;
         };
 
@@ -8044,6 +8250,7 @@ private:
     // =========================================================================
 
     void ClearEnemies() {
+        ClearTransientEffects();
         for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             RemoveColliderLite(enemies_[i].colliderIdx_);
             if (enemies_[i].node_) enemies_[i].node_->Remove();
@@ -8387,6 +8594,10 @@ private:
         pd.vel_ = dir * 26.0f; // скорость заметно ниже пули — игрок успевает увернуться
         pd.ttl_ = 3.0f;
         pd.damage_ = damage;
+        if (enemyProjectiles_.Size() >= MAX_ENEMY_PROJECTILES) {
+            if (enemyProjectiles_[0].node_) enemyProjectiles_[0].node_->Remove();
+            enemyProjectiles_.Erase(0);
+        }
         enemyProjectiles_.Push(pd);
 
         // Звук выстрела робота: играем 3D-источником. Раньше здесь вызывался PlayHitSound(),
@@ -8655,8 +8866,10 @@ private:
             Vector3 move = Vector3::ZERO;
             e.attackTimer_ -= dt;
             e.strafePhase_ += dt * 2.2f;
+            if (e.cryoSlowTimer_ > 0.0f) e.cryoSlowTimer_ = Max(0.0f, e.cryoSlowTimer_ - dt);
             const float mutSpd = Cyber::GetMutatorInfo(activeMutator_).speedMul;
-            const float effSpd = e.speed_ * mutSpd * (e.enraged_ ? 1.32f : 1.0f);
+            const float cryoMul = e.cryoSlowTimer_ > 0.0f ? e.cryoSlowMul_ : 1.0f;
+            const float effSpd = e.speed_ * mutSpd * cryoMul * (e.enraged_ ? 1.32f : 1.0f);
 
             switch (e.type_) {
             case E_SHOOTER: {
@@ -8725,7 +8938,7 @@ private:
             case E_KAMIKAZE: {
                 // Цыплёнок-камикадзе: несётся зигзагом с тикающей C4; вблизи взрывается сам!
                 Vector3 strafe(-toDir.z_, 0, toDir.x_);
-                move = (toDir + strafe * 0.50f * sinf(e.strafePhase_ * 1.9f)) * e.speed_;
+                move = (toDir + strafe * 0.50f * sinf(e.strafePhase_ * 1.9f)) * effSpd;
                 e.burstTimer_ -= dt;
                 float beepPeriod = Clamp(dist * 0.045f, 0.11f, 0.55f);
                 if (dist < 16.0f && e.burstTimer_ <= 0.0f) {
@@ -8749,9 +8962,9 @@ private:
             case E_DRONE: {
                 // Реактивная куро-валькирия: парит над укрытиями (y ~ 3.2..4.1 м) и ведёт огонь сверху!
                 Vector3 strafe(-toDir.z_, 0, toDir.x_);
-                if (dist > 15.0f)      move = toDir * e.speed_;
-                else if (dist < 8.5f)  move = -toDir * e.speed_ * 0.8f;
-                else                   move = strafe * e.speed_ * 0.9f * cosf(e.strafePhase_ * 0.7f);
+                if (dist > 15.0f)      move = toDir * effSpd;
+                else if (dist < 8.5f)  move = -toDir * effSpd * 0.8f;
+                else                   move = strafe * effSpd * 0.9f * cosf(e.strafePhase_ * 0.7f);
                 if (e.attackTimer_ <= 0.0f && dist < 26.0f) {
                     e.attackTimer_ = 1.95f + (float)(rand() % 70) / 100.0f;
                     e.recoilKick_ = 0.16f;
@@ -8770,10 +8983,10 @@ private:
                         Vector3 slide = outNormal.CrossProduct(Vector3::UP);
                         slide.y_ = 0;
                         if (slide.LengthSquared() > 0.001f)
-                            move = slide.Normalized() * e.speed_ * (sinf(e.strafePhase_) > 0 ? 1.0f : -1.0f);
+                            move = slide.Normalized() * effSpd * (sinf(e.strafePhase_) > 0 ? 1.0f : -1.0f);
                     }
                 }
-                if (!blocked) move = toDir * e.speed_;
+                if (!blocked) move = toDir * effSpd;
                 if (dist < 1.4f && e.attackTimer_ <= 0.0f) {
                     e.attackTimer_ = 1.0f;
                     e.recoilKick_ = 0.2f;
@@ -9442,15 +9655,24 @@ private:
         banyaSceneBox_->SetSize(scW, scH);
         banyaSceneBox_->SetClipChildren(true);
 
-        // Бревенчатая стена
+        // Бревенчатая стена (с 4K PBR текстурой сруба, если загружена)
+        ResourceCache* cache = GetSubsystem<ResourceCache>();
+        Texture2D* banyaWallTex = cache ? cache->GetResource<Texture2D>("Textures/BanyaLogDiffuse.png") : nullptr;
+        Texture2D* banyaRoosterTex = cache ? cache->GetResource<Texture2D>("Textures/BanyaRoosterDiffuse.png") : nullptr;
         BorderImage* wall = banyaSceneBox_->CreateChild<BorderImage>();
         wall->SetSize(scW, scH);
-        wall->SetColor(Color(0.36f, 0.22f, 0.12f, 1.0f));
-        for (int i = 0; i < 12; ++i) {
-            BorderImage* plank = banyaSceneBox_->CreateChild<BorderImage>();
-            plank->SetPosition((scW * i) / 12, 0);
-            plank->SetSize(Max(2, S(2)), scH);
-            plank->SetColor(Color(0.16f, 0.09f, 0.04f, 0.52f));
+        if (banyaWallTex) {
+            wall->SetTexture(banyaWallTex);
+            wall->SetFullImageRect();
+            wall->SetColor(Color(0.86f, 0.78f, 0.70f, 1.0f));
+        } else {
+            wall->SetColor(Color(0.36f, 0.22f, 0.12f, 1.0f));
+            for (int i = 0; i < 12; ++i) {
+                BorderImage* plank = banyaSceneBox_->CreateChild<BorderImage>();
+                plank->SetPosition((scW * i) / 12, 0);
+                plank->SetSize(Max(2, S(2)), scH);
+                plank->SetColor(Color(0.16f, 0.09f, 0.04f, 0.52f));
+            }
         }
         // Потолочная балка и пол
         BorderImage* ceil = banyaSceneBox_->CreateChild<BorderImage>();
@@ -9520,10 +9742,14 @@ private:
         banyaVenikVis_->SetSize((int)(scW * 0.05f), (int)(scH * 0.14f));
         banyaVenikVis_->SetColor(Color(0.38f, 0.56f, 0.26f, 1.0f));
 
-        // Кочет в полотенце на полке
+        // Кочет в полотенце на полке (с 4K PBR оперением, если текстура загружена)
         banyaRoosterBody_ = banyaSceneBox_->CreateChild<BorderImage>();
         banyaRoosterBody_->SetPosition((int)(scW * 0.61f), (int)(scH * 0.36f));
         banyaRoosterBody_->SetSize((int)(scW * 0.11f), (int)(scH * 0.18f));
+        if (banyaRoosterTex) {
+            banyaRoosterBody_->SetTexture(banyaRoosterTex);
+            banyaRoosterBody_->SetFullImageRect();
+        }
         banyaRoosterBody_->SetColor(Color(0.96f, 0.91f, 0.82f, 1.0f));
 
         BorderImage* towel = banyaRoosterBody_->CreateChild<BorderImage>();
