@@ -362,7 +362,7 @@ if [ -z "$URHO_INC" ] || [ -z "$URHO_LIBDIR" ]; then
     CMAKE_EXTRA_ARGS=(
         "-DLIB_SUFFIX="
         "-DURHO3D_USE_LIB_DEB=1"
-        "-DCMAKE_C_FLAGS=-Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types"
+        "-DCMAKE_C_FLAGS=-std=gnu11 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types"
         "-DCMAKE_CXX_FLAGS=-include cstdint -Wno-error"
     )
     # CMake >= 3.27 / 4.0 отклоняет старые ThirdParty cmake_minimum_required без policy minimum

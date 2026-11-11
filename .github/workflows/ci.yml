@@ -103,4 +103,9 @@ jobs:
 
       - name: Build full package via Nix (urho3d + MyShooter + ctest)
         run: |
-          nix build .#default --no-link -L --no-write-lock-file
+          set -o pipefail
+          if ! nix build .#default --no-link -L --no-write-lock-file 2>&1 | tee /tmp/nix_build.log; then
+            TAIL="$(tail -n 60 /tmp/nix_build.log | python3 -c 'import sys; s=sys.stdin.read(); print(s.replace("%","%25").replace("\r","").replace("\n","%0A"))')"
+            echo "::error title=Nix build failure::$TAIL"
+            exit 1
+          fi

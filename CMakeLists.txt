@@ -118,7 +118,7 @@ if(BUILD_GAME)
         set(_SAVED_C_FLAGS "${CMAKE_C_FLAGS}")
         set(_SAVED_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
         if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
-            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types")
+            set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -std=gnu11 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types")
             set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -include cstdint -Wno-error")
         endif()
 

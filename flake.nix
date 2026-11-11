@@ -121,9 +121,10 @@
             ];
 
             # Флаги с пробелами передаём через cmakeFlagsArray, чтобы stdenv не разорвал их по словам
+            # -std=gnu11 спасает C-код ThirdParty от C23 в GCC 15+, -include cstdint — от GCC 13+
             preConfigure = ''
               cmakeFlagsArray+=(
-                "-DCMAKE_C_FLAGS=-Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types"
+                "-DCMAKE_C_FLAGS=-std=gnu11 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types"
                 "-DCMAKE_CXX_FLAGS=-include cstdint -Wno-error"
               )
             '';
