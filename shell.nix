@@ -16,6 +16,9 @@ let
     (pkgs.libXcursor or pkgs.xorg.libXcursor)
     (pkgs.libXinerama or pkgs.xorg.libXinerama)
     (pkgs.libXxf86vm or pkgs.xorg.libXxf86vm)
+    (pkgs.libXrender or pkgs.xorg.libXrender)
+    (pkgs.libXfixes or pkgs.xorg.libXfixes)
+    (pkgs.libxcb or pkgs.xorg.libxcb)
   ];
 
   linuxLibs = lib.optionals stdenv.isLinux ([

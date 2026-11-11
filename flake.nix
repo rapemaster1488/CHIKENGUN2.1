@@ -30,15 +30,26 @@
           inherit (pkgs) lib stdenv;
 
           # Поддержка как современных (top-level libX11), так и старых (xorg.libX11) версий nixpkgs
-          x11Libs = lib.optionals stdenv.isLinux [
-            (pkgs.libX11 or pkgs.xorg.libX11)
-            (pkgs.libXext or pkgs.xorg.libXext)
-            (pkgs.libXrandr or pkgs.xorg.libXrandr)
-            (pkgs.libXi or pkgs.xorg.libXi)
-            (pkgs.libXcursor or pkgs.xorg.libXcursor)
-            (pkgs.libXinerama or pkgs.xorg.libXinerama)
-            (pkgs.libXxf86vm or pkgs.xorg.libXxf86vm)
-          ];
+          optPkg = names:
+            let
+              found = lib.findFirst (n: pkgs ? ${n} || (pkgs ? xorg && pkgs.xorg ? ${n})) null names;
+            in
+            if found == null then [ ]
+            else [ (if pkgs ? ${found} then pkgs.${found} else pkgs.xorg.${found}) ];
+
+          x11Libs = lib.optionals stdenv.isLinux (
+            optPkg [ "libX11" ]
+            ++ optPkg [ "libXext" ]
+            ++ optPkg [ "libXrandr" ]
+            ++ optPkg [ "libXi" ]
+            ++ optPkg [ "libXcursor" ]
+            ++ optPkg [ "libXinerama" ]
+            ++ optPkg [ "libXxf86vm" ]
+            ++ optPkg [ "libXrender" ]
+            ++ optPkg [ "libXfixes" ]
+            ++ optPkg [ "libXScrnSaver" ]
+            ++ optPkg [ "libxcb" ]
+          );
 
           linuxGlLibs = lib.optionals stdenv.isLinux [
             (pkgs.libGL or pkgs.mesa)
@@ -269,6 +280,9 @@
             (pkgs.libXcursor or pkgs.xorg.libXcursor)
             (pkgs.libXinerama or pkgs.xorg.libXinerama)
             (pkgs.libXxf86vm or pkgs.xorg.libXxf86vm)
+            (pkgs.libXrender or pkgs.xorg.libXrender)
+            (pkgs.libXfixes or pkgs.xorg.libXfixes)
+            (pkgs.libxcb or pkgs.xorg.libxcb)
           ];
           runtimeLibs = [ sdlPkg ] ++ lib.optionals stdenv.isLinux ([
             (pkgs.libGL or pkgs.mesa)

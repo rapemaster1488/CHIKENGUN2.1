@@ -173,26 +173,26 @@ check_missing_tools() {
 install_cmd_for_mgr() {
     case "$1" in
         apt)
-            echo "sudo apt-get update && sudo apt-get install -y build-essential cmake git pkg-config python3 libsdl2-dev libgl-dev libglu1-mesa-dev libx11-dev libxrandr-dev libxi-dev libxext-dev libasound2-dev libpulse-dev libudev-dev"
+            echo "sudo apt-get update && sudo apt-get install -y build-essential cmake git pkg-config python3 libsdl2-dev libgl-dev libglu1-mesa-dev libx11-dev libxrandr-dev libxi-dev libxext-dev libxcb1-dev libasound2-dev libpulse-dev libudev-dev"
             ;;
         dnf)
-            echo "sudo dnf install -y gcc-c++ cmake make git pkgconf-pkg-config python3 SDL2-devel mesa-libGL-devel mesa-libGLU-devel libX11-devel libXrandr-devel libXi-devel libXext-devel alsa-lib-devel pulseaudio-libs-devel systemd-devel"
+            echo "sudo dnf install -y gcc-c++ cmake make git pkgconf-pkg-config python3 SDL2-devel mesa-libGL-devel mesa-libGLU-devel libX11-devel libXrandr-devel libXi-devel libXext-devel libxcb-devel alsa-lib-devel pulseaudio-libs-devel systemd-devel"
             ;;
         pacman)
             if [ "$IS_WIN" -eq 1 ]; then
                 echo "pacman -S --needed --noconfirm mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja mingw-w64-x86_64-SDL2 mingw-w64-x86_64-pkgconf git python3"
             else
-                echo "sudo pacman -S --needed --noconfirm base-devel cmake git pkgconf python sdl2 mesa glu libx11 libxrandr libxi libxext alsa-lib libpulse"
+                echo "sudo pacman -S --needed --noconfirm base-devel cmake git pkgconf python sdl2 mesa glu libx11 libxrandr libxi libxext libxcb alsa-lib libpulse"
             fi
             ;;
         zypper)
-            echo "sudo zypper install -y gcc-c++ cmake make git pkg-config python3 libSDL2-devel Mesa-libGL-devel Mesa-libGLU-devel libX11-devel libXrandr-devel libXi-devel libXext-devel alsa-devel libpulse-devel systemd-devel"
+            echo "sudo zypper install -y gcc-c++ cmake make git pkg-config python3 libSDL2-devel Mesa-libGL-devel Mesa-libGLU-devel libX11-devel libXrandr-devel libXi-devel libXext-devel libxcb-devel alsa-devel libpulse-devel systemd-devel"
             ;;
         apk)
-            echo "sudo apk add --no-cache build-base cmake git pkgconf python3 sdl2-dev mesa-dev glu-dev libx11-dev libxrandr-dev libxi-dev libxext-dev alsa-lib-dev pulseaudio-dev eudev-dev linux-headers libexecinfo-dev"
+            echo "sudo apk add --no-cache build-base cmake git pkgconf python3 sdl2-dev mesa-dev glu-dev libx11-dev libxrandr-dev libxi-dev libxext-dev libxcb-dev alsa-lib-dev pulseaudio-dev eudev-dev linux-headers libexecinfo-dev"
             ;;
         xbps)
-            echo "sudo xbps-install -Sy base-devel cmake git pkg-config python3 SDL2-devel MesaLib-devel glu-devel libX11-devel libXrandr-devel libXi-devel libXext-devel alsa-lib-devel pulseaudio-devel eudev-libudev-devel"
+            echo "sudo xbps-install -Sy base-devel cmake git pkg-config python3 SDL2-devel MesaLib-devel glu-devel libX11-devel libXrandr-devel libXi-devel libXext-devel libxcb-devel alsa-lib-devel pulseaudio-devel eudev-libudev-devel"
             ;;
         brew)
             echo "brew install cmake sdl2 python pkg-config"
