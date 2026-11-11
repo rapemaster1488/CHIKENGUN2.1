@@ -100,3 +100,7 @@ jobs:
             nix eval --raw ".#devShells.${sys}.default.drvPath" && echo ""
           done
           nix flake show --no-write-lock-file
+
+      - name: Build full package via Nix (urho3d + MyShooter + ctest)
+        run: |
+          nix build .#default --no-link -L --no-write-lock-file

@@ -71,6 +71,7 @@ if (-not $HasSdk -and -not $env:URHO3D_HOME) {
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5 `
         -DCMAKE_INSTALL_PREFIX="$LocalSdk" `
         -DLIB_SUFFIX="" `
+        -DURHO3D_USE_LIB_DEB=1 `
         -DURHO3D_LIB_TYPE=STATIC `
         -DURHO3D_OPENGL=ON `
         -DURHO3D_WIN32_CONSOLE=OFF `
