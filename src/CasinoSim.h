@@ -195,4 +195,36 @@ inline int SlotsPayout(int betAmount, int r0, int r1, int r2) {
     return std::max(0, betAmount) * SlotsMultiplier(r0, r1, r2);
 }
 
+// --- Настоящий порядок 37 секторов европейского 3D-колеса рулетки ---
+inline constexpr int kEuropeanWheelOrder[37] = {
+    0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10,
+    5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26
+};
+
+inline int WheelIndexForNumber(int number) {
+    for (int i = 0; i < 37; ++i) {
+        if (kEuropeanWheelOrder[i] == number) return i;
+    }
+    return 0;
+}
+
+inline float WheelSectorAngleDeg(int wheelIdx) {
+    int idx = ((wheelIdx % 37) + 37) % 37;
+    return static_cast<float>(idx) * (360.0f / 37.0f);
+}
+
+inline const char* RoflStatusTitle(int balance) {
+    if (balance <= 0)      return "Банкрот на бумаге (жмите +5000 ¤)";
+    if (balance < 500)     return "Карманник с одной фишкой";
+    if (balance < 2500)    return "Постоялец подпольного клуба";
+    if (balance < 10000)   return "Туз в фантиках";
+    if (balance < 50000)   return "Миллионер понарошку";
+    if (balance < 250000)  return "Магнат картонных слитков";
+    return "Верховный Шейх Рофл-Рояля";
+}
+
+inline const char* RoflDisclaimerShort() {
+    return "100% РОФЛ • ВСЁ ПОНАРОШКУ • БЕЗ РЕАЛЬНЫХ ДЕНЕГ, ПЛАТЕЖЕЙ И ВЫВОДА";
+}
+
 } // namespace Casino

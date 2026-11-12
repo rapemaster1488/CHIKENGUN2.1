@@ -48,7 +48,7 @@ $Python = if (Get-Command "python" -ErrorAction SilentlyContinue) { "python" }
           else { $null }
 
 if ($Python) {
-    if (-not (Test-Path "$Root\Data\Sounds\BanyaSteam.wav") -or -not (Test-Path "$Root\Data\Sounds\Shot_Railgun.wav")) {
+    if (-not (Test-Path "$Root\Data\Sounds\BanyaSteam.wav") -or -not (Test-Path "$Root\Data\Sounds\CasinoWheelSpin.wav") -or -not (Test-Path "$Root\Data\Sounds\Shot_Railgun.wav")) {
         Write-Host "[1/3] Генерация звуков (tools/gen_sounds.py)..."
         Invoke-Checked { & $Python "$Root\tools\gen_sounds.py" } "Sound generation failed"
     }
