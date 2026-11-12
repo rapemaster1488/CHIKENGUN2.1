@@ -262,7 +262,9 @@ find_urho3d() {
         "${URHO3D_HOME:-}/lib/pkgconfig" \
         "${URHO3D_HOME:-}/lib64/pkgconfig" \
         "$LOCAL_SDK/lib/pkgconfig" \
-        "$LOCAL_SDK/lib64/pkgconfig"; do
+        "$LOCAL_SDK/lib64/pkgconfig" \
+        "$HOME/urho3d-local/lib/pkgconfig" \
+        "$HOME/urho3d-build/out/lib/pkgconfig"; do
         [ -d "$pd" ] && pc_paths="${pc_paths:+$pc_paths:}$pd"
     done
     [ -n "$pc_paths" ] && export PKG_CONFIG_PATH="${pc_paths}${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
@@ -274,6 +276,7 @@ find_urho3d() {
         "$LOCAL_SDK/include"
         "$HOME/urho3d/build/include"
         "$HOME/urho3d_build/include"
+        "$HOME/urho3d-build/out/include"
         "$HOME/urho3d-local/include"
         "/opt/homebrew/include/Urho3D"
         "/opt/homebrew/include"
@@ -311,8 +314,13 @@ find_urho3d() {
         "$LOCAL_SDK/lib/Urho3D"
         "$LOCAL_SDK/lib64"
         "$LOCAL_SDK/lib64/Urho3D"
+        "$HOME/urho3d-build/out/lib"
+        "$HOME/urho3d-build/lib"
         "$HOME/urho3d/build/lib"
+        "$HOME/urho3d_build/out/lib"
         "$HOME/urho3d_build/lib"
+        "$HOME/urho3d-local/lib"
+        "$HOME/urho3d-local/lib64"
         "/opt/homebrew/lib"
         "/opt/homebrew/lib/Urho3D"
         "/usr/local/lib"
