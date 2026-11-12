@@ -1201,6 +1201,307 @@ PbrSet genBanyaRooster4K(int S) {
     return out;
 }
 
+// 10. BanyaPlank — распаренная липовая вагонка и доски полка с фасками и каплями влаги
+PbrSet genBanyaPlank4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    const int numPlanks = 6;
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        float plankPos = v * numPlanks;
+        int pIdx = static_cast<int>(std::floor(plankPos)) % numPlanks;
+        float py = plankPos - std::floor(plankPos);
+        float cy = py - 0.5f;
+        float edgeDist = std::fabs(cy) * 2.0f;
+
+        // Шпунтовая доска: глубокий аккуратный паз и фаска
+        float groove = 1.0f - smoothstep(0.84f, 0.96f, edgeDist);
+        float bevel  = 1.0f - smoothstep(0.76f, 0.89f, edgeDist);
+        float pRand  = hash01(pIdx, 5, numPlanks, 16, 1009u);
+
+        // Тёплый оттенок каждой планки липы/абаши (медовый -> кремово-липовый)
+        float toneShift = (pRand - 0.5f) * 0.14f;
+
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+            float uShift = std::fmod(u + pRand * 0.73f, 1.0f);
+
+            // Вертикальный стык досок (разбежка по длине)
+            float seamU = std::fmod(0.27f + pRand * 0.61f, 1.0f);
+            float duSeam = std::fabs(std::fmod(u - seamU + 1.5f, 1.0f) - 0.5f);
+            float endJoint = smoothstep(0.008f, 0.002f, duSeam);
+
+            // Шелковистая прямослойная липа + тонкие годовые кольца
+            float warp = tileFbmXY(uShift, v * 1.5f, 3, 12, 3, 1013u + static_cast<uint32_t>(pIdx) * 19u);
+            float ring = 0.5f + 0.5f * std::sin((cy * 5.5f + (warp - 0.5f) * 2.1f) * TAU + pRand * TAU);
+            ring = std::pow(ring, 0.65f);
+            float fiber = tileFbmXY(uShift, v, 10, 140, 3, 1019u);
+            float microPores = tileFbmXY(uShift, v, 36, 220, 2, 1021u);
+
+            // Мокрые пятна брызг воды и конденсата на полке (резко снижают roughness!)
+            float wetBlob = smoothstep(0.56f, 0.72f, tileWarpedFbm(u, v, 5, 4, 0.06f, 1031u));
+            float wetDroplet = smoothstep(0.68f, 0.82f, tileFbm(u, v, 24, 3, 1033u));
+            float wetMask = clamp01(wetBlob * 0.80f + wetDroplet * 0.35f);
+
+            float baseT = 0.64f + toneShift + (ring - 0.5f) * 0.13f + (fiber - 0.5f) * 0.07f;
+            baseT *= lerpf(1.0f, 0.72f, wetMask * 0.65f); // мокрое дерево темнее и глубже!
+            baseT *= lerpf(0.28f, 1.0f, groove) * (1.0f - endJoint * 0.68f);
+
+            float r = baseT * 1.08f;
+            float g = baseT * 0.84f;
+            float b = baseT * 0.56f;
+
+            float h = 0.25f + groove * 0.45f + bevel * 0.12f + ring * 0.04f + fiber * 0.03f - microPores * 0.02f - endJoint * 0.30f;
+            float rough = lerpf(0.60f - ring * 0.08f, 0.14f, wetMask);
+            rough = lerpf(0.92f, rough, groove);
+
+            hf[static_cast<size_t>(y) * S + x] = h;
+            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            out.diff[idx + 0] = toByte(r);
+            out.diff[idx + 1] = toByte(g);
+            out.diff[idx + 2] = toByte(b);
+            out.roughMetal[idx + 0] = toByte(clamp01(rough));
+            out.roughMetal[idx + 1] = toByte(0.0f);
+            out.roughMetal[idx + 2] = toByte(clamp01(0.45f + 0.55f * groove));
+        }
+    });
+    applyCavityAO(hf, S, 0.32f, out.diff);
+    heightToNormal(hf, S, 2.4f, out.norm);
+    return out;
+}
+
+// 11. BanyaStone — колотый банный габбро-диабаз и жадеит (натуральные сколы породы без «панцирной сетки»)
+PbrSet genBanyaStone4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+
+            // Органические деформации координат для рваных природных сколов породы
+            float wu = u + (tileFbm(u, v, 5, 4, 1103u) - 0.5f) * 0.14f;
+            float wv = v + (tileFbm(u + 0.37f, v + 0.21f, 5, 4, 1109u) - 0.5f) * 0.14f;
+            float w1_f1, w1_f2, w2_f1, w2_f2;
+            tileWorley2(wu, wv, 5,  1117u, w1_f1, w1_f2);
+            tileWorley2(wu + 0.19f, wv + 0.43f, 11, 1123u, w2_f1, w2_f2);
+
+            // Разновысотные сколотые плоскости (бесшовный перепад рельефа без чёрных обводок)
+            float bevel1 = clamp01((w1_f2 - w1_f1) * 3.8f);
+            float bevel2 = clamp01((w2_f2 - w2_f1) * 4.5f);
+            float ridge  = bevel1 * 0.65f + bevel2 * 0.35f;
+
+            float rockMacro = tileWarpedFbm(u, v, 6, 5, 0.11f, 1129u);
+            float rockDetail = tileFbm(u, v, 24, 4, 1141u);
+            float microGrain = tileGradNoise(u, v, 160, 1151u);
+
+            // Редкая природная трещина только по напряжённым участкам
+            float stressMask = smoothstep(0.58f, 0.80f, tileFbm(u, v, 4, 3, 1171u));
+            float rareCrack  = (1.0f - smoothstep(0.0f, 0.028f, w1_f2 - w1_f1)) * stressMask * 0.65f;
+
+            // Прожилки нефрита/жадеита и кристаллы белого кварца + искры слюды
+            float veinBand = smoothstep(0.62f, 0.80f, tileWarpedFbm(u, v, 3, 4, 0.16f, 1153u));
+            float quartzVein = (1.0f - smoothstep(0.0f, 0.022f, std::fabs(tileWarpedFbm(u, v, 4, 4, 0.14f, 1163u) - 0.50f)))
+                             * smoothstep(0.45f, 0.75f, rockMacro);
+            float micaSpark = smoothstep(0.76f, 0.90f, microGrain) * smoothstep(0.48f, 0.70f, rockDetail);
+
+            // Натуральный глубокий серый габбро-диабаз с тёплым минеральным оттенком
+            float baseTone = 0.21f + rockMacro * 0.17f + rockDetail * 0.10f + bevel1 * 0.07f + (microGrain - 0.5f) * 0.06f;
+            float r = baseTone * 0.97f;
+            float g = baseTone * 1.00f;
+            float b = baseTone * 1.03f;
+
+            // Вкрапления зелёного банного жадеита
+            r = lerpf(r, 0.15f, veinBand * 0.45f);
+            g = lerpf(g, 0.28f, veinBand * 0.45f);
+            b = lerpf(b, 0.20f, veinBand * 0.45f);
+
+            // Светлая кварцевая жилка и слюда
+            r = lerpf(r, 0.54f, quartzVein * 0.52f) + micaSpark * 0.12f;
+            g = lerpf(g, 0.55f, quartzVein * 0.52f) + micaSpark * 0.12f;
+            b = lerpf(b, 0.51f, quartzVein * 0.52f) + micaSpark * 0.12f;
+
+            r *= (1.0f - rareCrack * 0.55f);
+            g *= (1.0f - rareCrack * 0.55f);
+            b *= (1.0f - rareCrack * 0.55f);
+
+            float h = 0.22f + ridge * 0.34f + rockMacro * 0.24f + rockDetail * 0.12f + (microGrain - 0.5f) * 0.05f - rareCrack * 0.18f;
+            float rough = clamp01(0.76f - micaSpark * 0.34f - quartzVein * 0.20f - bevel1 * 0.10f + rareCrack * 0.20f);
+            float metal = clamp01(micaSpark * 0.30f);
+
+            hf[static_cast<size_t>(y) * S + x] = h;
+            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            out.diff[idx + 0] = toByte(r);
+            out.diff[idx + 1] = toByte(g);
+            out.diff[idx + 2] = toByte(b);
+            out.roughMetal[idx + 0] = toByte(rough);
+            out.roughMetal[idx + 1] = toByte(metal);
+            out.roughMetal[idx + 2] = toByte(clamp01(0.65f + 0.35f * ridge));
+        }
+    });
+    applyCavityAO(hf, S, 0.28f, out.diff);
+    heightToNormal(hf, S, 2.7f, out.norm);
+    return out;
+}
+
+// 12. BanyaCopper — полированная и деликатно чеканная красная медь/бронза (чистый металл без пятен-горошка)
+PbrSet genBanyaCopper4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+
+            // Мягкие широкие грани ручной выколотки + тонкая круговая/продольная шлифовка
+            float w1_f1, w1_f2;
+            tileWorley2(u + 0.03f * tileFbm(u, v, 6, 2, 1201u), v + 0.03f * tileFbm(u + 0.2f, v, 6, 2, 1207u), 9, 1213u, w1_f1, w1_f2);
+            float hammerFacet = clamp01((w1_f2 - w1_f1) * 1.8f); // плавные грани выколотки в нормалях!
+            float dish = clamp01(1.0f - w1_f1 * 0.95f);
+
+            float brush = tileFbmXY(u, v, 140, 8, 3, 1223u);
+            float fineSpin = 0.5f + 0.5f * std::sin((v * 56.0f + (tileFbm(u, v, 12, 2, 1229u) - 0.5f) * 1.4f) * TAU);
+            float warmWear = tileWarpedFbm(u, v, 4, 3, 0.08f, 1237u);
+
+            // Настоящий физический альбедо-цвет полированной меди (высокий R, средний G, тёплый B)
+            float shadeMod = 0.92f + (brush - 0.5f) * 0.05f + (warmWear - 0.5f) * 0.06f;
+            float r = clamp01(0.95f * shadeMod);
+            float g = clamp01(0.62f * shadeMod);
+            float b = clamp01(0.45f * shadeMod);
+
+            // Рельеф мягкой ручной выколотки + микроцарапины полировки
+            float h = 0.52f + hammerFacet * 0.14f - dish * 0.09f + (brush - 0.5f) * 0.05f + (fineSpin - 0.5f) * 0.025f;
+            // Roughness от 0.17 (зеркальный полированный блик) до 0.34 (слегка матовая медь в патине)
+            float rough = clamp01(0.18f + (1.0f - hammerFacet) * 0.08f + (1.0f - brush) * 0.06f + warmWear * 0.05f);
+            float metal = 0.96f;
+
+            hf[static_cast<size_t>(y) * S + x] = h;
+            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            out.diff[idx + 0] = toByte(r);
+            out.diff[idx + 1] = toByte(g);
+            out.diff[idx + 2] = toByte(b);
+            out.roughMetal[idx + 0] = toByte(rough);
+            out.roughMetal[idx + 1] = toByte(metal);
+            out.roughMetal[idx + 2] = toByte(1.0f);
+        }
+    });
+    applyCavityAO(hf, S, 0.10f, out.diff);
+    heightToNormal(hf, S, 1.45f, out.norm);
+    return out;
+}
+
+// 13. BanyaBirch — пышный берёзовый веник (перекрывающиеся резные листья с жилками и каплями пара)
+PbrSet genBanyaBirch4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    const int cols = 8, rows = 8;
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+
+            float bestLayer = -1e9f;
+            float bestDist = 1.0f, bestLx = 0.0f, bestLy = 0.5f, bestSeed = 0.5f;
+            int baseRow = static_cast<int>(std::floor(v * rows));
+
+            for (int dr = -2; dr <= 1; ++dr) {
+                int rIdx = baseRow + dr;
+                int wr = ((rIdx % rows) + rows) % rows;
+                float uCol = u * cols + ((wr & 1) ? 0.5f : 0.0f);
+                int baseCol = static_cast<int>(std::floor(uCol));
+                for (int dc = -1; dc <= 1; ++dc) {
+                    int cIdx = baseCol + dc;
+                    int wc = ((cIdx % cols) + cols) % cols;
+                    float jx = (hash01(wc, wr, cols, rows, 1301u) - 0.5f) * 0.45f;
+                    float jy = (hash01(wc, wr, cols, rows, 1303u) - 0.5f) * 0.45f;
+                    float ang = (hash01(wc, wr, cols, rows, 1307u) - 0.5f) * 2.2f;
+                    float sc  = 0.85f + hash01(wc, wr, cols, rows, 1319u) * 0.45f;
+
+                    float dx = (uCol - cIdx - 0.5f + jx) * sc;
+                    float dy = (v * rows - rIdx - 0.5f + jy) * sc;
+                    float rx = dx * std::cos(ang) - dy * std::sin(ang);
+                    float ry = dx * std::sin(ang) + dy * std::cos(ang);
+
+                    // Сердцевидно-яйцевидный силуэт берёзового листа с зубчатым краем
+                    float ly = ry * 0.65f + 0.5f; // 0..1 от основания к кончику
+                    if (ly < 0.02f || ly > 0.98f) continue;
+                    float wCurve = std::sin(std::pow(ly, 0.72f) * PI) * 0.68f;
+                    float serrate = 0.045f * std::sin(ly * 42.0f);
+                    float dNorm = std::fabs(rx) / std::max(0.03f, wCurve + serrate);
+                    if (dNorm <= 1.0f) {
+                        float layer = hash01(wc, wr, cols, rows, 1321u) + (1.0f - dNorm) * 0.05f;
+                        if (layer > bestLayer) {
+                            bestLayer = layer;
+                            bestDist = dNorm;
+                            bestLx = rx;
+                            bestLy = ly;
+                            bestSeed = hash01(wc, wr, cols, rows, 1327u);
+                        }
+                    }
+                }
+            }
+
+            float veinNoise = tileFbm(u, v, 16, 3, 1361u);
+            if (bestLayer < -1e8f) {
+                // Тёмная глубина между листьями и берёзовые веточки
+                float twigs = smoothstep(0.72f, 0.86f, tileFbmXY(u, v, 12, 48, 2, 1367u));
+                float r = lerpf(0.08f, 0.24f, twigs);
+                float g = lerpf(0.11f, 0.19f, twigs);
+                float b = lerpf(0.05f, 0.12f, twigs);
+                hf[static_cast<size_t>(y) * S + x] = 0.10f + twigs * 0.12f;
+                size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+                out.diff[idx + 0] = toByte(r);
+                out.diff[idx + 1] = toByte(g);
+                out.diff[idx + 2] = toByte(b);
+                out.roughMetal[idx + 0] = toByte(0.78f);
+                out.roughMetal[idx + 1] = toByte(0.0f);
+                out.roughMetal[idx + 2] = toByte(0.35f);
+            } else {
+                // Центральная и боковые жилки берёзового листа
+                float midRib = std::exp(-std::fabs(bestLx) * 38.0f) * smoothstep(0.95f, 0.10f, bestLy);
+                float sideRib = std::pow(0.5f + 0.5f * std::sin((std::fabs(bestLx) * 18.0f - bestLy * 14.0f) * TAU), 4.0f) * (1.0f - bestDist * 0.5f);
+                float edgeRim = smoothstep(1.0f, 0.72f, bestDist);
+
+                // Богатая палитра запаренного берёзового веника (оливково-изумрудные и молодые листья)
+                float r = lerpf(0.16f, 0.28f, bestSeed) + midRib * 0.16f + sideRib * 0.07f + (veinNoise - 0.5f) * 0.05f;
+                float g = lerpf(0.36f, 0.52f, bestSeed) + midRib * 0.18f + sideRib * 0.10f + (veinNoise - 0.5f) * 0.06f;
+                float b = lerpf(0.09f, 0.16f, bestSeed) + midRib * 0.06f;
+
+                float shade = 0.70f + 0.30f * edgeRim;
+                r *= shade; g *= shade; b *= shade;
+
+                float h = 0.35f + 0.42f * edgeRim + midRib * 0.12f + sideRib * 0.05f + bestSeed * 0.06f;
+                float dew = smoothstep(0.78f, 0.90f, tileFbm(u, v, 28, 2, 1373u));
+                float rough = clamp01(lerpf(0.42f, 0.14f, dew));
+
+                hf[static_cast<size_t>(y) * S + x] = h;
+                size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+                out.diff[idx + 0] = toByte(r);
+                out.diff[idx + 1] = toByte(g);
+                out.diff[idx + 2] = toByte(b);
+                out.roughMetal[idx + 0] = toByte(rough);
+                out.roughMetal[idx + 1] = toByte(0.0f);
+                out.roughMetal[idx + 2] = toByte(clamp01(shade));
+            }
+        }
+    });
+    applyCavityAO(hf, S, 0.30f, out.diff);
+    heightToNormal(hf, S, 2.3f, out.norm);
+    return out;
+}
+
 // ============================================================================
 // Бесшовный 6-гранный 360° Skybox + IBL Cubemap (сумеречный кибер-закат + многослойный мегаполис)
 // ============================================================================
@@ -1468,6 +1769,10 @@ int main(int argc, char** argv) {
     saveSet("HazardMetal",  smallSize, genHazardMetal4K(smallSize));
     saveSet("BanyaLog",     S,         genBanyaLog4K(S));
     saveSet("BanyaRooster", S,         genBanyaRooster4K(S));
+    saveSet("BanyaPlank",   S,         genBanyaPlank4K(S));
+    saveSet("BanyaStone",   S,         genBanyaStone4K(S));
+    saveSet("BanyaCopper",  smallSize, genBanyaCopper4K(smallSize));
+    saveSet("BanyaBirch",   smallSize, genBanyaBirch4K(smallSize));
 
     int cubeS = 1024;
     genSkyCubemap(outDir, cubeS);

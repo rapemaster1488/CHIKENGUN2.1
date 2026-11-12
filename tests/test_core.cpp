@@ -402,10 +402,18 @@ int main(int argc, char** argv) {
         CheckPngFile("Data/Textures/BanyaRoosterDiffuse.png", 1024, 1024);
         CheckPngFile("Data/Textures/BanyaRoosterNormal.png", 1024, 1024);
         CheckPngFile("Data/Textures/BanyaRoosterRoughMetal.png", 1024, 1024);
+        CheckPngFile("Data/Textures/BanyaPlankDiffuse.png", 1024, 1024);
+        CheckPngFile("Data/Textures/BanyaStoneDiffuse.png", 1024, 1024);
+        CheckPngFile("Data/Textures/BanyaCopperDiffuse.png", 1024, 1024);
+        CheckPngFile("Data/Textures/BanyaBirchDiffuse.png", 1024, 1024);
         CheckPngFile("Data/Textures/Sky4K_PosZ.png", 1024, 1024);
         CheckPngFile("Data/Textures/LoadingBg4K.png", 1920, 1080);
         assert(fs::exists("Data/Materials/Game/BanyaLog.xml"));
         assert(fs::exists("Data/Materials/Game/BanyaRooster.xml"));
+        assert(fs::exists("Data/Materials/Game/BanyaPlank.xml"));
+        assert(fs::exists("Data/Materials/Game/BanyaStone.xml"));
+        assert(fs::exists("Data/Materials/Game/BanyaCopper.xml"));
+        assert(fs::exists("Data/Materials/Game/BanyaBirch.xml"));
     }
     if (argc > 1 && fs::exists(argv[1])) {
         fs::path tmpOut = fs::temp_directory_path() / "chikengun_test_tex";
@@ -425,6 +433,10 @@ int main(int argc, char** argv) {
         CheckPngFile(tmpOut / "BanyaRoosterDiffuse.png", 256, 256);
         CheckPngFile(tmpOut / "BanyaRoosterNormal.png", 256, 256);
         CheckPngFile(tmpOut / "BanyaRoosterRoughMetal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaPlankDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaStoneDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaCopperDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaBirchDiffuse.png", 256, 256);
         assert(fs::exists(tmpOut / "Skybox4K.xml"));
         fs::remove_all(tmpOut);
     }
