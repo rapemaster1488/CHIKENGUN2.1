@@ -334,6 +334,8 @@ int main(int argc, char** argv) {
         CheckPngFile("Data/Textures/StoneHDDiffuse.png", 512, 512);
         CheckPngFile("Data/Textures/Sky4K_PosZ.png", 1024, 1024);
         CheckPngFile("Data/Textures/LoadingBg4K.png", 1920, 1080);
+        // Сигл-петух веб-бута (генерируется tools/gen_boot_sigil.py из index.html)
+        CheckPngFile("Data/Textures/BootSigil.png", 1024, 1024);
     }
     if (argc > 1 && fs::exists(argv[1])) {
         fs::path tmpOut = fs::temp_directory_path() / "chikengun_test_tex";

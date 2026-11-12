@@ -675,6 +675,7 @@ private:
     SharedPtr<BorderImage> menuTitleGlow_;
     Vector<SharedPtr<BorderImage>> menuScanlines_;
     SharedPtr<BorderImage> menuScanBand_;
+    SharedPtr<BorderImage> menuSigil_, menuSigilGlow_;
     Vector<UIElement*> menuRows_;                            // подложки строк меню (MenuRow0..3)
     SharedPtr<UIElement> settingsPanel_;
     Vector<SharedPtr<Text>> settingsItems_;
@@ -1107,6 +1108,7 @@ private:
     Vector<SharedPtr<BorderImage>> loadingScanlines_, loadingFeathers_;
     Vector<float> loadingFeatherPhase_, loadingFeatherX_, loadingFeatherSpeed_;
     SharedPtr<BorderImage> loadingScanBand_;
+    SharedPtr<BorderImage> bootSigilBird_, bootSigilGlowGold_, bootSigilGlowCyan_, loadingCursor_;
     Vector<SharedPtr<BorderImage>> loadingEmblemParts_;
     Vector<SharedPtr<Text>> loadingCheckRows_;
     Vector<String> loadSteps_;
@@ -4612,7 +4614,7 @@ private:
         bg->SetColor(Color(0.01f, 0.02f, 0.04f, 0.78f));
 
         Text* title = pausePanel_->CreateChild<Text>();
-        title->SetFont(font_, SF(64));
+        title->SetFont(font_, SF(56));
         title->SetText("ТАКТИЧЕСКАЯ ПАУЗА");
         title->SetTextAlignment(HA_CENTER);
         title->SetPosition(sw / 2 - S(460), sh / 2 - S(160));
@@ -4711,6 +4713,7 @@ private:
         menuGlow_ = nullptr; menuSheen_ = nullptr; menuEnterT_ = 0.0f;
         menuTitleGlitchA_ = nullptr; menuTitleGlitchB_ = nullptr;
         menuTitleGlow_ = nullptr; menuScanlines_.Clear(); menuScanBand_ = nullptr;
+        menuSigil_ = nullptr; menuSigilGlow_ = nullptr;
         settingsPanel_ = nullptr; settingsItems_.Clear();
         armoryPanel_ = nullptr; armoryWeaponRows_.Clear(); armorySkinRows_.Clear();
         pausePanel_ = nullptr;
@@ -6898,6 +6901,7 @@ private:
         loadingPanel_ = root->CreateChild<UIElement>("LoadingPanel");
         loadingPanel_->SetSize(sw, sh);
         loadingPanel_->SetPriority(1000);
+        loadingPanel_->SetOpacity(1.0f);
         loadingPanel_->SetOpacity(0.0f);   // вход загрузки проявит панель за 1.3 c
 
         // 1) 4K фоновый кибер-арт (Textures/LoadingBg4K.png)
@@ -6952,27 +6956,31 @@ private:
         botBar->SetColor(Color(0.008f, 0.015f, 0.032f, 0.90f));
 
         BorderImage* card = loadingPanel_->CreateChild<BorderImage>();
-        int cardW = S(860), cardH = S(390);
-        card->SetPosition(sw / 2 - cardW / 2, sh / 2 - S(235));
+        int cardW = S(860), cardH = S(300);
+        const int cardX0 = sw / 2 - cardW / 2, cardY0 = sh / 2 - S(54);
+        const int kTitleY   = sh / 2 - S(186);   // заголовок под сиглом (52pt)
+        const int kSubY     = sh / 2 - S(118);   // «2.5 // ПЕРО СУДЬБЫ»
+        const int kTaglineY = sh / 2 - S(94);    // тэглайн под ним
+        const int kSigilCY  = sh / 2 - S(336);   // центр сигла над заголовком
+        card->SetPosition(cardX0, cardY0);
         card->SetSize(cardW, cardH);
         card->SetColor(Color(0.012f, 0.024f, 0.048f, 0.76f));
 
         // Неоновая рамка карточки
         BorderImage* cTop = loadingPanel_->CreateChild<BorderImage>();
-        cTop->SetPosition(sw / 2 - cardW / 2, sh / 2 - S(235));
+        cTop->SetPosition(cardX0, cardY0);
         cTop->SetSize(cardW, Max(2, S(2.5f)));
         cTop->SetColor(Color(0.20f, 0.92f, 1.0f, 0.85f));
 
         BorderImage* cBot = loadingPanel_->CreateChild<BorderImage>();
-        cBot->SetPosition(sw / 2 - cardW / 2, sh / 2 - S(235) + cardH - Max(2, S(2.0f)));
+        cBot->SetPosition(cardX0, cardY0 + cardH - Max(2, S(2.0f)));
         cBot->SetSize(cardW, Max(2, S(2.0f)));
         cBot->SetColor(Color(1.0f, 0.78f, 0.22f, 0.75f));
 
         // Шапка консоли (как в веб-буте): точки + chikengun.exe + PID
         {
-            const int cardX = sw / 2 - cardW / 2, cardY = sh / 2 - S(235);
-            // Шапка ставится НАД карточкой, иначе накрывала эмблему и заголовок
-            const int headY = cardY - S(34);
+            const int cardX = cardX0, cardY = cardY0;
+            const int headY = cardY;   // шапка консоли — верхняя полоса карточки (как в вебе)
             BorderImage* head = loadingPanel_->CreateChild<BorderImage>();
             head->SetPosition(cardX, headY);
             head->SetSize(cardW, S(30));
@@ -7010,11 +7018,52 @@ private:
         sysTag->SetColor(Color(0.45f, 0.90f, 1.0f, 0.92f));
         StyleCrispText(sysTag);
 
-        // Кибер-эмблема-перо, НАД ореолами (иначе ореолы её перекрывают)
-        BorderImage* embOuter = loadingPanel_->CreateChild<BorderImage>();
-        embOuter->SetPosition(sw / 2 - S(52), sh / 2 - S(212));
-        embOuter->SetSize(S(104), S(6));
-        embOuter->SetColor(Color(1.0f, 0.78f, 0.22f, 0.95f)); // золотое перо
+        // === СИГЛ: кибер-петух (тот же SVG, что в веб-буте, отрендерен в PNG 1024) ===
+        // Вращающиеся кольца/риски сделаны отдельными слоями — та же картинка,
+        // повёрнутая на нужный угол (Urho UI не умеет вращать элементы).
+        const int sigSize = S(232);
+        const int sigCX = sw / 2, sigCY = kSigilCY;
+        auto makeSigilLayer = [&](const char* texPath, int size, float alpha, bool additive) -> BorderImage* {
+            BorderImage* img = loadingPanel_->CreateChild<BorderImage>();
+            if (Texture2D* t = cache->GetResource<Texture2D>(texPath)) {
+                t->SetFilterMode(FILTER_TRILINEAR);
+                img->SetTexture(t);
+            }
+            img->SetSize(size, size);
+            img->SetPosition(sigCX - size / 2, sigCY - size / 2);
+            img->SetColor(Color(1.0f, 1.0f, 1.0f, alpha));
+            if (additive) img->SetBlendMode(BLEND_ADD);
+            img->SetEnabled(true);
+            return img;
+        };
+        // Ядро с петухом (без аддитива — там плотные цвета)
+        bootSigilBird_ = makeSigilLayer("Textures/BootSigil.png", sigSize, 1.0f, false);
+        // Мягкое свечение под сиглом (золото + циан, как drop-shadow в вебе)
+        bootSigilGlowGold_ = loadingPanel_->CreateChild<BorderImage>();
+        if (Texture2D* g = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
+            g->SetFilterMode(FILTER_TRILINEAR);
+            bootSigilGlowGold_->SetTexture(g);
+        }
+        bootSigilGlowGold_->SetBlendMode(BLEND_ADD);
+        {
+            const int gs = S(420);
+            bootSigilGlowGold_->SetSize(gs, gs);
+            bootSigilGlowGold_->SetPosition(sigCX - gs / 2, sigCY - gs / 2);
+            bootSigilGlowGold_->SetColor(Color(1.0f, 0.83f, 0.26f, 0.30f));
+        }
+        bootSigilGlowCyan_ = loadingPanel_->CreateChild<BorderImage>();
+        if (Texture2D* g = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
+            g->SetFilterMode(FILTER_TRILINEAR);
+            bootSigilGlowCyan_->SetTexture(g);
+        }
+        bootSigilGlowCyan_->SetBlendMode(BLEND_ADD);
+        {
+            const int gs = S(560);
+            bootSigilGlowCyan_->SetSize(gs, gs);
+            bootSigilGlowCyan_->SetPosition(sigCX - gs / 2, sigCY - gs / 2);
+            bootSigilGlowCyan_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.22f));
+        }
+        bootSigilBird_->BringToFront();
 
         // Ореолы света за заголовком (золото + циан, как в веб-буте)
         loadingTitleGlowCyan_ = loadingPanel_->CreateChild<BorderImage>();
@@ -7027,7 +7076,7 @@ private:
         {
             const int gs = S(700);
             loadingTitleGlowCyan_->SetSize(gs, gs);
-            loadingTitleGlowCyan_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(196) + S(30) - gs / 2);
+            loadingTitleGlowCyan_->SetPosition(sw / 2 - gs / 2, kTitleY + S(28) - gs / 2);
         }
         loadingTitleGlowGold_ = loadingPanel_->CreateChild<BorderImage>();
         if (Texture2D* glowTex2 = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
@@ -7039,31 +7088,31 @@ private:
         {
             const int gs = S(520);
             loadingTitleGlowGold_->SetSize(gs, gs);
-            loadingTitleGlowGold_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(196) + S(30) - gs / 2);
+            loadingTitleGlowGold_->SetPosition(sw / 2 - gs / 2, kTitleY + S(28) - gs / 2);
         }
         // Глитч-копии заголовка (циан/красный, вспыхивают пачками)
         loadingTitleGlitchA_ = loadingPanel_->CreateChild<Text>();
-        loadingTitleGlitchA_->SetFont(font_, SF(60));
+        loadingTitleGlitchA_->SetFont(font_, SF(52));
         loadingTitleGlitchA_->SetText("CHIKENGUN 2.5");
         loadingTitleGlitchA_->SetTextAlignment(HA_CENTER);
-        loadingTitleGlitchA_->SetPosition(sw / 2 - S(410), sh / 2 - S(196));
+        loadingTitleGlitchA_->SetPosition(sw / 2 - S(410), kTitleY);
         loadingTitleGlitchA_->SetWidth(S(820));
         loadingTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.0f));
         StyleCrispText(loadingTitleGlitchA_);
         loadingTitleGlitchB_ = loadingPanel_->CreateChild<Text>();
-        loadingTitleGlitchB_->SetFont(font_, SF(60));
+        loadingTitleGlitchB_->SetFont(font_, SF(52));
         loadingTitleGlitchB_->SetText("CHIKENGUN 2.5");
         loadingTitleGlitchB_->SetTextAlignment(HA_CENTER);
-        loadingTitleGlitchB_->SetPosition(sw / 2 - S(410), sh / 2 - S(196));
+        loadingTitleGlitchB_->SetPosition(sw / 2 - S(410), kTitleY);
         loadingTitleGlitchB_->SetWidth(S(820));
         loadingTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.0f));
         StyleCrispText(loadingTitleGlitchB_);
 
         loadingTitleText_ = loadingPanel_->CreateChild<Text>();
-        loadingTitleText_->SetFont(font_, SF(60));
+        loadingTitleText_->SetFont(font_, SF(52));
         loadingTitleText_->SetText("CHIKENGUN 2.5");
         loadingTitleText_->SetTextAlignment(HA_CENTER);
-        loadingTitleText_->SetPosition(sw / 2 - S(410), sh / 2 - S(196));
+        loadingTitleText_->SetPosition(sw / 2 - S(410), kTitleY);
         loadingTitleText_->SetWidth(S(820));
         loadingTitleText_->SetColor(Color(1.0f, 0.86f, 0.25f, 1.0f));
         StyleCrispText(loadingTitleText_, true);
@@ -7072,7 +7121,7 @@ private:
         loadingSubText_->SetFont(font_, SF(19));
         loadingSubText_->SetText("2.5 // ПЕРО СУДЬБЫ");
         loadingSubText_->SetTextAlignment(HA_CENTER);
-        loadingSubText_->SetPosition(sw / 2 - S(410), sh / 2 - S(118));
+        loadingSubText_->SetPosition(sw / 2 - S(410), kSubY);
         loadingSubText_->SetWidth(S(820));
         loadingSubText_->SetColor(Color(0.42f, 0.88f, 1.0f, 0.95f));
         StyleCrispText(loadingSubText_);
@@ -7081,7 +7130,7 @@ private:
         loadingTagline_->SetFont(font_, SF(12));
         loadingTagline_->SetText("URHO3D PBR • SUN SHADOWS • ACES HDR");
         loadingTagline_->SetTextAlignment(HA_CENTER);
-        loadingTagline_->SetPosition(sw / 2 - S(410), sh / 2 - S(94));
+        loadingTagline_->SetPosition(sw / 2 - S(410), kTaglineY);
         loadingTagline_->SetWidth(S(820));
         loadingTagline_->SetColor(Color(0.50f, 0.61f, 0.75f, 1.0f));
         StyleCrispText(loadingTagline_);
@@ -7089,10 +7138,24 @@ private:
         // Чек-лист инициализации подсистем
         loadingSpecText_ = loadingPanel_->CreateChild<Text>();
         loadingSpecText_->SetFont(font_, SF(15));
-        loadingSpecText_->SetPosition(sw / 2 - S(360), sh / 2 - S(66));
+        loadingSpecText_->SetPosition(sw / 2 - S(360), cardY0 + S(44));
         loadingSpecText_->SetWidth(S(720));
         loadingSpecText_->SetColor(Color(0.82f, 0.93f, 0.98f, 0.95f));
         StyleCrispText(loadingSpecText_);
+
+        // Строка-курсор внизу карточки, как в веб-консоли: "> █"
+        {
+            Text* cur = loadingPanel_->CreateChild<Text>();
+            cur->SetFont(font_, SF(13));
+            cur->SetText("> ");
+            cur->SetPosition(cardX0 + S(28), cardY0 + cardH - S(30));
+            cur->SetColor(Color(0.35f, 0.55f, 0.68f, 0.95f));
+            StyleCrispText(cur);
+            loadingCursor_ = loadingPanel_->CreateChild<BorderImage>();
+            loadingCursor_->SetPosition(cardX0 + S(44), cardY0 + cardH - S(27));
+            loadingCursor_->SetSize(S(8), S(14));
+            loadingCursor_->SetColor(Color(0.20f, 0.92f, 1.0f, 0.95f));
+        }
 
         // Полоса загрузки в нижней консоли (ширина 760 масштабируемых пикселей)
         int barW = S(760), barH = S(16);
@@ -7182,17 +7245,18 @@ private:
                                        ":  " + loadSteps_[idx]);
         }
         if (loadingSpecText_) {
-            static const char* shortNames[6] = {
-                "Шейдеры 4K HDR / SSAO4K / ACES / CAS",
+            static const char* shortNames[7] = {
+                "Инициализация 4K HDR пайплайна и ACES Filmic",
                 "Пакет 4K PBR (Diffuse + Normal + RoughMetal)",
                 "Sky4K кубемапа и IBL-отражения арены",
                 "Арена 256×256, джамп-пады, бочки «ОПАСНО»",
                 "Тени 4K, перья PBR, арсенал (12 стволов)",
-                "Волны 2.5 «ПЕРО СУДЬБЫ», перки и радар 110 м"
+                "Перки [B], гранаты, волны 2.5, 3D-аудио пул",
+                "ПЕРО СУДЬБЫ готово. В бой!"
             };
-            static const char* addrs[6] = { "[0x0007]", "[0x02F1]", "[0x03A0]", "[0x0511]", "[0x0666]", "[0x07FF]" };
+            static const char* addrs[7] = { "[0x0007]", "[0x02F1]", "[0x03A0]", "[0x0511]", "[0x0666]", "[0x07FF]", "[0x0C4B]" };
             String list;
-            for (int i = 0; i < 6; ++i) {
+            for (int i = 0; i < 7; ++i) {
                 // В Anonymous Pro нет глифов «▶/✔/★» — только ASCII, иначе будет «тофу»
                 if (i < activeStage)       list += "  [ok]  ";
                 else if (i == activeStage) list += "  [>>]  ";
@@ -7206,6 +7270,10 @@ private:
     // Выполняет ровно ОДИН тяжёлый шаг инициализации за отрендеренный кадр,
     // чтобы игрок видел настоящую плавную загрузку без зависания окна!
     void UpdateBootLoading(float dt) {
+        // Снимаем завершённый переход «меню -> загрузка», иначе панель навсегда
+        // останется с opacity 0 (и экран будет чёрным).
+        if (loadingPanel_ && loadingPanel_->GetOpacity() < 1.0f && loadEnterT_ >= 1.3f)
+            loadingPanel_->SetOpacity(1.0f);
         bootStageTimer_ += dt;
         // Вход загрузки: панель медленно проявляется (easeOutExpo, 1.3 c)
         if (loadEnterT_ < 1.3f) {
@@ -7257,7 +7325,7 @@ private:
             if (loadingTitleGlitchA_) {
                 loadingTitleGlitchA_->SetVisible(gOn);
                 if (gOn) {
-                    loadingTitleGlitchA_->SetPosition(sw / 2 - S(410) - S(3), sh / 2 - S(196) + int(sinf(timeAcc_ * 40.0f) * S(1.0f)));
+                    loadingTitleGlitchA_->SetPosition(sw / 2 - S(410) - S(3), sh / 2 - S(186) + int(sinf(timeAcc_ * 40.0f) * S(1.0f)));
                     loadingTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.85f));
                 }
             }
@@ -7265,13 +7333,35 @@ private:
                 const bool bOn = gcyc > 2.55f;
                 loadingTitleGlitchB_->SetVisible(bOn);
                 if (bOn) {
-                    loadingTitleGlitchB_->SetPosition(sw / 2 - S(410) + S(3), sh / 2 - S(196));
+                    loadingTitleGlitchB_->SetPosition(sw / 2 - S(410) + S(3), sh / 2 - S(186));
                     loadingTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.8f));
                 }
             }
             if (loadingMarquee_) {
                 const float mx = float(sw) - fmodf(timeAcc_ * S(110.0f), float(sw + S(2400)));
                 loadingMarquee_->SetPosition(int(mx), sh - S(88));
+            }
+            // Сигл-петух: парение + дыхание ореолов (как drop-shadow в вебе)
+            if (bootSigilBird_) {
+                const float bob = sinf(timeAcc_ * 1.15f) * S(6.0f);
+                const int sz = S(232);
+                bootSigilBird_->SetPosition(sw / 2 - sz / 2, sh / 2 - S(336) + int(bob));
+                const float g1 = 0.26f + 0.10f * sinf(timeAcc_ * 1.6f);
+                const float g2 = 0.20f + 0.09f * sinf(timeAcc_ * 1.25f + 1.7f);
+                if (bootSigilGlowGold_) {
+                    const int gs = S(420);
+                    bootSigilGlowGold_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(336) + int(bob) - gs / 2 + sz / 2);
+                    bootSigilGlowGold_->SetColor(Color(1.0f, 0.83f, 0.26f, g1));
+                }
+                if (bootSigilGlowCyan_) {
+                    const int gs = S(560);
+                    bootSigilGlowCyan_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(336) + int(bob) - gs / 2 + sz / 2);
+                    bootSigilGlowCyan_->SetColor(Color(0.18f, 0.95f, 1.0f, g2));
+                }
+            }
+            // Мигающий курсор консоли (как в вебе, ~1 Гц)
+            if (loadingCursor_) {
+                loadingCursor_->SetVisible(fmodf(timeAcc_, 1.0f) < 0.55f);
             }
         }
 
@@ -7364,6 +7454,8 @@ private:
         loadingScanlines_.Clear(); loadingFeathers_.Clear();
         loadingFeatherPhase_.Clear(); loadingFeatherX_.Clear(); loadingFeatherSpeed_.Clear();
         loadingScanBand_ = nullptr;
+        bootSigilBird_ = nullptr; bootSigilGlowGold_ = nullptr; bootSigilGlowCyan_ = nullptr;
+        loadingCursor_ = nullptr;
         loadingScreenActive_ = false;
     }
 
@@ -8342,7 +8434,7 @@ private:
             menuParticleSpeed_.Push((18.0f + rand() % 42) * uiScale_);
         }
 
-        int plateW = S(720), plateH = S(620);
+        int plateW = S(760), plateH = S(700);
         // Ореол света за плашкой (additive, под плашкой)
         menuGlow_ = mainMenuPanel_->CreateChild<BorderImage>();
         if (Texture2D* glowTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
@@ -8354,10 +8446,10 @@ private:
         {
             const int gs = S(1150);
             menuGlow_->SetSize(gs, gs);
-            menuGlow_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(316) + plateH / 2 - gs / 2);
+            menuGlow_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(372) + plateH / 2 - gs / 2);
         }
         menuPlate_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuPlate_->SetPosition(sw / 2 - plateW / 2, sh / 2 - S(316));
+        menuPlate_->SetPosition(sw / 2 - plateW / 2, sh / 2 - S(372));
         menuPlate_->SetSize(plateW, plateH);
         menuPlate_->SetColor(Color(0.018f, 0.042f, 0.088f, 0.64f));
         // Блик-свип по плашке при входе (additive, над плашкой, под текстом)
@@ -8365,21 +8457,45 @@ private:
         menuSheen_->SetBlendMode(BLEND_ADD);
         menuSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
         menuSheen_->SetSize(S(130), plateH);
-        menuSheen_->SetPosition(sw / 2 - plateW / 2 - S(180), sh / 2 - S(316));
+        menuSheen_->SetPosition(sw / 2 - plateW / 2 - S(180), sh / 2 - S(372));
 
         int bTh = Max(2, S(2.0f));
         struct Edge { int x, y, w, h; };
         Edge edges[4] = {
-            { sw/2 - plateW/2 - bTh, sh/2 - S(316) - bTh, plateW + bTh*2, bTh },
-            { sw/2 - plateW/2 - bTh, sh/2 - S(316) + plateH, plateW + bTh*2, bTh },
-            { sw/2 - plateW/2 - bTh, sh/2 - S(316) - bTh, bTh, plateH + bTh*2 },
-            { sw/2 + plateW/2,       sh/2 - S(316) - bTh, bTh, plateH + bTh*2 }
+            { sw/2 - plateW/2 - bTh, sh/2 - S(372) - bTh, plateW + bTh*2, bTh },
+            { sw/2 - plateW/2 - bTh, sh/2 - S(372) + plateH, plateW + bTh*2, bTh },
+            { sw/2 - plateW/2 - bTh, sh/2 - S(372) - bTh, bTh, plateH + bTh*2 },
+            { sw/2 + plateW/2,       sh/2 - S(372) - bTh, bTh, plateH + bTh*2 }
         };
         for (int i = 0; i < 4; ++i) {
             BorderImage* e = mainMenuPanel_->CreateChild<BorderImage>();
             e->SetPosition(edges[i].x, edges[i].y);
             e->SetSize(edges[i].w, edges[i].h);
             e->SetColor(Color(0.25f, 0.82f, 1.0f, 0.42f));
+        }
+
+        // Сигл-петух в меню (в вебе бренд тоже присутствует в hero-блоке)
+        menuSigil_ = mainMenuPanel_->CreateChild<BorderImage>();
+        if (Texture2D* sigTex = cache->GetResource<Texture2D>("Textures/BootSigil.png")) {
+            sigTex->SetFilterMode(FILTER_TRILINEAR);
+            menuSigil_->SetTexture(sigTex);
+        }
+        {
+            const int ss = S(104);
+            menuSigil_->SetSize(ss, ss);
+            menuSigil_->SetPosition(sw / 2 - ss / 2, sh / 2 - S(372) + S(6));
+        }
+        menuSigilGlow_ = mainMenuPanel_->CreateChild<BorderImage>();
+        if (Texture2D* g = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
+            g->SetFilterMode(FILTER_TRILINEAR);
+            menuSigilGlow_->SetTexture(g);
+        }
+        menuSigilGlow_->SetBlendMode(BLEND_ADD);
+        {
+            const int gs = S(280);
+            menuSigilGlow_->SetSize(gs, gs);
+            menuSigilGlow_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(372) + S(58) - gs / 2);
+            menuSigilGlow_->SetColor(Color(1.0f, 0.83f, 0.26f, 0.22f));
         }
 
         // Ореол за заголовком меню (золото, как в веб-буте)
@@ -8393,38 +8509,38 @@ private:
         {
             const int gs = S(560);
             menuTitleGlow_->SetSize(gs, gs);
-            menuTitleGlow_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(252) + S(32) - gs / 2);
+            menuTitleGlow_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(258) + S(30) - gs / 2);
         }
         // Глитч-копии заголовка меню (циан/красный, вспыхивают пачками)
         menuTitleGlitchA_ = mainMenuPanel_->CreateChild<Text>();
-        menuTitleGlitchA_->SetFont(font_, SF(64));
+        menuTitleGlitchA_->SetFont(font_, SF(56));
         menuTitleGlitchA_->SetText("CHIKENGUN 2.5");
         menuTitleGlitchA_->SetTextAlignment(HA_CENTER);
-        menuTitleGlitchA_->SetPosition(sw / 2 - S(420), sh / 2 - S(252));
+        menuTitleGlitchA_->SetPosition(sw / 2 - S(420), sh / 2 - S(258));
         menuTitleGlitchA_->SetWidth(S(840));
         menuTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.0f));
         StyleCrispText(menuTitleGlitchA_);
         menuTitleGlitchB_ = mainMenuPanel_->CreateChild<Text>();
-        menuTitleGlitchB_->SetFont(font_, SF(64));
+        menuTitleGlitchB_->SetFont(font_, SF(56));
         menuTitleGlitchB_->SetText("CHIKENGUN 2.5");
         menuTitleGlitchB_->SetTextAlignment(HA_CENTER);
-        menuTitleGlitchB_->SetPosition(sw / 2 - S(420), sh / 2 - S(252));
+        menuTitleGlitchB_->SetPosition(sw / 2 - S(420), sh / 2 - S(258));
         menuTitleGlitchB_->SetWidth(S(840));
         menuTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.0f));
         StyleCrispText(menuTitleGlitchB_);
 
         Text* title = mainMenuPanel_->CreateChild<Text>();
-        title->SetFont(font_, SF(64));
+        title->SetFont(font_, SF(56));
         title->SetText("CHIKENGUN 2.5");
         title->SetTextAlignment(HA_CENTER);
-        title->SetPosition(sw / 2 - S(420), sh / 2 - S(252));
+        title->SetPosition(sw / 2 - S(420), sh / 2 - S(258));
         title->SetWidth(S(840));
         title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
         StyleCrispText(title, true);
         menuTitle_ = SharedPtr<Text>(title);
 
         menuAccentBar_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuAccentBar_->SetPosition(sw / 2 - S(200), sh / 2 - S(170));
+        menuAccentBar_->SetPosition(sw / 2 - S(200), sh / 2 - S(184));
         menuAccentBar_->SetSize(S(400), Max(2, S(2.5f)));
         menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.9f));
 
@@ -8432,7 +8548,7 @@ private:
         sub->SetFont(font_, SF(16));
         sub->SetText("[ 2.5 ПЕРО СУДЬБЫ ]   •   [ 4K ULTRA PBR ]   •   [ КОЧЕТ В БАНЬКЕ ]");
         sub->SetTextAlignment(HA_CENTER);
-        sub->SetPosition(sw / 2 - S(440), sh / 2 - S(154));
+        sub->SetPosition(sw / 2 - S(440), sh / 2 - S(168));
         sub->SetWidth(S(880));
         sub->SetColor(Color(0.48f, 0.86f, 1.0f, 0.95f));
         StyleCrispText(sub);
@@ -8446,20 +8562,22 @@ private:
             "НАСТРОЙКИ 4K ULTRA",
             "ВЫХОД"
         };
+        // Пункты меню: выбранный — золотая CTA-плашка (как .play-cta в вебе)
         for (int i = 0; i < 6; ++i) {
+            const int rowY = sh / 2 - S(136) + i * S(62);
             BorderImage* rowBg = mainMenuPanel_->CreateChild<BorderImage>();
-            rowBg->SetPosition(sw / 2 - S(300), sh / 2 - S(100) + i * S(49));
-            rowBg->SetSize(S(600), S(42));
-            rowBg->SetColor(Color(0.05f, 0.14f, 0.24f, i == menuSel_ ? 0.52f : 0.0f));
+            rowBg->SetPosition(sw / 2 - S(330), rowY);
+            rowBg->SetSize(S(660), S(52));
+            rowBg->SetColor(Color(0.05f, 0.14f, 0.24f, 0.0f));
             rowBg->SetName(String("MenuRow") + String(i));
             menuRows_.Push(rowBg);
             menuRowBases_.Push(rowBg->GetPosition());
 
             Text* it = mainMenuPanel_->CreateChild<Text>();
-            it->SetFont(font_, SF(25));
+            it->SetFont(font_, SF(26));
             it->SetText(items[i]);
-            it->SetPosition(sw / 2 - S(290), sh / 2 - S(94) + i * S(49));
-            it->SetWidth(S(580));
+            it->SetPosition(sw / 2 - S(316), rowY + S(11));
+            it->SetWidth(S(632));
             StyleCrispText(it);
             mainMenuItems_.Push(SharedPtr<Text>(it));
             menuItemBases_.Push(it->GetPosition());
@@ -8469,7 +8587,7 @@ private:
         hint->SetFont(font_, SF(15));
         hint->SetText("W/S — выбор   •   ENTER — запуск   •   [P] БАНЬКА   •   РУЛЕТКА — виртуальные фишки   •   F11 — полный экран");
         hint->SetTextAlignment(HA_CENTER);
-        hint->SetPosition(sw / 2 - S(440), sh / 2 + S(236));
+        hint->SetPosition(sw / 2 - S(460), sh / 2 + S(276));
         hint->SetWidth(S(880));
         hint->SetColor(Color(0.75f, 0.82f, 0.90f, 0.92f));
         StyleCrispText(hint);
@@ -8491,8 +8609,9 @@ private:
             menuBasesSet_ = true;
         }
         if (menuTitle_) {
-            float pulse = 0.78f + 0.22f * sinf(timeAcc_ * 1.6f);
-            menuTitle_->SetColor(Color(pulse, pulse * 0.84f, pulse * 0.28f, 1.0f));
+            // Золотой «блик» бежит по заголовку, как arenaTitleShine в вебе
+            const float sh1 = 0.5f + 0.5f * sinf(timeAcc_ * 1.4f);
+            menuTitle_->SetColor(Color(1.0f, Lerp(0.78f, 0.95f, sh1), Lerp(0.16f, 0.55f, sh1), 1.0f));
         }
         if (menuAccentBar_) {
             int w = S(310.0f + 130.0f * (0.5f + 0.5f * sinf(timeAcc_ * 1.2f)));
@@ -8578,25 +8697,43 @@ private:
             const int by = int(fmodf(timeAcc_ * float(sh) / 6.0f, float(sh + S(140)))) - S(70);
             menuScanBand_->SetPosition(0, by);
         }
-        if (menuTitleGlow_) {
-            const float gp = 0.50f + 0.18f * sinf(timeAcc_ * 1.6f);
-            menuTitleGlow_->SetColor(Color(1.0f, 0.78f, 0.22f, gp * 0.5f * panelA));
-        }
-        const float gcyc = fmodf(timeAcc_, 3.1f);
-        const bool gOn = gcyc > 2.85f;
-        if (menuTitleGlitchA_) {
-            menuTitleGlitchA_->SetVisible(gOn);
-            if (gOn) {
-                menuTitleGlitchA_->SetPosition(sw / 2 - S(420) - S(3), sh / 2 - S(252) + int(sinf(timeAcc_ * 40.0f) * S(1.0f)));
-                menuTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.85f));
+        // Сигл меню: парение + дыхание ореола
+        if (menuSigil_) {
+            const int ss = menuSigil_->GetWidth();
+            const int bob = int(sinf(timeAcc_ * 1.1f) * S(4.0f));
+            menuSigil_->SetPosition(sw / 2 - ss / 2, sh / 2 - S(372) + S(6) + bob + rise);
+            menuSigil_->SetOpacity(panelA);
+            if (menuSigilGlow_) {
+                const int gs = menuSigilGlow_->GetWidth();
+                menuSigilGlow_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(372) + S(58) + bob - gs / 2);
+                menuSigilGlow_->SetColor(Color(1.0f, 0.83f, 0.26f, (0.20f + 0.08f * sinf(timeAcc_ * 1.5f)) * panelA));
             }
         }
-        if (menuTitleGlitchB_) {
-            const bool bOn = gcyc > 2.95f;
-            menuTitleGlitchB_->SetVisible(bOn);
-            if (bOn) {
-                menuTitleGlitchB_->SetPosition(sw / 2 - S(420) + S(3), sh / 2 - S(252));
-                menuTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.8f));
+        // Ореол + глитч-копии следуют за заголовком (тот же rise/параллакс/дыхание)
+        if (menuTitle_) {
+            const int tx = menuTitle_->GetPosition().x_, ty = menuTitle_->GetPosition().y_;
+            if (menuTitleGlow_) {
+                const int gs = menuTitleGlow_->GetWidth();
+                const float gp = 0.50f + 0.18f * sinf(timeAcc_ * 1.6f);
+                menuTitleGlow_->SetPosition(tx + S(420) - gs / 2, ty + S(32) - gs / 2);
+                menuTitleGlow_->SetColor(Color(1.0f, 0.78f, 0.22f, gp * 0.5f * panelA));
+            }
+            const float gcyc = fmodf(timeAcc_, 3.1f);
+            if (menuTitleGlitchA_) {
+                const bool gOn = gcyc > 2.85f;
+                menuTitleGlitchA_->SetVisible(gOn);
+                if (gOn) {
+                    menuTitleGlitchA_->SetPosition(tx - S(3), ty + int(sinf(timeAcc_ * 40.0f) * S(1.0f)));
+                    menuTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.85f * panelA));
+                }
+            }
+            if (menuTitleGlitchB_) {
+                const bool bOn = gcyc > 2.95f;
+                menuTitleGlitchB_->SetVisible(bOn);
+                if (bOn) {
+                    menuTitleGlitchB_->SetPosition(tx + S(3), ty);
+                    menuTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.8f * panelA));
+                }
             }
         }
     }
@@ -8660,17 +8797,20 @@ private:
         int sw = gfx->GetWidth();
         for (unsigned i = 0; i < mainMenuItems_.Size(); ++i) {
             bool sel = ((int)i == menuSel_);
-            mainMenuItems_[i]->SetText((sel ? "\xe2\x96\xb6  " : "   ") + String(labels[i]) + (sel ? "  \xe2\x97\x80" : ""));
+            // «▶» нет в Anonymous Pro — используем ASCII-стрелку
+            mainMenuItems_[i]->SetText((sel ? ">  " : "   ") + String(labels[i]) + (sel ? "  <" : ""));
             Color unselCol = (i == 2 || i == 3) ? Color(0.96f, 0.76f, 0.48f, 1.0f) : Color(0.58f, 0.66f, 0.76f, 1.0f);
-            mainMenuItems_[i]->SetColor(sel ? Color(1.0f, 0.87f, 0.30f, 1.0f) : unselCol);
-            if ((int)menuRows_.Size() > (int)i && i < mainMenuItems_.Size()) {
+            // Выбранный пункт — тёмный текст на золотой плашке (как .play-cta в вебе)
+            mainMenuItems_[i]->SetColor(sel ? Color(0.035f, 0.067f, 0.122f, 1.0f) : unselCol);
+            if ((int)menuRows_.Size() > (int)i) {
                 BorderImage* bi = static_cast<BorderImage*>(menuRows_[i]);
                 if (bi) {
-                    bi->SetColor((i == 2 || i == 3)
-                        ? Color(0.28f, 0.14f, 0.05f, sel ? 0.68f : 0.22f)
-                        : Color(0.06f, 0.16f, 0.28f, sel ? 0.56f : 0.0f));
+                    if (sel) bi->SetColor(i == 2 || i == 3 ? Color(0.82f, 0.55f, 0.22f, 1.0f)
+                                                          : Color(1.0f, 0.83f, 0.28f, 1.0f));
+                    else     bi->SetColor(i == 2 || i == 3 ? Color(0.28f, 0.14f, 0.05f, 0.28f)
+                                                           : Color(0.06f, 0.16f, 0.28f, 0.0f));
                     IntVector2 base = bi->GetPosition();
-                    bi->SetPosition(sw / 2 - S(300) + (sel ? S(5) : 0), base.y_);
+                    bi->SetPosition(sw / 2 - S(330), base.y_);
                 }
             }
         }

@@ -31,3 +31,6 @@ core.*
 # --- генерируемые текстуры (tools/gen_textures.py) ---
 bin/Data/TexturesHD/
 build/Data/TexturesHD/
+
+# --- node-зависимости (tools/gen_boot_sigil.py) ---
+node_modules/
