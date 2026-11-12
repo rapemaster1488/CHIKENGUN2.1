@@ -85,6 +85,21 @@ if [ -n "$SDL_SHIM_DIR" ] && [ ! -d "$FOUND_INC/Urho3D/ThirdParty/SDL" ]; then
     SDL_CFLAGS="$SDL_CFLAGS -isystem /tmp/chikengun_sdl_shim"
 fi
 
+if [ -f "$FOUND_INC/Urho3D/ThirdParty/SDL/SDL_joystick.h" ] && [ ! -f "$FOUND_INC/Urho3D/ThirdParty/SDL/SDL_config.h" ]; then
+    found_inc_parent="$(dirname "$FOUND_INC")"
+    for scd in \
+        "$found_inc_parent/Source/ThirdParty/SDL/include/generated" \
+        "$found_inc_parent/Source/ThirdParty/SDL/include" \
+        "/usr/include/SDL2" \
+        "/usr/local/include/SDL2"
+    do
+        if [ -f "$scd/SDL_config.h" ]; then
+            SDL_CFLAGS="$SDL_CFLAGS -isystem $scd"
+            break
+        fi
+    done
+fi
+
 EXTRA=""
 for d in \
     "$FOUND_INC/Urho3D/ThirdParty/Bullet" \
