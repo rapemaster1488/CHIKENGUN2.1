@@ -218,6 +218,7 @@ if(BUILD_GAME)
                 "${urho3d_fc_BINARY_DIR}/include"
                 "${urho3d_fc_BINARY_DIR}/include/Urho3D/ThirdParty"
                 "${urho3d_fc_BINARY_DIR}/Source/ThirdParty/SDL/include/generated"
+                "${urho3d_fc_BINARY_DIR}/include/Urho3D/ThirdParty/SDL"
                 "${urho3d_fc_SOURCE_DIR}/Source/ThirdParty/Bullet/src"
             )
             if(TARGET Urho3D)
@@ -236,11 +237,20 @@ if(BUILD_GAME)
             if(EXISTS "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL/SDL_joystick.h"
                AND NOT EXISTS "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL/SDL_config.h")
                 if(EXISTS "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include/generated/SDL_config.h")
-                    target_include_directories(MyShooter SYSTEM PRIVATE "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include/generated")
+                    target_include_directories(MyShooter SYSTEM PRIVATE
+                        "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include/generated"
+                        "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL"
+                    )
                 elseif(EXISTS "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include/SDL_config.h")
-                    target_include_directories(MyShooter SYSTEM PRIVATE "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include")
+                    target_include_directories(MyShooter SYSTEM PRIVATE
+                        "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include"
+                        "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL"
+                    )
                 elseif(SDL2_INCLUDE_DIRS)
-                    target_include_directories(MyShooter SYSTEM PRIVATE ${SDL2_INCLUDE_DIRS})
+                    target_include_directories(MyShooter SYSTEM PRIVATE
+                        ${SDL2_INCLUDE_DIRS}
+                        "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL"
+                    )
                 endif()
             endif()
             target_link_libraries(MyShooter PRIVATE "${URHO3D_LIBRARY}")

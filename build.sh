@@ -782,6 +782,7 @@ if [ -n "$SDL_INC" ] && [ ! -f "$SDL_INC/SDL/SDL_config.h" ]; then
     done
     if [ -n "$SDL_CFG_DIR" ]; then
         SDL_CFLAGS="$SDL_CFLAGS -isystem $SDL_CFG_DIR"
+        [ -d "$SDL_INC/SDL" ] && SDL_CFLAGS="$SDL_CFLAGS -isystem $SDL_INC/SDL"
     fi
 fi
 

@@ -94,7 +94,7 @@ if [ -f "$FOUND_INC/Urho3D/ThirdParty/SDL/SDL_joystick.h" ] && [ ! -f "$FOUND_IN
         "/usr/local/include/SDL2"
     do
         if [ -f "$scd/SDL_config.h" ]; then
-            SDL_CFLAGS="$SDL_CFLAGS -isystem $scd"
+            SDL_CFLAGS="$SDL_CFLAGS -isystem $scd -isystem $FOUND_INC/Urho3D/ThirdParty/SDL"
             break
         fi
     done
