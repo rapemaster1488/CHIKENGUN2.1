@@ -8,6 +8,7 @@
 #   --4k             Пересобрать PBR текстуры в 4096x4096
 #   --rebuild        Принудительно пересобрать клиент
 # ============================================================================
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -54,13 +55,36 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+if [ -z "${URHO3D_HOME:-}" ] && [ -f "$ROOT/build/.urho_sdk_home" ]; then
+    saved_urho_home="$(cat "$ROOT/build/.urho_sdk_home" 2>/dev/null || true)"
+    [ -n "$saved_urho_home" ] && [ -d "$saved_urho_home" ] && export URHO3D_HOME="$saved_urho_home"
+fi
+
 TARGET_BIN="$ROOT/build/MyShooter${EXE_EXT}"
 if [ ! -x "$TARGET_BIN" ] && [ -x "$ROOT/build/Release/MyShooter${EXE_EXT}" ]; then
     TARGET_BIN="$ROOT/build/Release/MyShooter${EXE_EXT}"
 fi
 
+bin_missing_video_driver() {
+    local bin="$1"
+    [ "$OS_NAME" = "Linux" ] && [ -x "$bin" ] && [ "${URHO3D_ALLOW_HEADLESS:-0}" != "1" ] || return 1
+    if command -v nm >/dev/null 2>&1; then
+        # Если в бинарник вшит статический SDL_Init, но нет ни одного видеодрайвера (X11/Wayland/KMSDRM) — сборка битая.
+        if nm -g --defined-only "$bin" 2>/dev/null | grep -qE ' T _?SDL_Init$'; then
+            if ! nm -g --defined-only "$bin" 2>/dev/null | grep -qE ' [A-Za-z] _?(X11_bootstrap|Wayland_bootstrap|KMSDRM_bootstrap)$'; then
+                return 0
+            fi
+        fi
+    fi
+    return 1
+}
+
 NEED_BUILD="$FORCE_BUILD"
-if [ ! -x "$TARGET_BIN" ] || [ ! -f "$ROOT/build/Data/Textures/Skybox4K.xml" ] || [ ! -d "$ROOT/build/CoreData/Shaders" ]; then
+if [ ! -x "$TARGET_BIN" ] || [ ! -f "$ROOT/build/Data/Textures/Skybox4K.xml" ] || [ ! -f "$ROOT/build/Data/Textures/BanyaBirchDiffuse.png" ] || [ ! -d "$ROOT/build/CoreData/Shaders" ]; then
+    NEED_BUILD=1
+elif bin_missing_video_driver "$TARGET_BIN"; then
+    echo "[CHIKENGUN 2.5] Обнаружен бинарник, собранный с headless-сборкой Urho3D (без X11/Wayland видеодрайверов)."
+    echo "                 Запускаю пересборку с полноценным Urho3D SDK..."
     NEED_BUILD=1
 else
     for f in "$ROOT/src/"*; do
@@ -134,6 +158,27 @@ fi
 
 export CHIKENGUN_DATA_DIR="${CHIKENGUN_DATA_DIR:-$ROOT/build/Data}"
 export CHIKENGUN_COREDATA_DIR="${CHIKENGUN_COREDATA_DIR:-$ROOT/build/CoreData}"
+
+if [ "$OS_NAME" = "Linux" ]; then
+    if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${SDL_VIDEODRIVER:-}" != "dummy" ]; then
+        echo "[CHIKENGUN 2.5] ОШИБКА: не найдена графическая сессия (переменные DISPLAY и WAYLAND_DISPLAY пусты)."
+        echo "  Запустите игру из графического терминала рабочего стола или укажите DISPLAY=:0 ./run.sh"
+        exit 1
+    fi
+    if [ -x "$TARGET_BIN" ] && command -v nm >/dev/null 2>&1; then
+        if nm -g --defined-only "$TARGET_BIN" 2>/dev/null | grep -qE ' T _?SDL_Init$'; then
+            has_x11=0; has_wl=0
+            nm -g --defined-only "$TARGET_BIN" 2>/dev/null | grep -qE ' [A-Za-z] _?X11_bootstrap$' && has_x11=1
+            nm -g --defined-only "$TARGET_BIN" 2>/dev/null | grep -qE ' [A-Za-z] _?Wayland_bootstrap$' && has_wl=1
+            if [ "${SDL_VIDEODRIVER:-}" = "wayland" ] && [ "$has_wl" -eq 0 ] && [ "$has_x11" -eq 1 ] && [ -n "${DISPLAY:-}" ]; then
+                echo "[CHIKENGUN 2.5] SDL собран без Wayland-драйвера — переключаю SDL_VIDEODRIVER=x11 (через XWayland)."
+                export SDL_VIDEODRIVER=x11
+            elif [ -z "${SDL_VIDEODRIVER:-}" ] && [ -n "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ] && [ "$has_wl" -eq 1 ]; then
+                export SDL_VIDEODRIVER=wayland
+            fi
+        fi
+    fi
+fi
 
 cd "$(dirname "$TARGET_BIN")"
 exec "$TARGET_BIN" ${APP_ARGS[@]+"${APP_ARGS[@]}"}

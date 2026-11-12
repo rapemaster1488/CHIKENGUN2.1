@@ -11,6 +11,7 @@
 #   --tests-only     Собрать и прогнать только модульные C++17 тесты (без Urho3D)
 #   -j N / --jobs N  Число потоков сборки (по умолчанию все ядра)
 # ============================================================================
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -286,7 +287,7 @@ check_missing_tools() {
 install_cmd_for_mgr() {
     case "$1" in
         apt)
-            echo "sudo apt-get update && sudo apt-get install -y build-essential cmake git pkg-config python3 libsdl2-dev libgl-dev libglu1-mesa-dev libx11-dev libxrandr-dev libxi-dev libxext-dev libxcb1-dev libasound2-dev libpulse-dev libudev-dev"
+            echo "sudo apt-get update && sudo apt-get install -y build-essential cmake git pkg-config python3 libsdl2-dev libgl-dev libglu1-mesa-dev libx11-dev libxrandr-dev libxi-dev libxext-dev libxcursor-dev libxinerama-dev libxss-dev libxcb1-dev libasound2-dev libpulse-dev libdbus-1-dev libudev-dev"
             ;;
         dnf)
             echo "sudo dnf install -y gcc-c++ cmake make git pkgconf-pkg-config python3 SDL2-devel mesa-libGL-devel mesa-libGLU-devel libX11-devel libXrandr-devel libXi-devel libXext-devel libxcb-devel alsa-lib-devel pulseaudio-libs-devel systemd-devel"
@@ -368,6 +369,45 @@ pick_cxx || {
 # ---- 2. Автопоиск заголовков и библиотеки Urho3D (включая Nix store, pkg-config, .cache/urho3d-sdk) ----
 LOCAL_SDK="$ROOT/.cache/urho3d-sdk"
 URHO_PC_DIR=""
+
+urho_lib_is_usable() {
+    local libdir="$1"
+    local a="$libdir/libUrho3D.a"
+    if [ "$OS_NAME" = "Linux" ] && [ -f "$a" ] && [ ! -f "$libdir/libUrho3D.so" ] && [ "${URHO3D_ALLOW_HEADLESS:-0}" != "1" ] && command -v nm >/dev/null 2>&1; then
+        # Если в libUrho3D.a вшит SDL (есть SDL_Init), в нём обязан присутствовать хотя бы один видеодрайвер (X11/Wayland/KMSDRM).
+        if nm -g --defined-only "$a" 2>/dev/null | grep -qE ' T _?SDL_Init$'; then
+            if ! nm -g --defined-only "$a" 2>/dev/null | grep -qE ' [A-Za-z] _?(X11_bootstrap|Wayland_bootstrap|KMSDRM_bootstrap)$'; then
+                return 1
+            fi
+        fi
+    fi
+    return 0
+}
+
+find_urho_inc_in() {
+    local c="$1"
+    [ -n "$c" ] || return 1
+    if [ -f "$c/Urho3D/Engine/Application.h" ] || [ -f "$c/Urho3D/Urho3D.h" ]; then
+        echo "$c"
+        return 0
+    fi
+    if [ -f "$c/Engine/Application.h" ] || [ -f "$c/Core/UrhoVersion.h" ]; then
+        dirname "$c"
+        return 0
+    fi
+    return 1
+}
+
+find_urho_lib_in() {
+    local ld="$1"
+    [ -n "$ld" ] || return 1
+    if [ -f "$ld/libUrho3D.a" ] || [ -f "$ld/libUrho3D.so" ] || [ -f "$ld/libUrho3D.dylib" ] || [ -f "$ld/libUrho3D.dll.a" ]; then
+        echo "$ld"
+        return 0
+    fi
+    return 1
+}
+
 find_urho3d() {
     URHO_INC=""
     URHO_LIBDIR=""
@@ -389,76 +429,79 @@ find_urho3d() {
     done
     [ -n "$pc_paths" ] && export PKG_CONFIG_PATH="${pc_paths}${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
 
-    local candidates=()
-    [ -n "${URHO_INC_OVERRIDE:-}" ] && candidates+=("$URHO_INC_OVERRIDE")
-    [ -n "${URHO3D_HOME:-}" ]       && candidates+=("$URHO3D_HOME/include" "$URHO3D_HOME/build/include")
-    candidates+=(
-        "$LOCAL_SDK/include"
-        "$HOME/urho3d/build/include"
-        "$HOME/urho3d_build/include"
-        "$HOME/urho3d-build/out/include"
-        "$HOME/urho3d-local/include"
-        "/opt/homebrew/include/Urho3D"
-        "/opt/homebrew/include"
-        "/usr/local/include/Urho3D"
-        "/usr/local/include"
-        "/usr/include/Urho3D"
-        "/usr/include"
-    )
+    local prefixes=()
+    [ -n "${URHO3D_HOME:-}" ] && prefixes+=("$URHO3D_HOME" "$URHO3D_HOME/build")
     if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists Urho3D 2>/dev/null; then
         local pc_inc pc_lib
         pc_inc="$(pkg-config --variable=includedir Urho3D 2>/dev/null || true)"
         pc_lib="$(pkg-config --variable=libdir Urho3D 2>/dev/null || true)"
-        [ -n "$pc_inc" ] && candidates=("$pc_inc" "${candidates[@]}")
         [ -n "$pc_lib" ] && [ -d "$pc_lib" ] && URHO_PC_DIR="$pc_lib"
+        if [ -n "$pc_inc" ] && [ -n "$pc_lib" ]; then
+            local cand_inc="" cand_lib=""
+            cand_inc="$(find_urho_inc_in "$pc_inc" || true)"
+            cand_lib="$(find_urho_lib_in "$pc_lib" || find_urho_lib_in "$pc_lib/Urho3D" || true)"
+            if [ -n "$cand_inc" ] && [ -n "$cand_lib" ]; then
+                if urho_lib_is_usable "$cand_lib"; then
+                    URHO_INC="$cand_inc"
+                    URHO_LIBDIR="$cand_lib"
+                    return 0
+                else
+                    echo "[Urho3D] ВНИМАНИЕ: SDK из pkg-config ($cand_lib) собран без видеодрайверов SDL (X11/Wayland), пропускаю." >&2
+                fi
+            fi
+        fi
     fi
 
-    for c in "${candidates[@]}"; do
-        [ -z "$c" ] && continue
-        if [ -f "$c/Urho3D/Engine/Application.h" ] || [ -f "$c/Urho3D/Urho3D.h" ]; then
-            URHO_INC="$c"
-            break
-        fi
-        if [ -f "$c/Engine/Application.h" ] || [ -f "$c/Core/UrhoVersion.h" ]; then
-            URHO_INC="$(dirname "$c")"
-            break
-        fi
-    done
-
-    local libdirs=()
-    [ -n "$URHO_PC_DIR" ]    && libdirs+=("$URHO_PC_DIR" "$URHO_PC_DIR/Urho3D")
-    [ -n "${URHO3D_HOME:-}" ] && libdirs+=("$URHO3D_HOME/lib" "$URHO3D_HOME/lib/Urho3D" "$URHO3D_HOME/lib64" "$URHO3D_HOME/lib64/Urho3D" "$URHO3D_HOME/build/lib" "$URHO3D_HOME/build/lib/Urho3D")
-    [ -n "$URHO_INC" ]       && libdirs+=("$(dirname "$URHO_INC")/lib" "$(dirname "$URHO_INC")/lib/Urho3D" "$(dirname "$URHO_INC")/lib64" "$(dirname "$URHO_INC")/lib64/Urho3D")
-    libdirs+=(
-        "$LOCAL_SDK/lib"
-        "$LOCAL_SDK/lib/Urho3D"
-        "$LOCAL_SDK/lib64"
-        "$LOCAL_SDK/lib64/Urho3D"
-        "$HOME/urho3d-build/out/lib"
-        "$HOME/urho3d-build/lib"
-        "$HOME/urho3d/build/lib"
-        "$HOME/urho3d_build/out/lib"
-        "$HOME/urho3d_build/lib"
-        "$HOME/urho3d-local/lib"
-        "$HOME/urho3d-local/lib64"
-        "/opt/homebrew/lib"
-        "/opt/homebrew/lib/Urho3D"
-        "/usr/local/lib"
-        "/usr/local/lib/Urho3D"
-        "/usr/local/lib64"
-        "/usr/local/lib64/Urho3D"
-        "/usr/lib/x86_64-linux-gnu"
-        "/usr/lib/aarch64-linux-gnu"
-        "/usr/lib64"
-        "/usr/lib64/Urho3D"
-        "/usr/lib"
-        "/usr/lib/Urho3D"
+    prefixes+=(
+        "$LOCAL_SDK"
+        "$HOME/urho3d-local"
+        "$HOME/urho3d-build/out"
+        "$HOME/urho3d_build/out"
+        "$HOME/urho3d/build"
+        "$HOME/urho3d_build"
+        "/opt/homebrew"
+        "/usr/local"
+        "/usr"
     )
-    for ld in "${libdirs[@]}"; do
-        [ -z "$ld" ] && continue
-        if [ -f "$ld/libUrho3D.a" ] || [ -f "$ld/libUrho3D.so" ] || [ -f "$ld/libUrho3D.dylib" ] || [ -f "$ld/libUrho3D.dll.a" ]; then
-            URHO_LIBDIR="$ld"
-            break
+
+    if [ -n "${URHO_INC_OVERRIDE:-}" ]; then
+        local ov_inc ov_prefix
+        ov_inc="$(find_urho_inc_in "$URHO_INC_OVERRIDE" || true)"
+        if [ -n "$ov_inc" ]; then
+            ov_prefix="$(dirname "$ov_inc")"
+            for ld in "$ov_prefix/lib" "$ov_prefix/lib/Urho3D" "$ov_prefix/lib64" "$ov_prefix/lib64/Urho3D"; do
+                if find_urho_lib_in "$ld" >/dev/null && urho_lib_is_usable "$ld"; then
+                    URHO_INC="$ov_inc"
+                    URHO_LIBDIR="$ld"
+                    return 0
+                fi
+            done
+        fi
+    fi
+
+    for p in "${prefixes[@]}"; do
+        [ -n "$p" ] && [ -d "$p" ] || continue
+        local cand_inc="" cand_lib=""
+        for id in "$p/include" "$p/include/Urho3D"; do
+            cand_inc="$(find_urho_inc_in "$id" || true)"
+            [ -n "$cand_inc" ] && break
+        done
+        [ -n "$cand_inc" ] || continue
+        for ld in \
+            "$p/lib" "$p/lib/Urho3D" "$p/lib64" "$p/lib64/Urho3D" \
+            "$p/lib/x86_64-linux-gnu" "$p/lib/aarch64-linux-gnu"
+        do
+            cand_lib="$(find_urho_lib_in "$ld" || true)"
+            [ -n "$cand_lib" ] && break
+        done
+        [ -n "$cand_lib" ] || continue
+        if urho_lib_is_usable "$cand_lib"; then
+            URHO_INC="$cand_inc"
+            URHO_LIBDIR="$cand_lib"
+            return 0
+        else
+            echo "[Urho3D] ВНИМАНИЕ: найденный SDK ($cand_lib) собран без видеодрайверов SDL (X11/Wayland) и выдаст 'No available video device'!" >&2
+            echo "         Пропускаю его — будет использован или собран полноценный рабочий SDK." >&2
         fi
     done
 }
@@ -466,9 +509,46 @@ find_urho3d() {
 URHO_INC_OVERRIDE="${URHO_INC:-}"
 find_urho3d
 
+if [ -n "$URHO_INC" ] && [ -n "$URHO_LIBDIR" ] && [ -n "${URHO3D_HOME:-}" ]; then
+    mkdir -p "$ROOT/build"
+    printf '%s\n' "$URHO3D_HOME" > "$ROOT/build/.urho_sdk_home" 2>/dev/null || true
+elif [ -n "$URHO_INC" ] && [ -n "$URHO_LIBDIR" ] && { [ "$URHO_LIBDIR" = "$LOCAL_SDK/lib" ] || [ "$URHO_LIBDIR" = "$LOCAL_SDK/lib64" ]; }; then
+    rm -f "$ROOT/build/.urho_sdk_home" 2>/dev/null || true
+fi
+
 if [ -z "$URHO_INC" ] || [ -z "$URHO_LIBDIR" ]; then
+    # Перед сборкой Urho3D с нуля на Linux проверяем X11/XRandR/Audio заголовки, чтобы SDL внутри Urho3D не собрался с dummy-драйверами!
+    if [ "$OS_NAME" = "Linux" ] && [ "$IS_NIX" -eq 0 ] && [ -n "${CXX:-}" ]; then
+        sdk_missing=()
+        has_cpp_header "X11/Xlib.h" || sdk_missing+=("libx11-dev")
+        has_cpp_header "X11/extensions/Xrandr.h" || sdk_missing+=("libxrandr-dev")
+        has_cpp_header "X11/extensions/shape.h" || sdk_missing+=("libxext-dev")
+        has_cpp_header "GL/gl.h" || sdk_missing+=("libgl-dev")
+        if ! has_cpp_header "alsa/asoundlib.h" && ! has_cpp_header "pulse/simple.h"; then
+            sdk_missing+=("libasound2-dev/libpulse-dev")
+        fi
+        if [ "${#sdk_missing[@]}" -gt 0 ]; then
+            PKG_MGR="$(detect_pkg_mgr)"
+            CMD="$(install_cmd_for_mgr "$PKG_MGR")"
+            echo "[Urho3D] Для сборки рабочего Urho3D SDK со звуком и X11/мультимонитором не хватает: ${sdk_missing[*]}"
+            if [ "$INSTALL_DEPS" -eq 0 ] && [ -t 0 ] && [ -n "$CMD" ]; then
+                printf "Установить системные пакеты автоматически? [Y/n]: "
+                read -r ans || ans="n"
+                case "${ans:-y}" in
+                    [YyДд]*|"") INSTALL_DEPS=1 ;;
+                esac
+            fi
+            if [ "$INSTALL_DEPS" -eq 1 ] && [ -n "$CMD" ]; then
+                bash -c "$CMD"
+            elif [ -n "$CMD" ]; then
+                echo "ОШИБКА: Выполните сначала установку системных dev-пакетов или запустите с --install-deps:"
+                echo "  $CMD"
+                exit 1
+            fi
+        fi
+    fi
     echo "================================================================"
-    echo "[Urho3D] Локальный SDK не найден."
+    echo "[Urho3D] Локальный рабочий SDK не найден."
     echo "[Urho3D] Скачиваю и собираю минимальный статический Urho3D ($URHO3D_REF)"
     echo "         в $LOCAL_SDK (делается ОДИН раз, далее кэшируется)..."
     echo "================================================================"
@@ -556,6 +636,12 @@ PYPATCH
         if [ "$(uname -m)" = "arm64" ]; then
             CMAKE_EXTRA_ARGS+=("-DARM=1" "-DX86=0")
         fi
+    elif [ "$OS_NAME" = "Linux" ]; then
+        CMAKE_EXTRA_ARGS+=("-DVIDEO_X11=1" "-DALSA=1" "-DPULSEAUDIO=1")
+        if command -v wayland-scanner >/dev/null 2>&1 && command -v pkg-config >/dev/null 2>&1 && \
+           pkg-config --exists wayland-client wayland-egl wayland-cursor xkbcommon 2>/dev/null; then
+            CMAKE_EXTRA_ARGS+=("-DVIDEO_WAYLAND=1")
+        fi
     fi
     # CMake >= 3.27 / 4.0 отклоняет старые ThirdParty cmake_minimum_required без policy minimum
     CMAKE_VER="$(cmake --version 2>/dev/null | head -n1 | sed -E 's/[^0-9]*([0-9]+\.[0-9]+).*/\1/' || echo "3.20")"
@@ -589,7 +675,7 @@ PYPATCH
         "${CMAKE_EXTRA_ARGS[@]}"
     cmake --build "$URHO_BLD" -j"$JOBS"
     cmake --install "$URHO_BLD"
-    rm -rf "$URHO_BLD"
+    rm -rf "$URHO_BLD" "$ROOT/build/.urho_sdk_home"
     find_urho3d
 fi
 
@@ -659,6 +745,46 @@ fi
 
 SDL_CFLAGS="-D_REENTRANT"
 [ -n "$SDL_INC" ] && SDL_CFLAGS="-isystem $SDL_INC $SDL_CFLAGS"
+
+# Фикс для неустановленных сборок Urho3D (например ~/urho3d/build):
+# SDL_joystick.h лежит по симлинку в Source/ThirdParty/SDL/include, а SDL_config.h — в generated/.
+if [ -n "$SDL_INC" ] && [ ! -f "$SDL_INC/SDL/SDL_config.h" ]; then
+    SDL_CFG_DIR=""
+    urho_inc_parent="$(dirname "$URHO_INC")"
+    urho_lib_parent="$(dirname "$URHO_LIBDIR")"
+    sdl_cfg_candidates=(
+        "$urho_inc_parent/Source/ThirdParty/SDL/include/generated"
+        "$urho_inc_parent/Source/ThirdParty/SDL/include"
+        "$urho_lib_parent/Source/ThirdParty/SDL/include/generated"
+        "$urho_lib_parent/Source/ThirdParty/SDL/include"
+        "${URHO3D_HOME:-}/Source/ThirdParty/SDL/include/generated"
+        "${URHO3D_HOME:-}/build/Source/ThirdParty/SDL/include/generated"
+        "$URHO_INC/Urho3D/ThirdParty/SDL"
+    )
+    if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists sdl2 2>/dev/null; then
+        for f in $(pkg-config --cflags-only-I sdl2 2>/dev/null | tr ' ' '\n' | sed 's/^-I//'); do
+            [ -n "$f" ] && sdl_cfg_candidates+=("$f" "$f/SDL2")
+        done
+    fi
+    sdl_cfg_candidates+=(
+        "$HOME/.nix-profile/include/SDL2"
+        "/run/current-system/sw/include/SDL2"
+        "/opt/homebrew/include/SDL2"
+        "/usr/local/include/SDL2"
+        "/usr/include/SDL2"
+    )
+    for scd in "${sdl_cfg_candidates[@]}"; do
+        [ -n "$scd" ] || continue
+        if [ -f "$scd/SDL_config.h" ]; then
+            SDL_CFG_DIR="$scd"
+            break
+        fi
+    done
+    if [ -n "$SDL_CFG_DIR" ]; then
+        SDL_CFLAGS="$SDL_CFLAGS -isystem $SDL_CFG_DIR"
+        [ -d "$SDL_INC/SDL" ] && SDL_CFLAGS="$SDL_CFLAGS -isystem $SDL_INC/SDL"
+    fi
+fi
 
 BULLET_CFLAGS=""
 for d in \
@@ -849,7 +975,7 @@ find "$ROOT/build/Data" -name "*.mat" ! -path "*Materials*" -delete 2>/dev/null 
 find "$ROOT/build/Data" "$ROOT/build/CoreData" -type f -size 0 -delete 2>/dev/null || true
 [ -f "$ROOT/bin/settings.ini" ] && [ ! -f "$ROOT/build/settings.ini" ] && cp "$ROOT/bin/settings.ini" "$ROOT/build/settings.ini" || true
 
-# ---- 5. Валидация и генерация 9 PBR наборов текстур (вкл. BanyaLog & BanyaRooster) ----
+# ---- 5. Валидация и генерация 13 PBR наборов текстур (вкл. банные материалы) ----
 texture_set_is_valid() {
     local tex_dir="$1"
     python3 - "$tex_dir" <<'PY'
