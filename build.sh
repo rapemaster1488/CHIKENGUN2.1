@@ -34,9 +34,122 @@ case "$OS_NAME" in
 esac
 
 IS_NIX=0
-if [ -f /etc/NIXOS ] || [ -n "${IN_NIX_SHELL:-}" ] || [ -n "${NIX_CC:-}" ] || [ -n "${NIX_CFLAGS_COMPILE:-}" ]; then
+if [ -f /etc/NIXOS ] || [ -n "${IN_NIX_SHELL:-}" ] || [ -n "${NIX_CC:-}" ] || [ -n "${NIX_CFLAGS_COMPILE:-}" ] || [ -n "${NIX_PROFILES:-}" ] || [ -d "$HOME/.nix-profile" ]; then
     IS_NIX=1
 fi
+
+NIX_INC_FLAGS=()
+NIX_LINK_FLAGS=()
+NIX_RPATH_DIRS=()
+
+append_unique_word() {
+    local arr_name="$1" val="$2"
+    [ -n "$val" ] || return 0
+    local existing=""
+    eval "existing=\" \${${arr_name}[*]+\${${arr_name}[*]}} \""
+    case "$existing" in
+        *" $val "*) return 0 ;;
+    esac
+    eval "${arr_name}+=(\"\$val\")"
+}
+
+append_unique_inc_dir() {
+    local dir="$1"
+    [ -n "$dir" ] && [ -d "$dir" ] || return 0
+    case " ${NIX_INC_FLAGS[*]+${NIX_INC_FLAGS[*]}} " in
+        *" $dir "*) return 0 ;;
+    esac
+    NIX_INC_FLAGS+=("-isystem" "$dir")
+}
+
+collect_nix_paths() {
+    [ "$IS_NIX" -eq 1 ] || return 0
+    local profiles=()
+    local p
+    if [ -n "${NIX_PROFILES:-}" ]; then
+        for p in $NIX_PROFILES; do
+            profiles+=("$p")
+        done
+    fi
+    profiles+=(
+        "$HOME/.nix-profile"
+        "/etc/profiles/per-user/${USER:-$(id -un 2>/dev/null || true)}"
+        "/nix/var/nix/profiles/default"
+        "/run/current-system/sw"
+    )
+
+    local pc_extra=""
+    for p in "${profiles[@]}"; do
+        [ -n "$p" ] && [ -d "$p" ] || continue
+        if [ -d "$p/lib/pkgconfig" ]; then
+            pc_extra="${pc_extra:+$pc_extra:}$p/lib/pkgconfig"
+        fi
+        if [ -d "$p/share/pkgconfig" ]; then
+            pc_extra="${pc_extra:+$pc_extra:}$p/share/pkgconfig"
+        fi
+        if [ -d "$p/include" ]; then
+            append_unique_inc_dir "$p/include"
+            append_unique_inc_dir "$p/include/SDL2"
+        fi
+        if [ -d "$p/lib" ]; then
+            append_unique_word NIX_LINK_FLAGS "-L$p/lib"
+            append_unique_word NIX_RPATH_DIRS "$p/lib"
+        fi
+        if [ -d "$p/lib64" ]; then
+            append_unique_word NIX_LINK_FLAGS "-L$p/lib64"
+            append_unique_word NIX_RPATH_DIRS "$p/lib64"
+        fi
+    done
+
+    if [ -n "${NIX_CFLAGS_COMPILE:-}" ]; then
+        local prev="" tok
+        for tok in $NIX_CFLAGS_COMPILE; do
+            if [ "$prev" = "-isystem" ] || [ "$prev" = "-I" ]; then
+                append_unique_inc_dir "$tok"
+                prev=""
+                continue
+            fi
+            prev="$tok"
+            case "$tok" in
+                -I/*)
+                    append_unique_inc_dir "${tok#-I}"
+                    ;;
+            esac
+        done
+    fi
+
+    if [ -n "${NIX_LDFLAGS:-}" ]; then
+        local prev="" tok
+        for tok in $NIX_LDFLAGS; do
+            if [ "$prev" = "-L" ] && [ -d "$tok" ]; then
+                append_unique_word NIX_LINK_FLAGS "-L$tok"
+                append_unique_word NIX_RPATH_DIRS "$tok"
+                prev=""
+                continue
+            fi
+            prev="$tok"
+            case "$tok" in
+                -L/*)
+                    local d="${tok#-L}"
+                    if [ -d "$d" ]; then
+                        append_unique_word NIX_LINK_FLAGS "-L$d"
+                        append_unique_word NIX_RPATH_DIRS "$d"
+                    fi
+                    ;;
+            esac
+        done
+    fi
+
+    for gldir in /run/opengl-driver/lib /run/opengl-driver-32/lib; do
+        [ -d "$gldir" ] && append_unique_word NIX_RPATH_DIRS "$gldir"
+    done
+
+    if [ -n "$pc_extra" ]; then
+        export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+$PKG_CONFIG_PATH:}$pc_extra"
+    fi
+}
+
+collect_nix_paths
 
 OUT="$ROOT/build/MyShooter${EXE_EXT}"
 
@@ -97,13 +210,13 @@ has_cpp_header() {
     local hdr="$1"
     shift || true
     [ -n "${CXX:-}" ] || return 1
-    printf '#include <%s>\nint main(){return 0;}\n' "$hdr" | "$CXX" -x c++ -E "$@" - >/dev/null 2>&1
+    printf '#include <%s>\nint main(){return 0;}\n' "$hdr" | "$CXX" -x c++ -E ${NIX_INC_FLAGS[@]+"${NIX_INC_FLAGS[@]}"} "$@" - >/dev/null 2>&1
 }
 
 can_link_lib() {
     local lib="$1"
     [ -n "${CXX:-}" ] || return 1
-    printf 'int main(){return 0;}\n' | "$CXX" -x c++ - -o "$ROOT/build/.link_probe${EXE_EXT}" "-l$lib" >/dev/null 2>&1
+    printf 'int main(){return 0;}\n' | "$CXX" -x c++ - -o "$ROOT/build/.link_probe${EXE_EXT}" ${NIX_LINK_FLAGS[@]+"${NIX_LINK_FLAGS[@]}"} "-l$lib" >/dev/null 2>&1
     local rc=$?
     rm -f "$ROOT/build/.link_probe${EXE_EXT}"
     return $rc
@@ -150,18 +263,24 @@ check_missing_tools() {
             has_sdl=1
         elif has_cpp_header "SDL2/SDL.h" || has_cpp_header "SDL.h"; then
             has_sdl=1
+        elif [ -f "$ROOT/.cache/urho3d-sdk/include/Urho3D/ThirdParty/SDL/SDL_joystick.h" ] || \
+             [ -f "$HOME/urho3d-local/include/Urho3D/ThirdParty/SDL/SDL_joystick.h" ] || \
+             [ -f "$HOME/urho3d-build/out/include/Urho3D/ThirdParty/SDL/SDL_joystick.h" ]; then
+            has_sdl=1
         fi
-        if (command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gl 2>/dev/null) || has_cpp_header "GL/gl.h"; then
+        if { (command -v pkg-config >/dev/null 2>&1 && pkg-config --exists gl 2>/dev/null) || has_cpp_header "GL/gl.h"; } && \
+           { (command -v pkg-config >/dev/null 2>&1 && pkg-config --libs gl >/dev/null 2>&1) || can_link_lib GL || can_link_lib OpenGL; }; then
             has_gl=1
         fi
-        if (command -v pkg-config >/dev/null 2>&1 && pkg-config --exists x11 2>/dev/null) || has_cpp_header "X11/Xlib.h"; then
+        if { (command -v pkg-config >/dev/null 2>&1 && pkg-config --exists x11 2>/dev/null) || has_cpp_header "X11/Xlib.h"; } && \
+           { (command -v pkg-config >/dev/null 2>&1 && pkg-config --libs x11 >/dev/null 2>&1) || can_link_lib X11; }; then
             has_x11=1
         fi
         [ "$has_sdl" -eq 0 ] && missing+=("sdl2-dev")
         [ "$has_gl" -eq 0 ] && missing+=("opengl-dev")
         [ "$has_x11" -eq 0 ] && missing+=("x11-dev")
     fi
-    echo "${missing[*]:-}"
+    echo "${missing[*]+${missing[*]}}"
 }
 
 install_cmd_for_mgr() {
@@ -201,20 +320,18 @@ MISSING="$(check_missing_tools)"
 if [ -n "$MISSING" ]; then
     # Особая ветка для NixOS / Nix вне devShell / nix-shell
     if [ "$IS_NIX" -eq 1 ] && [ -z "${IN_NIX_SHELL:-}" ]; then
-        echo "[Nix] Обнаружена система Nix/NixOS (недостающие инструменты в текущем shell: $MISSING)."
-        if [ "$INSTALL_DEPS" -eq 1 ] || [ -t 0 ]; then
-            if command -v nix >/dev/null 2>&1 && nix --extra-experimental-features "nix-command flakes" flake metadata "$ROOT" >/dev/null 2>&1; then
-                echo "[Nix] Перезапускаю сборку внутри nix develop..."
-                exec nix --extra-experimental-features "nix-command flakes" develop "$ROOT" -c "$0" "${ORIG_ARGS[@]}"
-            elif command -v nix-shell >/dev/null 2>&1 && [ -f "$ROOT/shell.nix" ]; then
-                echo "[Nix] Перезапускаю сборку внутри nix-shell..."
-                exec nix-shell "$ROOT/shell.nix" --run "$(printf '%q ' "$0" "${ORIG_ARGS[@]}")"
-            fi
+        echo "[Nix] Обнаружена система Nix/NixOS (недостающие компоненты в текущем shell: $MISSING)."
+        if command -v nix-shell >/dev/null 2>&1 && [ -f "$ROOT/shell.nix" ] && command -v nix-instantiate >/dev/null 2>&1 && nix-instantiate --eval -E '<nixpkgs>' >/dev/null 2>&1; then
+            echo "[Nix] Перезапускаю сборку внутри nix-shell..."
+            exec nix-shell "$ROOT/shell.nix" --run "$(printf '%q ' "$0" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"})"
+        elif command -v nix >/dev/null 2>&1 && nix --extra-experimental-features "nix-command flakes" flake metadata "$ROOT" >/dev/null 2>&1; then
+            echo "[Nix] Перезапускаю сборку внутри nix develop..."
+            exec nix --extra-experimental-features "nix-command flakes" develop "$ROOT" -c "$0" ${ORIG_ARGS[@]+"${ORIG_ARGS[@]}"}
         fi
         echo "Запустите одним из способов:"
-        echo "  nix run                                  # Собрать и сразу запустить (Flakes)"
-        echo "  nix develop -c ./run.sh                  # Войти в devShell и запустить"
+        echo "  nix --extra-experimental-features \"nix-command flakes\" run .#default"
         echo "  nix-shell --run ./run.sh                 # Классический nix-shell (без Flakes)"
+        echo "  nix develop -c ./run.sh                  # Войти в Flake devShell и запустить"
         exit 1
     fi
 
@@ -263,8 +380,11 @@ find_urho3d() {
         "${URHO3D_HOME:-}/lib64/pkgconfig" \
         "$LOCAL_SDK/lib/pkgconfig" \
         "$LOCAL_SDK/lib64/pkgconfig" \
+        "$HOME/urho3d-build/out/lib/pkgconfig" \
+        "$HOME/urho3d-build/lib/pkgconfig" \
+        "$HOME/urho3d_build/out/lib/pkgconfig" \
         "$HOME/urho3d-local/lib/pkgconfig" \
-        "$HOME/urho3d-build/out/lib/pkgconfig"; do
+        "$HOME/urho3d-local/lib64/pkgconfig"; do
         [ -d "$pd" ] && pc_paths="${pc_paths:+$pc_paths:}$pd"
     done
     [ -n "$pc_paths" ] && export PKG_CONFIG_PATH="${pc_paths}${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
@@ -362,7 +482,7 @@ if [ -z "$URHO_INC" ] || [ -z "$URHO_LIBDIR" ]; then
     fi
 
     # Патчим Urho3D 1.9.0 для совместимости с macOS Apple Silicon (arm64) и новым Apple SDK
-    if [ "$OS_NAME" = "Darwin" ] && [ ! -f "$URHO_SRC/.chikengun_apple_patched_v3" ] && command -v python3 >/dev/null 2>&1; then
+    if [ "$OS_NAME" = "Darwin" ] && [ ! -f "$URHO_SRC/.chikengun_apple_patched_v4" ] && command -v python3 >/dev/null 2>&1; then
         python3 - "$URHO_SRC" << 'PYPATCH'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -399,7 +519,7 @@ for rel in ["Source/ThirdParty/FreeType/src/gzip/ftzconf.h", "Source/ThirdParty/
     if p.exists():
         s = p.read_text()
         s = s.replace('#if !defined(MACOS) && !defined(TARGET_OS_MAC)',
-                      '#if !defined(MACOS) && (!defined(TARGET_OS_MAC) || !defined(_MACTYPES_))')
+                      '#if !defined(MACOS) && (!defined(TARGET_OS_MAC) || (!defined(__MACTYPES__) && !defined(_MACTYPES_)))')
         p.write_text(s)
 
 fc = root / "Source/Urho3D/IO/File.cpp"
@@ -419,7 +539,7 @@ if fc.exists():
                   '#ifdef __APPLE__\n        handle_ = fopen(GetNativePath(fileName).CString(), openMode[mode + 1]);\n#else\n        handle_ = fopen64(GetNativePath(fileName).CString(), openMode[mode + 1]);\n#endif')
     fc.write_text(s)
 
-(root / ".chikengun_apple_patched_v3").write_text("1\n")
+(root / ".chikengun_apple_patched_v4").write_text("1\n")
 PYPATCH
     fi
     rm -rf "$URHO_BLD"
@@ -431,8 +551,11 @@ PYPATCH
         "-DCMAKE_C_FLAGS=-std=gnu11 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types"
         "-DCMAKE_CXX_FLAGS=-include cstdint -Wno-error"
     )
-    if [ "$OS_NAME" = "Darwin" ] && [ "$(uname -m)" = "arm64" ]; then
-        CMAKE_EXTRA_ARGS+=("-DARM=1" "-DX86=0")
+    if [ "$OS_NAME" = "Darwin" ]; then
+        CMAKE_EXTRA_ARGS+=("-DVIDEO_X11=0")
+        if [ "$(uname -m)" = "arm64" ]; then
+            CMAKE_EXTRA_ARGS+=("-DARM=1" "-DX86=0")
+        fi
     fi
     # CMake >= 3.27 / 4.0 отклоняет старые ThirdParty cmake_minimum_required без policy minimum
     CMAKE_VER="$(cmake --version 2>/dev/null | head -n1 | sed -E 's/[^0-9]*([0-9]+\.[0-9]+).*/\1/' || echo "3.20")"
@@ -476,6 +599,9 @@ if [ -z "$URHO_INC" ] || [ -z "$URHO_LIBDIR" ]; then
 fi
 echo "[Urho3D] Заголовки:  $URHO_INC"
 echo "[Urho3D] Библиотеки: $URHO_LIBDIR"
+if [ "${#NIX_LINK_FLAGS[@]}" -gt 0 ]; then
+    echo "[Nix] Пути линковки: ${NIX_LINK_FLAGS[*]}"
+fi
 
 # ---- 3. Флаги SDL2, Bullet3, статического Urho3D и системных библиотек ----
 SDL_INC=""
@@ -486,21 +612,36 @@ if [ -d "$URHO_INC/Urho3D/ThirdParty/SDL" ] && [ -f "$URHO_INC/Urho3D/ThirdParty
     SDL_INC="$URHO_INC/Urho3D/ThirdParty"
 fi
 
+IS_STATIC_URHO=0
+if [ -f "$URHO_LIBDIR/libUrho3D.a" ] && [ ! -f "$URHO_LIBDIR/libUrho3D.so" ] && [ ! -f "$URHO_LIBDIR/libUrho3D.dylib" ] && [ ! -f "$URHO_LIBDIR/libUrho3D.dll.a" ]; then
+    IS_STATIC_URHO=1
+fi
+
+NEED_SYS_SDL=0
+if [ "$IS_STATIC_URHO" -eq 0 ] || [ -z "$SDL_INC" ]; then
+    NEED_SYS_SDL=1
+elif command -v nm >/dev/null 2>&1 && ! nm -g --defined-only "$URHO_LIBDIR/libUrho3D.a" 2>/dev/null | grep -qE ' T _?SDL_Init$'; then
+    NEED_SYS_SDL=1
+fi
+
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists sdl2 2>/dev/null; then
-    # Если Urho3D собран с системным SDL2 или динамически — добавим -lSDL2
-    if [ -z "$SDL_INC" ] || [ ! -f "$URHO_LIBDIR/libUrho3D.a" ]; then
-        SDL_LIBS="$(pkg-config --libs sdl2)"
+    if [ "$NEED_SYS_SDL" -eq 1 ]; then
+        SDL_LIBS="$(pkg-config --libs sdl2 2>/dev/null || true)"
     fi
-    for f in $(pkg-config --cflags-only-I sdl2 | tr ' ' '\n' | sed 's/^-I//'); do
+    for f in $(pkg-config --cflags-only-I sdl2 2>/dev/null | tr ' ' '\n' | sed 's/^-I//'); do
         if [ -z "$SDL_INC" ] && [ -f "$f/SDL/SDL_joystick.h" ]; then SDL_INC="$f"; break; fi
         if [ -f "$f/SDL2/SDL_joystick.h" ]; then SDL_INC2="$f/SDL2"; fi
         if [ -f "$f/SDL_joystick.h" ] && [ "$(basename "$f")" = "SDL2" ]; then SDL_INC2="$f"; fi
     done
+elif [ "$NEED_SYS_SDL" -eq 1 ] && can_link_lib SDL2; then
+    SDL_LIBS="-lSDL2"
 fi
 
 if [ -z "$SDL_INC" ]; then
     for d in \
         "$URHO_INC/Urho3D/ThirdParty" \
+        "$HOME/.nix-profile/include" \
+        "/run/current-system/sw/include" \
         "/opt/homebrew/include" \
         "/usr/local/include" \
         "/usr/include"
@@ -524,6 +665,8 @@ for d in \
     "$URHO_INC/Urho3D/ThirdParty/Bullet" \
     "$URHO_INC/Urho3D/ThirdParty/Bullet/src" \
     "${URHO3D_HOME:-}/include/Urho3D/ThirdParty/Bullet" \
+    "$HOME/urho3d-local/include/Urho3D/ThirdParty/Bullet" \
+    "$HOME/urho3d-build/out/include/Urho3D/ThirdParty/Bullet" \
     "$HOME/urho3d/src/ThirdParty/Bullet/src" \
     "$HOME/urho3d/ThirdParty/Bullet/src"
 do
@@ -544,40 +687,86 @@ done
 EXTRA_DEFINES=()
 EXTRA_SYS_LIBS=()
 RPATH_FLAGS=()
+URHO_PC_DEFINES=()
+URHO_PC_EXTRA_LIBS=()
 
-if [ -f "$URHO_LIBDIR/libUrho3D.a" ] && [ ! -f "$URHO_LIBDIR/libUrho3D.so" ] && [ ! -f "$URHO_LIBDIR/libUrho3D.dylib" ] && [ ! -f "$URHO_LIBDIR/libUrho3D.dll.a" ]; then
+if [ "$IS_STATIC_URHO" -eq 1 ]; then
     EXTRA_DEFINES+=("-DURHO3D_STATIC_DEFINE")
 fi
 
-# Если есть Urho3D.pc (генерируется CMake'ом Urho3D), берём системные флаги прямо оттуда + перепроверяем
-URHO_PC_LIBS=""
+# Если есть Urho3D.pc для выбранного URHO_LIBDIR, подтягиваем его -D дефайны и системные -l библиотеки
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists Urho3D 2>/dev/null; then
-    URHO_PC_LIBS="$(pkg-config --libs Urho3D 2>/dev/null || true)"
+    PC_LIBDIR="$(pkg-config --variable=libdir Urho3D 2>/dev/null || true)"
+    for tok in $(pkg-config --cflags Urho3D 2>/dev/null || true); do
+        case "$tok" in
+            -D*)
+                if [ "$tok" != "-DURHO3D_STATIC_DEFINE" ] || [ "$IS_STATIC_URHO" -eq 1 ]; then
+                    append_unique_word URHO_PC_DEFINES "$tok"
+                fi
+                ;;
+        esac
+    done
+    if [ -z "$PC_LIBDIR" ] || [ "$PC_LIBDIR" = "$URHO_LIBDIR" ] || [ "$(cd "$PC_LIBDIR" 2>/dev/null && pwd -P)" = "$(cd "$URHO_LIBDIR" 2>/dev/null && pwd -P)" ]; then
+        for tok in $(pkg-config --libs Urho3D 2>/dev/null || true); do
+            case "$tok" in
+                -lUrho3D|-L*) ;;
+                -l*|-pthread|-Wl,*)
+                    URHO_PC_EXTRA_LIBS+=("$tok")
+                    ;;
+            esac
+        done
+    else
+        for tok in $(pkg-config --libs Urho3D 2>/dev/null || true); do
+            case "$tok" in
+                -lUrho3D|-L*) ;;
+                -l*|-pthread)
+                    URHO_PC_EXTRA_LIBS+=("$tok")
+                    ;;
+            esac
+        done
+    fi
 fi
 
 if [ "$OS_NAME" = "Linux" ]; then
     RPATH_FLAGS+=("-Wl,-rpath,$URHO_LIBDIR" "-Wl,-rpath,\$ORIGIN/lib")
-    if [ -n "${EXTRA_DEFINES[*]:-}" ]; then
+    for rd in ${NIX_RPATH_DIRS[@]+"${NIX_RPATH_DIRS[@]}"}; do
+        RPATH_FLAGS+=("-Wl,-rpath,$rd")
+    done
+    if [ "$IS_STATIC_URHO" -eq 1 ]; then
         # Сначала пробуем pkg-config для NixOS / нестандартных путей, затем probe через линковщик
         if command -v pkg-config >/dev/null 2>&1; then
-            for pc_mod in gl glu x11 xext xrandr xi alsa libpulse libpulse-simple libudev; do
+            for pc_mod in \
+                gl glu opengl glx x11 xext xrandr xi \
+                xcursor xinerama xxf86vm xrender xfixes xscrnsaver xcb \
+                alsa libpulse libpulse-simple libudev dbus-1 xkbcommon \
+                wayland-client wayland-egl wayland-cursor
+            do
                 if pkg-config --exists "$pc_mod" 2>/dev/null; then
-                    for tok in $(pkg-config --libs "$pc_mod" 2>/dev/null); do
-                        EXTRA_SYS_LIBS+=("$tok")
+                    for tok in $(pkg-config --libs "$pc_mod" 2>/dev/null || true); do
+                        case "$tok" in
+                            -L*|-l*|-pthread|-Wl,*)
+                                append_unique_word EXTRA_SYS_LIBS "$tok"
+                                ;;
+                        esac
                     done
                 fi
             done
         fi
-        for syslib in GL GLU X11 Xext Xrandr Xi asound pulse pulse-simple udev rt dl m; do
+        for syslib in \
+            GL OpenGL GLX GLU \
+            X11 Xext Xrandr Xi Xcursor Xinerama Xxf86vm Xrender Xfixes Xss xcb \
+            asound pulse pulse-simple udev dbus-1 xkbcommon \
+            wayland-client wayland-egl wayland-cursor \
+            rt dl m
+        do
             if can_link_lib "$syslib"; then
-                case " ${EXTRA_SYS_LIBS[*]:-} " in
-                    *" -l$syslib "*) ;;
-                    *) EXTRA_SYS_LIBS+=("-l$syslib") ;;
-                esac
+                append_unique_word EXTRA_SYS_LIBS "-l$syslib"
             fi
         done
     else
-        EXTRA_SYS_LIBS+=("-lGL" "-lX11" "-lrt" "-ldl" "-lm")
+        for syslib in GL X11 rt dl m; do
+            can_link_lib "$syslib" && append_unique_word EXTRA_SYS_LIBS "-l$syslib"
+        done
         [ -z "$SDL_LIBS" ] && can_link_lib SDL2 && SDL_LIBS="-lSDL2"
     fi
 elif [ "$OS_NAME" = "Darwin" ]; then
@@ -612,6 +801,10 @@ for csrc in \
     "$LOCAL_SDK/share/Urho3D/CoreData" \
     "${URHO3D_HOME:-}/share/Urho3D/Resources/CoreData" \
     "${URHO3D_HOME:-}/bin/CoreData" \
+    "$HOME/urho3d-local/share/Urho3D/Resources/CoreData" \
+    "$HOME/urho3d-local/share/Urho3D/CoreData" \
+    "$HOME/urho3d-build/out/share/Urho3D/Resources/CoreData" \
+    "$HOME/urho3d-build/bin/CoreData" \
     "$URHO_RES_PREFIX/share/Urho3D/Resources/CoreData" \
     "$URHO_RES_PREFIX/bin/CoreData" \
     "$HOME/urho3d/bin/CoreData" \
@@ -634,6 +827,10 @@ for dsrc in \
     "$LOCAL_SDK/share/Urho3D/Data" \
     "${URHO3D_HOME:-}/share/Urho3D/Resources/Data" \
     "${URHO3D_HOME:-}/bin/Data" \
+    "$HOME/urho3d-local/share/Urho3D/Resources/Data" \
+    "$HOME/urho3d-local/share/Urho3D/Data" \
+    "$HOME/urho3d-build/out/share/Urho3D/Resources/Data" \
+    "$HOME/urho3d-build/bin/Data" \
     "$URHO_RES_PREFIX/share/Urho3D/Resources/Data" \
     "$URHO_RES_PREFIX/bin/Data" \
     "$HOME/urho3d/bin/Data" \
@@ -737,17 +934,21 @@ echo "[3/3] Компиляция src/MyApp.cpp -> build/MyShooter${EXE_EXT} ($CX
 "$CXX" "$ROOT/src/MyApp.cpp" \
     -o "$OUT" \
     -std=c++17 $CXXFLAGS \
-    "${EXTRA_DEFINES[@]}" \
+    ${EXTRA_DEFINES[@]+"${EXTRA_DEFINES[@]}"} \
+    ${URHO_PC_DEFINES[@]+"${URHO_PC_DEFINES[@]}"} \
     -isystem "$URHO_INC" \
     -isystem "$URHO_INC/Urho3D/ThirdParty" \
     $SDL_CFLAGS \
     $BULLET_CFLAGS \
+    ${NIX_INC_FLAGS[@]+"${NIX_INC_FLAGS[@]}"} \
     -L"$URHO_LIBDIR" \
-    "${RPATH_FLAGS[@]}" \
+    ${NIX_LINK_FLAGS[@]+"${NIX_LINK_FLAGS[@]}"} \
+    ${RPATH_FLAGS[@]+"${RPATH_FLAGS[@]}"} \
     -lUrho3D \
-    "${BULLET_LIBS[@]}" \
+    ${BULLET_LIBS[@]+"${BULLET_LIBS[@]}"} \
     $SDL_LIBS \
-    "${EXTRA_SYS_LIBS[@]}" \
+    ${URHO_PC_EXTRA_LIBS[@]+"${URHO_PC_EXTRA_LIBS[@]}"} \
+    ${EXTRA_SYS_LIBS[@]+"${EXTRA_SYS_LIBS[@]}"} \
     -lpthread
 
 echo "================================================================"

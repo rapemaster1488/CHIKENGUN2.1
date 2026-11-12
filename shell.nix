@@ -8,18 +8,26 @@ let
   inherit (pkgs) lib stdenv;
   sdlPkg = pkgs.SDL2 or pkgs.sdl2-compat;
 
-  x11Libs = lib.optionals stdenv.isLinux [
-    (pkgs.libX11 or pkgs.xorg.libX11)
-    (pkgs.libXext or pkgs.xorg.libXext)
-    (pkgs.libXrandr or pkgs.xorg.libXrandr)
-    (pkgs.libXi or pkgs.xorg.libXi)
-    (pkgs.libXcursor or pkgs.xorg.libXcursor)
-    (pkgs.libXinerama or pkgs.xorg.libXinerama)
-    (pkgs.libXxf86vm or pkgs.xorg.libXxf86vm)
-    (pkgs.libXrender or pkgs.xorg.libXrender)
-    (pkgs.libXfixes or pkgs.xorg.libXfixes)
-    (pkgs.libxcb or pkgs.xorg.libxcb)
-  ];
+  optPkg = names:
+    let
+      found = lib.findFirst (n: pkgs ? ${n} || (pkgs ? xorg && pkgs.xorg ? ${n})) null names;
+    in
+    if found == null then [ ]
+    else [ (if pkgs ? ${found} then pkgs.${found} else pkgs.xorg.${found}) ];
+
+  x11Libs = lib.optionals stdenv.isLinux (
+    optPkg [ "libX11" ]
+    ++ optPkg [ "libXext" ]
+    ++ optPkg [ "libXrandr" ]
+    ++ optPkg [ "libXi" ]
+    ++ optPkg [ "libXcursor" ]
+    ++ optPkg [ "libXinerama" ]
+    ++ optPkg [ "libXxf86vm" ]
+    ++ optPkg [ "libXrender" ]
+    ++ optPkg [ "libXfixes" ]
+    ++ optPkg [ "libXScrnSaver" ]
+    ++ optPkg [ "libxcb" ]
+  );
 
   linuxLibs = lib.optionals stdenv.isLinux ([
     (pkgs.libGL or pkgs.mesa)
@@ -27,6 +35,7 @@ let
     pkgs.alsa-lib
     pkgs.libpulseaudio
     (pkgs.udev or pkgs.systemdLibs or pkgs.systemd)
+    pkgs.dbus
     pkgs.libxkbcommon
   ] ++ x11Libs);
 
@@ -68,6 +77,6 @@ pkgs.mkShell {
     '' else ''
       export DYLD_LIBRARY_PATH="${lib.makeLibraryPath [ sdlPkg ]}''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
     ''}
-    echo "CHIKENGUN 2.5 nix-shell ready. Run ./run.sh (builds cached static Urho3D on first run) or ./build.sh --tests-only."
+    echo "CHIKENGUN 2.5 nix-shell ready. Run ./run.sh (uses local Urho3D or builds cached static Urho3D) or ./build.sh --tests-only."
   '';
 }

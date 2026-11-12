@@ -29,6 +29,7 @@ CANDIDATES=()
 CANDIDATES+=(
     "$ROOT/.cache/urho3d-sdk/include"
     "$HOME/urho3d/build/include"
+    "$HOME/urho3d-build/out/include"
     "$HOME/urho3d_build/include"
     "$HOME/urho3d-local/include"
     "/opt/homebrew/include/Urho3D"

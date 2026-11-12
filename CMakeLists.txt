@@ -72,11 +72,25 @@ if(BUILD_GAME)
     find_package(PkgConfig QUIET)
     set(URHO3D_PC_FOUND FALSE)
     if(PkgConfig_FOUND)
+        set(_extra_pc_dirs "")
         if(URHO3D_HOME)
-            set(ENV{PKG_CONFIG_PATH} "${URHO3D_HOME}/lib/pkgconfig:${URHO3D_HOME}/lib64/pkgconfig:$ENV{PKG_CONFIG_PATH}")
-        elseif(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.cache/urho3d-sdk/lib/pkgconfig")
-            set(ENV{PKG_CONFIG_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/.cache/urho3d-sdk/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+            list(APPEND _extra_pc_dirs "${URHO3D_HOME}/lib/pkgconfig" "${URHO3D_HOME}/lib64/pkgconfig")
         endif()
+        list(APPEND _extra_pc_dirs
+            "${CMAKE_CURRENT_SOURCE_DIR}/.cache/urho3d-sdk/lib/pkgconfig"
+            "${CMAKE_CURRENT_SOURCE_DIR}/.cache/urho3d-sdk/lib64/pkgconfig"
+            "$ENV{HOME}/urho3d-build/out/lib/pkgconfig"
+            "$ENV{HOME}/urho3d-build/lib/pkgconfig"
+            "$ENV{HOME}/urho3d-local/lib/pkgconfig"
+            "$ENV{HOME}/urho3d-local/lib64/pkgconfig"
+            "$ENV{HOME}/.nix-profile/lib/pkgconfig"
+            "/run/current-system/sw/lib/pkgconfig"
+        )
+        foreach(_pcd IN LISTS _extra_pc_dirs)
+            if(EXISTS "${_pcd}")
+                set(ENV{PKG_CONFIG_PATH} "${_pcd}:$ENV{PKG_CONFIG_PATH}")
+            endif()
+        endforeach()
         pkg_check_modules(URHO3D_PC QUIET Urho3D)
         if(URHO3D_PC_FOUND AND NOT URHO3D_INCLUDE_DIR)
             find_path(URHO3D_INCLUDE_DIR NAMES Urho3D/Engine/Application.h HINTS ${URHO3D_PC_INCLUDE_DIRS})
@@ -156,6 +170,16 @@ if(BUILD_GAME)
                 pkg_check_modules(XRANDR QUIET xrandr)
                 pkg_check_modules(XI QUIET xi)
                 pkg_check_modules(XEXT QUIET xext)
+                pkg_check_modules(XCURSOR QUIET xcursor)
+                pkg_check_modules(XINERAMA QUIET xinerama)
+                pkg_check_modules(XXF86VM QUIET xxf86vm)
+                pkg_check_modules(XRENDER QUIET xrender)
+                pkg_check_modules(XFIXES QUIET xfixes)
+                pkg_check_modules(XSCRNSAVER QUIET xscrnsaver)
+                pkg_check_modules(XCB QUIET xcb)
+                pkg_check_modules(DBUS QUIET dbus-1)
+                pkg_check_modules(XKBCOMMON QUIET xkbcommon)
+                pkg_check_modules(WAYLAND QUIET wayland-client wayland-egl wayland-cursor)
             endif()
         endif()
 
@@ -273,7 +297,13 @@ if(BUILD_GAME)
             if(X11_FOUND)
                 target_link_libraries(MyShooter PRIVATE ${X11_LIBRARIES})
             endif()
-            foreach(_extra_lib ALSA_LIBRARIES PULSE_LIBRARIES UDEV_LIBRARIES XRANDR_LIBRARIES XI_LIBRARIES XEXT_LIBRARIES)
+            foreach(_extra_lib
+                ALSA_LIBRARIES PULSE_LIBRARIES UDEV_LIBRARIES
+                XRANDR_LIBRARIES XI_LIBRARIES XEXT_LIBRARIES
+                XCURSOR_LIBRARIES XINERAMA_LIBRARIES XXF86VM_LIBRARIES
+                XRENDER_LIBRARIES XFIXES_LIBRARIES XSCRNSAVER_LIBRARIES
+                XCB_LIBRARIES DBUS_LIBRARIES XKBCOMMON_LIBRARIES WAYLAND_LIBRARIES
+            )
                 if(${_extra_lib})
                     target_link_libraries(MyShooter PRIVATE ${${_extra_lib}})
                 endif()
