@@ -4813,6 +4813,8 @@ private:
             return;
         }
 
+        // Меню должно анимироваться даже на паузе, иначе вход (opacity 0->1) не проиграется
+        AnimateMainMenu(dt);
         if (paused_ || helpOpen_ || perkShopOpen_) return;
 
         float rawDt = dt;
@@ -4821,7 +4823,6 @@ private:
             dt = rawDt * 0.40f;
         }
 
-        AnimateMainMenu(dt);
         AnimateGameOver(dt);
         Vector<PendingRemove> alive;
         for (unsigned i = 0; i < pendingRemoves_.Size(); ++i) {
@@ -5120,7 +5121,8 @@ private:
             if (key == KEY_F1) { PlayUISound(); ToggleHelp(); return; }
             if (key == KEY_P)  { TogglePause(); OpenBanyaSimulator(false); return; }
             if (key == KEY_ESCAPE || key == KEY_RETURN) TogglePause();
-            else if (key == KEY_M) { TogglePause(); ShowMainMenu(true); }
+            // Выход в меню: сначала снимаем паузу, иначе вход меню не анимируется (ранний return)
+            else if (key == KEY_M) { if (paused_) TogglePause(); ShowMainMenu(true); }
             else if (key == KEY_Q) engine_->Exit();
             return;
         }
@@ -6884,7 +6886,7 @@ private:
         };
 
         static const char* kTips[6] = {
-            "СОВЕТ: Хедшот курицы — 2.0× КРИТИЧЕСКОГО урона (золотой маркер ★).",
+            "СОВЕТ: Хедшот курицы — 2.0x КРИТИЧЕСКОГО урона (золотой маркер).",
             "СОВЕТ: ALT или X — реактивный рывок (Jet-Dash) сквозь стаю врагов!",
             "СОВЕТ: Красные бочки «ОПАСНО» — цепная детонация выносит целую волну.",
             "СОВЕТ: Фиолетовая сфера ОВЕРДРАЙВА удваивает урон всех стволов на 12 секунд.",
@@ -6969,28 +6971,30 @@ private:
         // Шапка консоли (как в веб-буте): точки + chikengun.exe + PID
         {
             const int cardX = sw / 2 - cardW / 2, cardY = sh / 2 - S(235);
+            // Шапка ставится НАД карточкой, иначе накрывала эмблему и заголовок
+            const int headY = cardY - S(34);
             BorderImage* head = loadingPanel_->CreateChild<BorderImage>();
-            head->SetPosition(cardX, cardY);
+            head->SetPosition(cardX, headY);
             head->SetSize(cardW, S(30));
             head->SetColor(Color(0.02f, 0.05f, 0.10f, 0.85f));
             const Color dotCols[3] = { Color(1.0f, 0.37f, 0.34f, 1.0f), Color(1.0f, 0.74f, 0.18f, 1.0f), Color(0.16f, 0.78f, 0.25f, 1.0f) };
             for (int i = 0; i < 3; ++i) {
                 BorderImage* dot = loadingPanel_->CreateChild<BorderImage>();
-                dot->SetPosition(cardX + S(14) + i * S(16), cardY + S(10));
+                dot->SetPosition(cardX + S(14) + i * S(16), headY + S(10));
                 dot->SetSize(S(10), S(10));
                 dot->SetColor(dotCols[i]);
             }
             Text* cTitle = loadingPanel_->CreateChild<Text>();
             cTitle->SetFont(font_, SF(12));
             cTitle->SetText("chikengun.exe — ритуал пробуждения");
-            cTitle->SetPosition(cardX + S(64), cardY + S(7));
+            cTitle->SetPosition(cardX + S(64), headY + S(7));
             cTitle->SetColor(Color(0.56f, 0.85f, 0.91f, 1.0f));
             StyleCrispText(cTitle);
             Text* cPid = loadingPanel_->CreateChild<Text>();
             cPid->SetFont(font_, SF(12));
             cPid->SetText("PID 0x0C4B");
             cPid->SetTextAlignment(HA_RIGHT);
-            cPid->SetPosition(cardX + cardW - S(130), cardY + S(7));
+            cPid->SetPosition(cardX + cardW - S(130), headY + S(7));
             cPid->SetWidth(S(116));
             cPid->SetColor(Color(0.31f, 0.48f, 0.62f, 1.0f));
             StyleCrispText(cPid);
@@ -7006,9 +7010,9 @@ private:
         sysTag->SetColor(Color(0.45f, 0.90f, 1.0f, 0.92f));
         StyleCrispText(sysTag);
 
-        // Кибер-эмблема (геометрический значок куриного гребня/прицела)
+        // Кибер-эмблема-перо, НАД ореолами (иначе ореолы её перекрывают)
         BorderImage* embOuter = loadingPanel_->CreateChild<BorderImage>();
-        embOuter->SetPosition(sw / 2 - S(52), sh / 2 - S(215));
+        embOuter->SetPosition(sw / 2 - S(52), sh / 2 - S(212));
         embOuter->SetSize(S(104), S(6));
         embOuter->SetColor(Color(1.0f, 0.78f, 0.22f, 0.95f)); // золотое перо
 
@@ -7023,7 +7027,7 @@ private:
         {
             const int gs = S(700);
             loadingTitleGlowCyan_->SetSize(gs, gs);
-            loadingTitleGlowCyan_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(198) + S(30) - gs / 2);
+            loadingTitleGlowCyan_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(196) + S(30) - gs / 2);
         }
         loadingTitleGlowGold_ = loadingPanel_->CreateChild<BorderImage>();
         if (Texture2D* glowTex2 = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
@@ -7035,14 +7039,14 @@ private:
         {
             const int gs = S(520);
             loadingTitleGlowGold_->SetSize(gs, gs);
-            loadingTitleGlowGold_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(198) + S(30) - gs / 2);
+            loadingTitleGlowGold_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(196) + S(30) - gs / 2);
         }
         // Глитч-копии заголовка (циан/красный, вспыхивают пачками)
         loadingTitleGlitchA_ = loadingPanel_->CreateChild<Text>();
         loadingTitleGlitchA_->SetFont(font_, SF(60));
         loadingTitleGlitchA_->SetText("CHIKENGUN 2.5");
         loadingTitleGlitchA_->SetTextAlignment(HA_CENTER);
-        loadingTitleGlitchA_->SetPosition(sw / 2 - S(410), sh / 2 - S(198));
+        loadingTitleGlitchA_->SetPosition(sw / 2 - S(410), sh / 2 - S(196));
         loadingTitleGlitchA_->SetWidth(S(820));
         loadingTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.0f));
         StyleCrispText(loadingTitleGlitchA_);
@@ -7050,7 +7054,7 @@ private:
         loadingTitleGlitchB_->SetFont(font_, SF(60));
         loadingTitleGlitchB_->SetText("CHIKENGUN 2.5");
         loadingTitleGlitchB_->SetTextAlignment(HA_CENTER);
-        loadingTitleGlitchB_->SetPosition(sw / 2 - S(410), sh / 2 - S(198));
+        loadingTitleGlitchB_->SetPosition(sw / 2 - S(410), sh / 2 - S(196));
         loadingTitleGlitchB_->SetWidth(S(820));
         loadingTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.0f));
         StyleCrispText(loadingTitleGlitchB_);
@@ -7059,7 +7063,7 @@ private:
         loadingTitleText_->SetFont(font_, SF(60));
         loadingTitleText_->SetText("CHIKENGUN 2.5");
         loadingTitleText_->SetTextAlignment(HA_CENTER);
-        loadingTitleText_->SetPosition(sw / 2 - S(410), sh / 2 - S(198));
+        loadingTitleText_->SetPosition(sw / 2 - S(410), sh / 2 - S(196));
         loadingTitleText_->SetWidth(S(820));
         loadingTitleText_->SetColor(Color(1.0f, 0.86f, 0.25f, 1.0f));
         StyleCrispText(loadingTitleText_, true);
@@ -7068,7 +7072,7 @@ private:
         loadingSubText_->SetFont(font_, SF(19));
         loadingSubText_->SetText("2.5 // ПЕРО СУДЬБЫ");
         loadingSubText_->SetTextAlignment(HA_CENTER);
-        loadingSubText_->SetPosition(sw / 2 - S(410), sh / 2 - S(124));
+        loadingSubText_->SetPosition(sw / 2 - S(410), sh / 2 - S(118));
         loadingSubText_->SetWidth(S(820));
         loadingSubText_->SetColor(Color(0.42f, 0.88f, 1.0f, 0.95f));
         StyleCrispText(loadingSubText_);
@@ -7077,7 +7081,7 @@ private:
         loadingTagline_->SetFont(font_, SF(12));
         loadingTagline_->SetText("URHO3D PBR • SUN SHADOWS • ACES HDR");
         loadingTagline_->SetTextAlignment(HA_CENTER);
-        loadingTagline_->SetPosition(sw / 2 - S(410), sh / 2 - S(102));
+        loadingTagline_->SetPosition(sw / 2 - S(410), sh / 2 - S(94));
         loadingTagline_->SetWidth(S(820));
         loadingTagline_->SetColor(Color(0.50f, 0.61f, 0.75f, 1.0f));
         StyleCrispText(loadingTagline_);
@@ -7085,7 +7089,7 @@ private:
         // Чек-лист инициализации подсистем
         loadingSpecText_ = loadingPanel_->CreateChild<Text>();
         loadingSpecText_->SetFont(font_, SF(15));
-        loadingSpecText_->SetPosition(sw / 2 - S(360), sh / 2 - S(82));
+        loadingSpecText_->SetPosition(sw / 2 - S(360), sh / 2 - S(66));
         loadingSpecText_->SetWidth(S(720));
         loadingSpecText_->SetColor(Color(0.82f, 0.93f, 0.98f, 0.95f));
         StyleCrispText(loadingSpecText_);
@@ -7142,6 +7146,11 @@ private:
         loadingMarquee_->SetColor(Color(0.44f, 0.58f, 0.71f, 1.0f));
         StyleCrispText(loadingMarquee_);
 
+        // Скан-эффекты поверх всего контента (в вебе scanlines лежат над интерфейсом)
+        for (unsigned i = 0; i < loadingScanlines_.Size(); ++i)
+            loadingScanlines_[i]->BringToFront();
+        if (loadingScanBand_) loadingScanBand_->BringToFront();
+
         UpdateLoadingVisuals(0.04f, 0);
     }
 
@@ -7184,9 +7193,10 @@ private:
             static const char* addrs[6] = { "[0x0007]", "[0x02F1]", "[0x03A0]", "[0x0511]", "[0x0666]", "[0x07FF]" };
             String list;
             for (int i = 0; i < 6; ++i) {
-                if (i < activeStage)      list += "  [✓]  ";
-                else if (i == activeStage) list += "  [▶]  ";
-                else                      list += "  [·]  ";
+                // В Anonymous Pro нет глифов «▶/✔/★» — только ASCII, иначе будет «тофу»
+                if (i < activeStage)       list += "  [ok]  ";
+                else if (i == activeStage) list += "  [>>]  ";
+                else                       list += "  [  ]  ";
                 list += String(addrs[i]) + "  " + String(shortNames[i]) + "\n";
             }
             loadingSpecText_->SetText(list);
@@ -7247,7 +7257,7 @@ private:
             if (loadingTitleGlitchA_) {
                 loadingTitleGlitchA_->SetVisible(gOn);
                 if (gOn) {
-                    loadingTitleGlitchA_->SetPosition(sw / 2 - S(410) - S(3), sh / 2 - S(198) + int(sinf(timeAcc_ * 40.0f) * S(1.0f)));
+                    loadingTitleGlitchA_->SetPosition(sw / 2 - S(410) - S(3), sh / 2 - S(196) + int(sinf(timeAcc_ * 40.0f) * S(1.0f)));
                     loadingTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.85f));
                 }
             }
@@ -7255,7 +7265,7 @@ private:
                 const bool bOn = gcyc > 2.55f;
                 loadingTitleGlitchB_->SetVisible(bOn);
                 if (bOn) {
-                    loadingTitleGlitchB_->SetPosition(sw / 2 - S(410) + S(3), sh / 2 - S(198));
+                    loadingTitleGlitchB_->SetPosition(sw / 2 - S(410) + S(3), sh / 2 - S(196));
                     loadingTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.8f));
                 }
             }
@@ -7268,7 +7278,8 @@ private:
         // Обновить бар/проценты по плавному значению каждый кадр
         UpdateLoadingVisuals(loadTargetProgress_, Min(loadStepIndex_, 6));
 
-        const float kMinStepHold = 0.11f;
+        // Держим каждый этап дольше, чтобы ритуал пробуждения читался (не проскакивал за 0.8 c)
+        const float kMinStepHold = 0.42f;
         if (loadStepIndex_ < 7) {
             if (bootStageTimer_ < kMinStepHold && loadStepIndex_ > 0) return;
             bootStageTimer_ = 0.0f;
