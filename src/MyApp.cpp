@@ -637,6 +637,14 @@ private:
     float uiScale_ = 1.0f;          // авто-масштаб интерфейса под 1080p / 1440p / 4K UHD (3840x2160 -> 2.0x)
     int S(float px) const { return Max(1, (int)(px * uiScale_ + 0.5f)); }
     int SF(int pt) const  { return Max(9, (int)(pt * uiScale_ + 0.5f)); }
+    static float EaseOutCubic(float t) {
+        float f = 1.0f - Clamp(t, 0.0f, 1.0f);
+        return 1.0f - f * f * f;
+    }
+    static float EaseOutExpo(float t) {
+        t = Clamp(t, 0.0f, 1.0f);
+        return t >= 1.0f ? 1.0f : 1.0f - powf(2.0f, -10.0f * t);
+    }
     // Текстуры, к которым применяется настройка фильтрации
     Vector<Texture*> anisoTextures_;
     float sfxVolume_ = 0.8f;
@@ -659,6 +667,9 @@ private:
     IntVector2 goBasePos_;   bool goBasePosSet_ = false;   // база для пульсации GAME OVER
     IntVector2 menuTitleBase_, menuPlateBase_, menuBarBase_;
     bool menuBasesSet_ = false;                              // базы параллакса меню
+    float menuEnterT_ = 0.0f;                                // вход меню: каскад строк + свет
+    Vector<IntVector2> menuItemBases_, menuRowBases_;        // базы строк меню для входа
+    SharedPtr<BorderImage> menuGlow_, menuSheen_;            // ореол за плашкой + блик-свип
     Vector<UIElement*> menuRows_;                            // подложки строк меню (MenuRow0..3)
     SharedPtr<UIElement> settingsPanel_;
     Vector<SharedPtr<Text>> settingsItems_;
@@ -1065,6 +1076,8 @@ private:
     float loadingFadeAlpha_ = 1.0f;
     float loadProgress_ = 0.0f;
     float loadTargetProgress_ = 0.0f;
+    float loadProgressSmooth_ = 0.02f;   // плавный прогресс-бар (lerp к цели)
+    float loadEnterT_ = 0.0f;            // вход загрузки: панель проявляется 1.3 c
     float bootStageTimer_ = 0.0f;
     int loadStepIndex_ = 0;
     int loadingTipIdx_ = 0;
@@ -1097,6 +1110,7 @@ private:
     SoundSource* kochThemeSrc_ = nullptr;   // компонент временной сцены — владеется нодой
     SoundSource* splashSfxSrc_ = nullptr;
     SharedPtr<BorderImage> splashGlow_;
+    SharedPtr<BorderImage> splashHalo_;   // второй, мягкий ореол (больше + медленнее)
     SharedPtr<BorderImage> splashSheen_;
     String splashFullText_;              // полный текст стадии (посимвольное открытие)
 
@@ -1408,6 +1422,8 @@ public:
         loadStepIndex_ = 0;
         loadProgress_ = 0.02f;
         loadTargetProgress_ = 0.12f;
+        loadProgressSmooth_ = 0.02f;
+        loadEnterT_ = 0.0f;
         bootStageTimer_ = 0.0f;
 
         // 2.5.5: эпичная интро-заставка koch.studios → powered by fall.os → CHICHKENCUM 2.1
@@ -4678,6 +4694,8 @@ private:
         menuPlate_ = nullptr; menuAccentBar_ = nullptr;
         menuParticles_.Clear(); menuParticlePhase_.Clear(); menuParticleX_.Clear(); menuParticleSpeed_.Clear();
         menuRows_.Clear(); menuBasesSet_ = false;
+        menuItemBases_.Clear(); menuRowBases_.Clear();
+        menuGlow_ = nullptr; menuSheen_ = nullptr; menuEnterT_ = 0.0f;
         settingsPanel_ = nullptr; settingsItems_.Clear();
         armoryPanel_ = nullptr; armoryWeaponRows_.Clear(); armorySkinRows_.Clear();
         pausePanel_ = nullptr;
@@ -6863,6 +6881,7 @@ private:
         loadingPanel_ = root->CreateChild<UIElement>("LoadingPanel");
         loadingPanel_->SetSize(sw, sh);
         loadingPanel_->SetPriority(1000);
+        loadingPanel_->SetOpacity(0.0f);   // вход загрузки проявит панель за 1.3 c
 
         // 1) 4K фоновый кибер-арт (Textures/LoadingBg4K.png)
         loadingBgImg_ = loadingPanel_->CreateChild<BorderImage>("LoadingArt4K");
@@ -6995,7 +7014,8 @@ private:
 
     void UpdateLoadingVisuals(float progress, int activeStage) {
         if (!loadingPanel_) return;
-        loadProgress_ = Clamp(progress, 0.0f, 1.0f);
+        loadTargetProgress_ = Clamp(progress, 0.0f, 1.0f);
+        loadProgress_ = loadProgressSmooth_;   // бар показывает плавное значение
         int sw = GetSubsystem<Graphics>()->GetWidth();
         int sh = GetSubsystem<Graphics>()->GetHeight();
         int barW = S(760), barH = S(16);
@@ -7005,7 +7025,7 @@ private:
 
         if (loadingBarFill_) {
             loadingBarFill_->SetSize(fillW, barH);
-            float pulse = 0.85f + 0.15f * sinf(timeAcc_ * 8.0f);
+            float pulse = 0.85f + 0.15f * sinf(timeAcc_ * 5.0f);
             loadingBarFill_->SetColor(Color(0.15f * pulse, 0.95f * pulse, 0.72f + 0.25f * loadProgress_, 1.0f));
         }
         if (loadingBarShimmer_) {
@@ -7043,10 +7063,22 @@ private:
     // чтобы игрок видел настоящую плавную загрузку без зависания окна!
     void UpdateBootLoading(float dt) {
         bootStageTimer_ += dt;
+        // Вход загрузки: панель медленно проявляется (easeOutExpo, 1.3 c)
+        if (loadEnterT_ < 1.3f) {
+            loadEnterT_ += dt;
+            if (loadingPanel_ && loadingFadeAlpha_ >= 1.0f)
+                loadingPanel_->SetOpacity(EaseOutExpo(Clamp(loadEnterT_ / 1.3f, 0.0f, 1.0f)));
+        }
+        // Плавный прогресс-бар: догоняет цель без рывков
+        loadProgressSmooth_ += (loadTargetProgress_ - loadProgressSmooth_) * Min(1.0f, dt * 4.0f);
+        if (fabsf(loadTargetProgress_ - loadProgressSmooth_) < 0.0005f)
+            loadProgressSmooth_ = loadTargetProgress_;
         if (loadingTitleText_) {
-            float p = 0.86f + 0.14f * sinf(timeAcc_ * 3.5f);
+            float p = 0.86f + 0.14f * sinf(timeAcc_ * 2.2f);
             loadingTitleText_->SetColor(Color(1.0f, 0.86f * p, 0.25f * p, 1.0f));
         }
+        // Обновить бар/проценты по плавному значению каждый кадр
+        UpdateLoadingVisuals(loadTargetProgress_, Min(loadStepIndex_, 6));
 
         const float kMinStepHold = 0.11f;
         if (loadStepIndex_ < 7) {
@@ -7084,7 +7116,7 @@ private:
                 ShowMainMenu(true);
                 if (loadingPanel_) loadingPanel_->BringToFront();
                 UpdateLoadingVisuals(1.0f, 6);
-                loadingFadeAlpha_ = 0.42f;
+                loadingFadeAlpha_ = 1.15f;
                 break;
             case 6:
                 break;
@@ -7095,7 +7127,7 @@ private:
 
         if (loadingFadeAlpha_ > 0.0f) {
             loadingFadeAlpha_ -= dt;
-            float a = Clamp(loadingFadeAlpha_ / 0.42f, 0.0f, 1.0f);
+            float a = Clamp(loadingFadeAlpha_ / 1.15f, 0.0f, 1.0f);
             if (kochThemeSrc_) kochThemeSrc_->SetGain(musicVolume_ * a * a);
             if (loadingPanel_) loadingPanel_->SetOpacity(a * a);
             if (loadingFadeAlpha_ <= 0.0f) {
@@ -7144,15 +7176,6 @@ private:
         int sh = GetSubsystem<Graphics>()->GetHeight();
         return sh / 2 - S(stage == 2 ? 62 : (stage == 1 ? 40 : 44));
     }
-    static float EaseOutCubic(float t) {
-        float f = 1.0f - Clamp(t, 0.0f, 1.0f);
-        return 1.0f - f * f * f;
-    }
-    static float EaseOutExpo(float t) {
-        t = Clamp(t, 0.0f, 1.0f);
-        return t >= 1.0f ? 1.0f : 1.0f - powf(2.0f, -10.0f * t);
-    }
-
     void SplashEnterStage(int stage) {
         auto* cache = GetSubsystem<ResourceCache>();
         if (!cache || !splashSfxSrc_) return;
@@ -7210,6 +7233,20 @@ private:
         BorderImage* bg = splashPanel_->CreateChild<BorderImage>();
         bg->SetSize(sw, sh);
         bg->SetColor(Color(0.0f, 0.0f, 0.0f, 1.0f));
+
+        // Мягкий широкий ореол за надписью (под свечением и текстом)
+        splashHalo_ = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* haloTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
+            haloTex->SetFilterMode(FILTER_TRILINEAR);
+            splashHalo_->SetTexture(haloTex);
+        }
+        splashHalo_->SetBlendMode(BLEND_ADD);
+        splashHalo_->SetColor(Color(0.18f, 0.82f, 1.0f, 0.0f));
+        {
+            const int h0 = S(1500);
+            splashHalo_->SetSize(h0, h0);
+            splashHalo_->SetPosition(sw / 2 - h0 / 2, sh / 2 - h0 / 2);
+        }
 
         // Неоновое свечение за надписью (под текстом и линией)
         splashGlow_ = splashPanel_->CreateChild<BorderImage>();
@@ -7274,6 +7311,7 @@ private:
         splashText_ = nullptr;
         splashLine_ = nullptr;
         splashGlow_ = nullptr;
+        splashHalo_ = nullptr;
         splashSheen_ = nullptr;
         splashFullText_ = String();
         splashActive_ = false;
@@ -7297,7 +7335,7 @@ private:
         const int sh = GetSubsystem<Graphics>()->GetHeight();
 
         static const float kDur[3]   = { 1.30f, 1.20f, 2.55f };
-        static const float kIn[3]    = { 0.60f, 0.55f, 0.10f };
+        static const float kIn[3]    = { 0.85f, 0.80f, 0.18f };
         static const float kOutAt[3] = { 1.02f, 0.94f, 2.18f };
         static const int   kLineW[3] = { 300, 200, 840 };
 
@@ -7307,11 +7345,11 @@ private:
         const float outT = Clamp((t - kOutAt[stage]) / (kDur[stage] - kOutAt[stage]), 0.0f, 1.0f);
         const float alpha = Clamp(EaseOutCubic(inT) * (1.0f - EaseOutCubic(outT)), 0.0f, 1.0f);
 
-        // «Выплывание»: текст поднимается на easeOutExpo + деликатное дыхание в покое
+        // «Выплывание»: текст поднимается на easeOutExpo на всю стадию + дыхание в покое
         const float floatAmp = (float)S(stage == 2 ? 12 : 48);
-        const float floatOff = (1.0f - EaseOutExpo(Clamp(t / 1.05f, 0.0f, 1.0f))) * floatAmp;
-        const float breathe  = sinf(t * 1.9f + stage * 1.7f) * (float)S(2.5f)
-                             * Clamp((t - 0.9f) / 0.5f, 0.0f, 1.0f);
+        const float floatOff = (1.0f - EaseOutExpo(Clamp(t / kDur[stage], 0.0f, 1.0f))) * floatAmp;
+        const float breathe  = sinf(t * 1.4f + stage * 1.7f) * (float)S(3.0f)
+                             * Clamp((t - 0.7f) / 0.6f, 0.0f, 1.0f);
         int drawX = sw / 2 - S(720);
         int drawY = SplashTextY(stage) + (int)floatOff + (int)breathe;
 
@@ -7322,7 +7360,7 @@ private:
             drawX += (int)(sinf(t * 88.0f) * expf(-t * 9.5f) * (float)S(6.0f));
         } else {
             // Посимвольное открытие надписи
-            const float reveal = EaseOutCubic(Clamp(t / 0.80f, 0.0f, 1.0f));
+            const float reveal = EaseOutCubic(Clamp(t / 1.05f, 0.0f, 1.0f));
             const int n = (int)(splashFullText_.Length() * reveal + 0.49f);
             splashText_->SetText(splashFullText_.Substring(0, n));
         }
@@ -7348,13 +7386,29 @@ private:
                 Color(1.00f, 0.55f, 0.15f, 1.0f),
                 Color(1.00f, 0.60f, 0.12f, 1.0f)
             };
-            const float pulse = 0.80f + 0.20f * sinf(t * 2.2f + stage * 2.1f);
-            const int gsize = S(stage == 2 ? 1180 : 860);
+            const float pulse = 0.72f + 0.28f * sinf(t * 2.2f + stage * 2.1f);
+            const int gsize = S(stage == 2 ? 1320 : 980);
             Color gc = kGlow[stage];
-            gc.a_ = alpha * 0.60f * pulse;
+            gc.a_ = alpha * 0.78f * pulse;
             splashGlow_->SetSize(gsize, gsize);
             splashGlow_->SetPosition(sw / 2 - gsize / 2, sh / 2 - gsize / 2 + (int)floatOff + (int)breathe);
             splashGlow_->SetColor(gc);
+        }
+
+        // Мягкий широкий ореол: медленный пульс, тот же тинт стадии
+        if (splashHalo_) {
+            static const Color kHalo[3] = {
+                Color(0.18f, 0.82f, 1.0f, 1.0f),
+                Color(1.00f, 0.55f, 0.15f, 1.0f),
+                Color(1.00f, 0.60f, 0.12f, 1.0f)
+            };
+            const float hpulse = 0.70f + 0.30f * sinf(t * 1.1f + stage * 2.1f);
+            const int hsize = S(stage == 2 ? 1800 : 1500);
+            Color hc = kHalo[stage];
+            hc.a_ = alpha * 0.38f * hpulse;
+            splashHalo_->SetSize(hsize, hsize);
+            splashHalo_->SetPosition(sw / 2 - hsize / 2, sh / 2 - hsize / 2 + (int)floatOff + (int)breathe);
+            splashHalo_->SetColor(hc);
         }
 
         // Волна-блик проскакивает слева направо в середине каждой стадии
@@ -7363,7 +7417,7 @@ private:
             if (sweep > 0.0f && sweep < 0.85f && alpha > 0.20f) {
                 const float k = sweep / 0.85f;
                 splashSheen_->SetPosition((int)Lerp(-S(240), sw + S(40), k), drawY - S(8));
-                Color sc(1.0f, 1.0f, 1.0f, 0.40f * alpha * sinf(3.14159265f * k));
+                Color sc(1.0f, 1.0f, 1.0f, 0.50f * alpha * sinf(3.14159265f * k));
                 splashSheen_->SetColor(sc);
             } else {
                 splashSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
@@ -7371,7 +7425,7 @@ private:
         }
 
         // Неоновая линия раскрывается от центра (easeOutQuad)
-        float lineT = Clamp(t / 0.5f, 0.0f, 1.0f);
+        float lineT = Clamp(t / 0.85f, 0.0f, 1.0f);
         lineT = 1.0f - (1.0f - lineT) * (1.0f - lineT);
         const int w = (int)(S(kLineW[stage]) * lineT);
         if (splashLine_) {
@@ -7417,6 +7471,7 @@ private:
         deployPanel_ = root->CreateChild<UIElement>("DeployOverlay");
         deployPanel_->SetSize(sw, sh);
         deployPanel_->SetPriority(900);
+        deployPanel_->SetOpacity(0.0f);   // вход высадки проявит панель за 0.5 c
 
         BorderImage* dbg = deployPanel_->CreateChild<BorderImage>();
         dbg->SetSize(sw, sh);
@@ -7452,7 +7507,7 @@ private:
         deployBarFill_->SetSize(S(20), S(8));
         deployBarFill_->SetColor(Color(0.20f, 0.95f, 0.72f, 1.0f));
 
-        deployDuration_ = 0.70f;
+        deployDuration_ = 1.60f;
         deployTimer_ = deployDuration_;
     }
 
@@ -7463,7 +7518,15 @@ private:
         if (deployBarFill_) {
             deployBarFill_->SetSize((int)(S(520.0f) * Min(1.0f, elapsed * 1.45f)), S(8));
         }
-        float alpha = deployTimer_ < 0.28f ? Clamp(deployTimer_ / 0.28f, 0.0f, 1.0f) : 1.0f;
+        // Вход высадки: медленное проявление (0.5 c) + заголовок поднимается снизу
+        const float fadeIn = EaseOutExpo(Clamp(elapsed / 0.5f, 0.0f, 1.0f));
+        if (deployTitleText_) {
+            auto* gfx = GetSubsystem<Graphics>();
+            const int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+            deployTitleText_->SetPosition(sw / 2 - S(460), sh / 2 - S(70) + int((1.0f - fadeIn) * S(24.0f)));
+        }
+        const float fadeOut = deployTimer_ < 0.50f ? Clamp(deployTimer_ / 0.50f, 0.0f, 1.0f) : 1.0f;
+        const float alpha = Min(fadeIn, fadeOut);
         deployPanel_->SetOpacity(alpha);
         if (deployTimer_ <= 0.0f) {
             deployPanel_->Remove();
@@ -8017,6 +8080,7 @@ private:
     void CreateMainMenu() {
         if (mainMenuPanel_) return;
         RefreshUIScale();
+        auto* cache = GetSubsystem<ResourceCache>();
         auto* ui = GetSubsystem<UI>();
         auto* root = ui->GetRoot();
         int sw = GetSubsystem<Graphics>()->GetWidth();
@@ -8024,6 +8088,7 @@ private:
 
         mainMenuPanel_ = root->CreateChild<UIElement>("MainMenuPanel");
         mainMenuPanel_->SetSize(sw, sh);
+        mainMenuPanel_->SetOpacity(0.0f);   // вход меню проявит панель каскадом
 
         BorderImage* bg = mainMenuPanel_->CreateChild<BorderImage>();
         bg->SetSize(sw, sh);
@@ -8059,10 +8124,29 @@ private:
         }
 
         int plateW = S(720), plateH = S(620);
+        // Ореол света за плашкой (additive, под плашкой)
+        menuGlow_ = mainMenuPanel_->CreateChild<BorderImage>();
+        if (Texture2D* glowTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
+            glowTex->SetFilterMode(FILTER_TRILINEAR);
+            menuGlow_->SetTexture(glowTex);
+        }
+        menuGlow_->SetBlendMode(BLEND_ADD);
+        menuGlow_->SetColor(Color(1.0f, 0.72f, 0.28f, 0.0f));
+        {
+            const int gs = S(1150);
+            menuGlow_->SetSize(gs, gs);
+            menuGlow_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(316) + plateH / 2 - gs / 2);
+        }
         menuPlate_ = mainMenuPanel_->CreateChild<BorderImage>();
         menuPlate_->SetPosition(sw / 2 - plateW / 2, sh / 2 - S(316));
         menuPlate_->SetSize(plateW, plateH);
         menuPlate_->SetColor(Color(0.018f, 0.042f, 0.088f, 0.64f));
+        // Блик-свип по плашке при входе (additive, над плашкой, под текстом)
+        menuSheen_ = mainMenuPanel_->CreateChild<BorderImage>();
+        menuSheen_->SetBlendMode(BLEND_ADD);
+        menuSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+        menuSheen_->SetSize(S(130), plateH);
+        menuSheen_->SetPosition(sw / 2 - plateW / 2 - S(180), sh / 2 - S(316));
 
         int bTh = Max(2, S(2.0f));
         struct Edge { int x, y, w, h; };
@@ -8119,6 +8203,7 @@ private:
             rowBg->SetColor(Color(0.05f, 0.14f, 0.24f, i == menuSel_ ? 0.52f : 0.0f));
             rowBg->SetName(String("MenuRow") + String(i));
             menuRows_.Push(rowBg);
+            menuRowBases_.Push(rowBg->GetPosition());
 
             Text* it = mainMenuPanel_->CreateChild<Text>();
             it->SetFont(font_, SF(25));
@@ -8127,6 +8212,7 @@ private:
             it->SetWidth(S(580));
             StyleCrispText(it);
             mainMenuItems_.Push(SharedPtr<Text>(it));
+            menuItemBases_.Push(it->GetPosition());
         }
 
         Text* hint = mainMenuPanel_->CreateChild<Text>();
@@ -8143,8 +8229,8 @@ private:
     }
 
     void AnimateMainMenu(float dt) {
-        (void)dt;
         if (!mainMenuPanel_ || !mainMenuPanel_->IsVisible()) return;
+        if (menuEnterT_ < 4.0f) menuEnterT_ += dt;
         auto* gfx = GetSubsystem<Graphics>();
         int sw = gfx->GetWidth(), sh = gfx->GetHeight();
 
@@ -8184,17 +8270,53 @@ private:
         IntVector2 mp = input->GetMousePosition();
         float nx = (float(mp.x_) / Max(1, sw) - 0.5f);
         float ny = (float(mp.y_) / Max(1, sh) - 0.5f);
+        // Вход меню: плашка/заголовок/полоса поднимаются снизу (easeOutExpo, 1.35 c)
+        const int rise = int((1.0f - EaseOutExpo(Clamp(menuEnterT_ / 1.35f, 0.0f, 1.0f))) * S(42.0f));
         if (menuPlate_) {
             menuPlate_->SetPosition(menuPlateBase_.x_ + int(nx * S(10.0f)),
-                                    menuPlateBase_.y_ + int(ny * S(6.0f)));
+                                    menuPlateBase_.y_ + int(ny * S(6.0f)) + rise);
         }
         if (menuTitle_) {
             menuTitle_->SetPosition(menuTitleBase_.x_ - int(nx * S(7.0f)),
-                                    menuTitleBase_.y_ + int(sinf(timeAcc_ * 0.8f) * S(3.0f)));
+                                    menuTitleBase_.y_ + int(sinf(timeAcc_ * 0.8f) * S(3.0f)) + rise);
         }
         if (menuAccentBar_) {
             int w = menuAccentBar_->GetWidth();
-            menuAccentBar_->SetPosition(sw / 2 - w / 2 - int(nx * S(4.0f)), menuBarBase_.y_);
+            menuAccentBar_->SetPosition(sw / 2 - w / 2 - int(nx * S(4.0f)), menuBarBase_.y_ + rise);
+        }
+
+        // Вход меню: панель проявляется, строки каскадом, свет вокруг
+        const float panelA = EaseOutExpo(Clamp(menuEnterT_ / 1.2f, 0.0f, 1.0f));
+        mainMenuPanel_->SetOpacity(panelA);
+        for (unsigned i = 0; i < mainMenuItems_.Size() && i < menuItemBases_.Size(); ++i) {
+            const float lt = Clamp((menuEnterT_ - float(i) * 0.13f) / 0.95f, 0.0f, 1.0f);
+            const float e = EaseOutExpo(lt);
+            const int offY = int((1.0f - e) * S(30.0f));
+            mainMenuItems_[i]->SetPosition(menuItemBases_[i].x_, menuItemBases_[i].y_ + offY);
+            mainMenuItems_[i]->SetOpacity(e);
+            if (i < menuRows_.Size() && i < menuRowBases_.Size()) {
+                menuRows_[i]->SetPosition(menuRowBases_[i].x_, menuRowBases_[i].y_ + offY);
+                menuRows_[i]->SetOpacity(e);
+            }
+        }
+        if (menuSub_)  menuSub_->SetOpacity(EaseOutExpo(Clamp((menuEnterT_ - 0.40f) / 1.0f, 0.0f, 1.0f)));
+        if (menuHint_) menuHint_->SetOpacity(EaseOutExpo(Clamp((menuEnterT_ - 0.95f) / 1.0f, 0.0f, 1.0f)));
+        if (menuGlow_) {
+            const float ga = panelA * (0.42f + 0.13f * sinf(timeAcc_ * 1.5f));
+            menuGlow_->SetColor(Color(1.0f, 0.72f, 0.28f, ga));
+        }
+        if (menuSheen_ && menuPlate_) {
+            const float st = menuEnterT_ - 0.75f;
+            if (st > 0.0f && st < 1.15f) {
+                const float k = st / 1.15f;
+                const int px = menuPlate_->GetPosition().x_;
+                const int pw = menuPlate_->GetWidth();
+                const int sx = int(Lerp(float(px - S(160)), float(px + pw + S(40)), k));
+                menuSheen_->SetPosition(sx, menuPlate_->GetPosition().y_);
+                menuSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.38f * panelA * sinf(3.14159265f * k)));
+            } else {
+                menuSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            }
         }
     }
 
@@ -8205,6 +8327,7 @@ private:
             if (weaponNode_) weaponNode_->SetEnabled(true);
             if (!mainMenuPanel_) CreateMainMenu();
             mainMenuPanel_->SetVisible(true);
+            menuEnterT_ = 0.0f;   // вход меню заново: каскад + свет
             SetGameHudVisible(false);
             auto* input = GetSubsystem<Input>();
             if (input) input->SetMouseVisible(false);

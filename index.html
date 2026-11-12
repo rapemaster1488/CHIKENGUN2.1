@@ -14,9 +14,6 @@
     --emerald: #2bff9e;
     --danger: #ff3b4e;
     --text: #eaf4ff;
-    /* AAA-кинематографичные кривые: медленный плавный вылет с долгим затуханием */
-    --ease-cine: cubic-bezier(0.16, 1, 0.3, 1);
-    --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; user-select: none; }
   html, body {
@@ -25,103 +22,12 @@
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif;
   }
 
-  /* ============================================================
-     2.5.6 SPLASH-ИНТРО (веб-зеркало натива): koch.studios →
-     powered by fall.os → CHICHKENCUM 2.1. Чёрный экран, надписи
-     выплывают снизу на easeOutExpo, открываются посимвольно,
-     светятся, линия раскрывается от центра, волна-блик,
-     CHICHKENCUM наезжает размером с тряской. Скип: клик/Space/
-     Enter/Esc. Пока идёт сплэш, бут-экран заморожен (пауза
-     всех его анимаций) и стартует только после сплэша.
-     ============================================================ */
-  #splashIntro {
-    position: fixed; inset: 0; z-index: 250; overflow: hidden;
-    background: #000; display: flex; align-items: center; justify-content: center;
-    transition: opacity 1s var(--ease-cine), filter 1s var(--ease-cine);
-  }
-  #splashIntro.hidden { opacity: 0; pointer-events: none; filter: blur(6px); }
-  body.splashing #bootScreen, body.splashing #bootScreen * { animation-play-state: paused !important; }
-  .splash-glow {
-    position: absolute; left: 50%; top: 50%; width: min(880px, 92vw); aspect-ratio: 1;
-    transform: translate(-50%, -50%); border-radius: 50%; pointer-events: none;
-    background: radial-gradient(circle, var(--splash-tint, rgba(46,209,255,0.5)) 0%, transparent 65%);
-    filter: blur(30px); opacity: 0.55;
-    animation: splashGlowPulse 2.2s ease-in-out infinite;
-  }
-  @keyframes splashGlowPulse { 0%, 100% { opacity: 0.45; transform: translate(-50%,-50%) scale(1); } 50% { opacity: 0.7; transform: translate(-50%,-50%) scale(1.06); } }
-  .splash-stage {
-    position: relative; text-align: center; padding: 0 16px;
-    animation: splashFloat 1.05s var(--ease-cine) both, splashBreathe 3.4s ease-in-out 1.05s infinite;
-    transition: opacity 0.35s ease, filter 0.35s ease;
-  }
-  .splash-stage.out { opacity: 0; filter: blur(6px); }
-  @keyframes splashFloat { from { transform: translateY(48px); } to { transform: translateY(0); } }
-  @keyframes splashBreathe { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2.5px); } }
-  .splash-text {
-    font-family: "JetBrains Mono", ui-monospace, Consolas, monospace;
-    font-weight: 700; white-space: nowrap; line-height: 1.15;
-  }
-  .splash-text.st0 { font-size: clamp(26px, 5vw, 44px); letter-spacing: 0.18em; color: #e6f7ff;
-    text-shadow: 0 0 18px rgba(46,209,255,0.9), 0 0 60px rgba(46,209,255,0.45); }
-  .splash-text.st1 { font-size: clamp(19px, 3.4vw, 30px); letter-spacing: 0.14em; color: #b3c2e0;
-    text-shadow: 0 0 14px rgba(255,140,38,0.55), 0 0 44px rgba(179,194,224,0.35); }
-  .splash-text.st2 { font-size: clamp(34px, 7vw, 76px); font-weight: 900; letter-spacing: 0.06em;
-    animation: splashFlashGold 0.55s ease-out both, splashShake 0.6s linear both; }
-  @keyframes splashFlashGold {
-    from { color: #ffffff; text-shadow: 0 0 30px rgba(255,255,255,0.95), 0 0 90px rgba(255,255,255,0.6); }
-    to   { color: #ffc928; text-shadow: 0 0 22px rgba(255,201,40,0.85), 0 0 70px rgba(255,153,31,0.5); }
-  }
-  @keyframes splashShake {
-    0% { transform: translateX(6px); } 20% { transform: translateX(-5px); }
-    40% { transform: translateX(3px); } 60% { transform: translateX(-2px); }
-    80% { transform: translateX(1px); } 100% { transform: translateX(0); }
-  }
-  .splash-letter { display: inline-block; opacity: 0; animation: splashLetterIn 0.85s var(--ease-cine) both; }
-  @keyframes splashLetterIn {
-    from { opacity: 0; transform: translateY(48px); filter: blur(8px); }
-    to   { opacity: 1; transform: none; filter: blur(0); }
-  }
-  .splash-line {
-    margin: 20px auto 0; height: 3px; border-radius: 2px;
-    transform: scaleX(0); transform-origin: center;
-    animation: splashLineGrow 0.5s ease-out both;
-  }
-  .splash-line.st0 { width: min(300px, 70vw); background: #33ebff; box-shadow: 0 0 14px rgba(51,235,255,0.9); }
-  .splash-line.st1 { width: min(200px, 60vw); background: #ff8f29; box-shadow: 0 0 14px rgba(255,143,41,0.9); }
-  .splash-line.st2 { width: min(840px, 86vw); height: 4px; background: #ff5c24; box-shadow: 0 0 18px rgba(255,92,36,0.9); }
-  @keyframes splashLineGrow { from { transform: scaleX(0); } to { transform: scaleX(1); } }
-  .splash-sheen {
-    position: absolute; top: -30%; bottom: -30%; left: -140px; width: 120px;
-    pointer-events: none; transform: rotate(16deg); opacity: 0;
-    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.35), transparent);
-  }
-  .splash-sheen.go { animation: splashSheenSweep 0.85s ease-in-out both; }
-  @keyframes splashSheenSweep {
-    from { left: -140px; opacity: 0; } 20% { opacity: 1; } to { left: 112%; opacity: 0; }
-  }
-  .splash-skip {
-    position: absolute; bottom: 28px; left: 0; right: 0; text-align: center;
-    font-family: monospace; font-size: 10px; letter-spacing: 0.3em; color: #54749a;
-    animation: skipPulse 1.6s ease-in-out infinite;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    #splashIntro { display: none; }
-    .splash-stage, .splash-text.st2, .splash-letter, .splash-line, .splash-sheen.go { animation: none !important; }
-    .splash-letter { opacity: 1; }
-    .splash-line { transform: none; }
-  }
-
   /* ===== 2.5 «ПЕРО СУДЬБЫ» CINEMATIC BOOT SCREEN ===== */
   #bootScreen {
     position: fixed; inset: 0; z-index: 200; overflow: hidden;
     background: #03060f url("Data/Textures/LoadingBg4K.png") center/cover no-repeat;
     display: flex; flex-direction: column; justify-content: space-between;
-    transition: opacity 1.15s var(--ease-cine), transform 1.15s var(--ease-cine), filter 1.15s var(--ease-cine);
-    animation: bootScreenIn 1.5s var(--ease-cine) both;
-  }
-  @keyframes bootScreenIn {
-    from { opacity: 0; transform: scale(1.045); filter: blur(10px) brightness(0.4); }
-    to   { opacity: 1; transform: none; filter: blur(0) brightness(1); }
+    transition: opacity 0.5s ease, transform 0.5s ease, filter 0.5s ease;
   }
   #bootScreen::before {   /* затемнение арта + радиальный фокус на эмблеме */
     content: ""; position: absolute; inset: 0; z-index: 0;
@@ -129,7 +35,7 @@
       radial-gradient(ellipse 62% 54% at 50% 34%, rgba(46,242,255,0.14) 0%, rgba(3,6,15,0.18) 45%, rgba(3,6,15,0.93) 100%),
       linear-gradient(180deg, rgba(3,6,15,0.82) 0%, rgba(3,6,15,0.25) 22%, rgba(3,6,15,0.25) 62%, rgba(3,6,15,0.95) 100%);
   }
-  #bootScreen.hidden { opacity: 0; pointer-events: none; transform: scale(1.09); filter: blur(12px) brightness(1.25); }
+  #bootScreen.hidden { opacity: 0; pointer-events: none; transform: scale(1.06); filter: blur(6px); }
 
   /* сканирующие линии + бегущая световая полоса */
   .boot-fx-scan {
@@ -303,7 +209,7 @@
   .boot-fill {
     position: relative; height: 100%; width: 3%;
     background: linear-gradient(90deg, #0e8f5b 0%, #16d9a0 22%, #2ef2ff 52%, #ffd447 88%, #fff6c8 100%);
-    transition: width 0.5s var(--ease-soft);
+    transition: width 0.12s linear;
     box-shadow: 0 0 18px rgba(46, 242, 255, 0.65), 0 0 44px rgba(255, 212, 71, 0.3);
   }
   .boot-fill::after {   /* бегущий блик по заполнению */
@@ -322,173 +228,11 @@
   }
   @keyframes marqueeScroll { from { transform: translateX(0); } to { transform: translateX(-100%); } }
 
-  .boot-tip { margin-top: 7px; text-align: center; font-size: 12.5px; color: #a7c4e2; min-height: 17px; transition: opacity 0.65s var(--ease-soft); }
+  .boot-tip { margin-top: 7px; text-align: center; font-size: 12.5px; color: #a7c4e2; min-height: 17px; transition: opacity 0.25s; }
   .boot-tip b { color: var(--cyan); }
   .boot-skip { margin-top: 4px; text-align: center; font-size: 10px; letter-spacing: 0.28em; color: #54749a; font-family: monospace; animation: skipPulse 1.6s ease-in-out infinite; }
   @keyframes skipPulse { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
   .boot-skip b { color: #9fd8ff; }
-
-  /* ============================================================
-     AAA-ВХОД: медленные плавные появления со светом.
-     Приём из больших игр (Destiny / God of War / CoD-меню):
-     долгое easeOutExpo-затухание + расфокус (blur) -> фокус,
-     каскадный stagger, ореол света за элементом и один
-     диагональный блик-свип при появлении.
-     ============================================================ */
-  .boot-top {
-    animation: bootTopIn 1.3s var(--ease-cine) 0.15s both;
-  }
-  @keyframes bootTopIn {
-    from { opacity: 0; transform: translateY(-26px); filter: blur(8px); }
-    to   { opacity: 1; transform: none; filter: blur(0); }
-  }
-
-  /* ореол света за сиглом: тёплое золото + холодный циан */
-  .boot-sigil {
-    animation: sigilIn 1.8s var(--ease-cine) 0.25s both;
-  }
-  .boot-sigil::before {
-    content: ""; position: absolute; inset: -38%; z-index: -1; pointer-events: none;
-    background:
-      radial-gradient(circle at 50% 46%, rgba(255, 212, 71, 0.34) 0%, rgba(255, 181, 46, 0.14) 42%, transparent 68%),
-      radial-gradient(circle at 50% 46%, rgba(46, 242, 255, 0.20) 0%, transparent 62%);
-    filter: blur(22px);
-    animation: haloIn 1.9s var(--ease-cine) 0.25s both, haloBreathe 5.5s ease-in-out 2.2s infinite;
-  }
-  @keyframes sigilIn {
-    from { opacity: 0; transform: scale(0.82) translateY(18px); filter: blur(14px) brightness(1.6); }
-    55%  { filter: blur(3px) brightness(1.25); }
-    to   { opacity: 1; transform: none; filter: blur(0) brightness(1); }
-  }
-  @keyframes haloIn {
-    from { opacity: 0; transform: scale(0.72); }
-    to   { opacity: 1; transform: scale(1); }
-  }
-  @keyframes haloBreathe {
-    0%, 100% { opacity: 0.88; transform: scale(1); }
-    50%      { opacity: 1; transform: scale(1.07); }
-  }
-
-  .boot-title {
-    position: relative;
-    animation: titleIn 1.5s var(--ease-cine) 0.5s both;
-  }
-  /* световая подложка под заголовком */
-  .boot-title::after {
-    content: ""; position: absolute; left: 50%; top: 58%; width: 130%; height: 90px;
-    transform: translate(-50%, -50%); z-index: -1; pointer-events: none;
-    background: radial-gradient(50% 50% at 50% 50%, rgba(255, 212, 71, 0.30), rgba(255, 181, 46, 0.10) 55%, transparent 75%);
-    filter: blur(18px);
-    animation: haloIn 1.6s var(--ease-cine) 0.5s both, haloBreathe 4.8s ease-in-out 2.1s infinite;
-  }
-  @keyframes titleIn {
-    from { opacity: 0; transform: translateY(34px) scale(0.97); filter: blur(12px); letter-spacing: 0.22em; }
-    to   { opacity: 1; transform: none; filter: blur(0); }
-  }
-  .boot-sub2 {
-    animation: subIn 1.3s var(--ease-cine) 0.68s both;
-  }
-  .boot-tagline {
-    animation: subIn 1.3s var(--ease-cine) 0.8s both;
-  }
-  @keyframes subIn {
-    from { opacity: 0; transform: translateY(20px); filter: blur(8px); }
-    to   { opacity: 1; transform: none; filter: blur(0); }
-  }
-
-  .boot-console {
-    position: relative;
-    animation: consoleIn 1.45s var(--ease-cine) 0.85s both;
-  }
-  @keyframes consoleIn {
-    from {
-      opacity: 0; transform: translateY(42px) scale(0.965); filter: blur(10px);
-      box-shadow: 0 0 0 1px rgba(46,242,255,0.0), 0 0 90px rgba(46,242,255,0.45), 0 30px 80px rgba(0,0,0,0.8);
-    }
-    to {
-      opacity: 1; transform: none; filter: blur(0);
-      box-shadow: 0 0 0 1px rgba(0,0,0,0.6), 0 18px 60px rgba(0,0,0,0.75), 0 0 46px rgba(46,242,255,0.14), inset 0 0 44px rgba(46,242,255,0.05);
-    }
-  }
-  /* диагональный блик-свип по консоли при входе */
-  .boot-console::after {
-    content: ""; position: absolute; top: -30%; bottom: -30%; left: -90px; width: 110px;
-    pointer-events: none; transform: rotate(14deg);
-    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.20), rgba(46,242,255,0.14), transparent);
-    animation: sweepIn 2.1s var(--ease-cine) 1.15s both;
-  }
-  @keyframes sweepIn {
-    from { left: -110px; opacity: 0; }
-    18%  { opacity: 1; }
-    to   { left: 112%; opacity: 0; }
-  }
-
-  .boot-bot {
-    animation: botIn 1.35s var(--ease-cine) 1.0s both;
-  }
-  @keyframes botIn {
-    from { opacity: 0; transform: translateY(30px); filter: blur(8px); }
-    to   { opacity: 1; transform: none; filter: blur(0); }
-  }
-
-  /* строки консоли: каждая плавно проявляется со свечением */
-  .boot-checklist .ln {
-    animation: lineIn 1.05s var(--ease-cine) both;
-    text-shadow: 0 0 10px rgba(46,242,255,0.35);
-  }
-  @keyframes lineIn {
-    from { opacity: 0; transform: translateX(-14px); filter: blur(5px); }
-    to   { opacity: 1; transform: none; filter: blur(0); }
-  }
-
-  /* ===== ВХОД В МЕНЮ ПОСЛЕ БУТА (hero / карточки) ===== */
-  .view-panel.active .hero-box {
-    position: relative; overflow: hidden;
-    animation: heroIn 1.3s var(--ease-cine) both;
-  }
-  @keyframes heroIn {
-    from {
-      opacity: 0; transform: translateY(40px) scale(0.97); filter: blur(10px);
-      box-shadow: 0 0 90px rgba(46,242,255,0.4), 0 24px 64px rgba(0,0,0,0.78);
-    }
-    to {
-      opacity: 1; transform: none; filter: blur(0);
-      box-shadow: 0 24px 64px rgba(0,0,0,0.78), 0 0 34px rgba(46,242,255,0.10);
-    }
-  }
-  .view-panel.active .hero-box::after {
-    content: ""; position: absolute; top: -30%; bottom: -30%; left: -90px; width: 110px;
-    pointer-events: none; transform: rotate(14deg);
-    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.16), transparent);
-    animation: sweepIn 2.2s var(--ease-cine) 0.45s both;
-  }
-  .tex-card, .sfx-btn {
-    animation: cardIn 1.15s var(--ease-cine) backwards;
-  }
-  .tex-card:nth-child(3n+2), .sfx-btn:nth-child(3n+2) { animation-delay: 0.12s; }
-  .tex-card:nth-child(3n+3), .sfx-btn:nth-child(3n+3) { animation-delay: 0.24s; }
-  .tex-card:nth-child(n+4), .sfx-btn:nth-child(n+4) { animation-delay: 0.36s; }
-  @keyframes cardIn {
-    from {
-      opacity: 0; transform: translateY(30px) scale(0.965); filter: blur(8px);
-      box-shadow: 0 0 60px rgba(46,242,255,0.35);
-    }
-    to {
-      opacity: 1; transform: none; filter: blur(0);
-      box-shadow: none;
-    }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    #bootScreen, .boot-top, .boot-sigil, .boot-title, .boot-sub2,
-    .boot-tagline, .boot-console, .boot-bot, .boot-checklist .ln,
-    .view-panel.active .hero-box, .tex-card, .sfx-btn {
-      animation: none !important;
-    }
-    .boot-sigil::before, .boot-title::after, .boot-console::after,
-    .view-panel.active .hero-box::after { animation: none !important; opacity: 0.6; }
-    #bootScreen { transition-duration: 0.01s; }
-  }
 
   /* ===== TOP NAVIGATION ===== */
   #topNav {
@@ -740,19 +484,7 @@
   }
 </style>
 </head>
-<body class="splashing">
-<noscript><style>#splashIntro{display:none!important} body.splashing #bootScreen, body.splashing #bootScreen *{animation-play-state:running!important}</style></noscript>
-
-<!-- 0. SPLASH-ИНТРО: koch.studios → powered by fall.os → CHICHKENCUM 2.1 (веб-зеркало натива 2.5.6) -->
-<div id="splashIntro" aria-hidden="true">
-  <div class="splash-glow" id="splashGlow"></div>
-  <div class="splash-stage" id="splashStage">
-    <div class="splash-text st0" id="splashText"></div>
-    <div class="splash-line st0" id="splashLine"></div>
-    <div class="splash-sheen" id="splashSheen"></div>
-  </div>
-  <div class="splash-skip">КЛИК / SPACE / ENTER / ESC — ПРОПУСТИТЬ</div>
-</div>
+<body>
 
 <!-- 1. «ПЕРО СУДЬБЫ» CINEMATIC BOOT LOADING SCREEN -->
 <div id="bootScreen">
@@ -1035,104 +767,6 @@
 <script src="web/webgl2_arena.js?v=2.5.3"></script>
 <script>
 (() => {
-  // ===== 0. SPLASH-ИНТРО: koch.studios → powered by fall.os → CHICHKENCUM 2.1 =====
-  // Веб-зеркало нативного 2.5.6 (docs/SPLASH_INTRO.md): те же стадии, тайминги
-  // (1.30 / 1.20 / 2.55 c), посимвольное открытие, свечение, линия от центра,
-  // волна-блик, наезд CHICHKENCUM с тряской. Скип: клик / Space / Enter / Esc.
-  // Пока идёт сплэш, бут-экран заморожен (body.splashing) и его таймеры
-  // стартуют только в startBoot() после сплэша.
-  const splashEl = document.getElementById("splashIntro"),
-        splashStageEl = document.getElementById("splashStage"),
-        splashTextEl = document.getElementById("splashText"),
-        splashLineEl = document.getElementById("splashLine"),
-        splashSheenEl = document.getElementById("splashSheen"),
-        splashGlowEl = document.getElementById("splashGlow");
-  const splashStages = [
-    { text: "k o c h . s t u d i o s", cls: "st0", dur: 1300, outAt: 1020, sfx: "UI_Select.wav",   sfxVol: 0.7, tint: "rgba(46,209,255,0.5)" },
-    { text: "powered by fall.os",    cls: "st1", dur: 1200, outAt: 940,  sfx: "Powerup.wav",     sfxVol: 0.7, tint: "rgba(255,140,38,0.5)" },
-    { text: "CHICHKENCUM 2.1",       cls: "st2", dur: 2550, outAt: 2180, sfx: "Chicken_Boss.wav", sfxVol: 0.9, tint: "rgba(255,153,31,0.55)" }
-  ];
-  let splashActive = true, splashStageIdx = 0, splashTimers = [];
-  const splashReduced = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-
-  // Тема сплэша (как в нативе: звучит и во время загрузки, гаснет с бутом).
-  // Браузеры режут автоплей без жеста — тогда стартует по первому клику/клавише.
-  const splashAudio = new Audio("Data/Music/KochSplashTheme.wav");
-  splashAudio.volume = 0.5;
-  splashAudio.play().catch(() => {});
-  function splashAudioGesture() { if (splashAudio.paused) splashAudio.play().catch(() => {}); }
-  window.addEventListener("pointerdown", splashAudioGesture, { once: true });
-  window.addEventListener("keydown", splashAudioGesture, { once: true });
-  function fadeSplashMusic() {
-    if (splashAudio.paused) return;
-    const step = setInterval(() => {
-      splashAudio.volume = Math.max(0, splashAudio.volume - 0.05);
-      if (splashAudio.volume <= 0) { clearInterval(step); splashAudio.pause(); }
-    }, 60);
-  }
-
-  function splashPlaySfx(file, vol) {
-    try {
-      const a = new Audio("Data/Sounds/" + file);
-      a.volume = vol; a.play().catch(() => {});
-    } catch (_) {}
-  }
-
-  function splashEnterStage(i) {
-    const st = splashStages[i];
-    splashStageEl.classList.remove("out");
-    splashTextEl.className = "splash-text " + st.cls;
-    splashLineEl.className = "splash-line " + st.cls;
-    splashGlowEl.style.setProperty("--splash-tint", st.tint);
-    if (st.cls === "st2") {
-      splashTextEl.textContent = st.text;
-    } else {
-      splashTextEl.textContent = "";
-      const chars = st.text.split("");
-      const step = Math.min(0.8 / chars.length, 0.09);
-      chars.forEach((ch, j) => {
-        const sp = document.createElement("span");
-        sp.className = "splash-letter";
-        sp.textContent = ch === " " ? "\u00A0" : ch;
-        sp.style.animationDelay = (j * step).toFixed(3) + "s";
-        splashTextEl.appendChild(sp);
-      });
-    }
-    splashPlaySfx(st.sfx, st.sfxVol);
-    splashTimers.push(setTimeout(() => {
-      splashSheenEl.classList.remove("go");
-      void splashSheenEl.offsetWidth;   // перезапуск анимации блика
-      splashSheenEl.classList.add("go");
-    }, 680));
-    splashTimers.push(setTimeout(() => splashStageEl.classList.add("out"), st.outAt));
-    splashTimers.push(setTimeout(() => {
-      if (i + 1 < splashStages.length) { splashStageIdx = i + 1; splashEnterStage(splashStageIdx); }
-      else endSplash();
-    }, st.dur));
-  }
-
-  function endSplash() {
-    if (!splashActive) return;
-    splashActive = false;
-    splashTimers.forEach(clearTimeout); splashTimers = [];
-    window.removeEventListener("keydown", splashSkipKey);
-    splashEl.classList.add("hidden");
-    document.body.classList.remove("splashing");   // бут-анимации оживают
-    startBoot();
-    setTimeout(() => { splashEl.style.display = "none"; }, splashReduced ? 0 : 1100);
-  }
-  function splashSkipKey(e) {
-    if (e.code !== "Space" && e.code !== "Enter" && e.code !== "Escape") return;
-    e.preventDefault();
-    e.stopImmediatePropagation();   // та же клавиша не должна скипать и бут
-    endSplash();
-  }
-  splashEl.addEventListener("pointerdown", endSplash);
-  window.addEventListener("keydown", splashSkipKey);
-  splashTimers.push(setTimeout(endSplash, 7000));   // страховка
-  if (splashReduced) setTimeout(endSplash, 0);   // defer: boot-переменные ещё в TDZ
-  else splashEnterStage(0);
-
   // ===== 1. BOOT: «РИТУАЛ ПРОБУЖДЕНИЯ» (cinematic sequence) =====
   const bootStages = [
     { addr: "0x0007", text: "WebGL2 контекст поднят — #version 300 es", ms: "12мс" },
@@ -1173,11 +807,8 @@
     feathersBox.appendChild(f);
   }
 
-  let bIdx = 0, bootDone = false, prog = 3, tipIdx = 0;
-  let lineTimer = null, progTimer = null, tipTimer = null, doneCheck = null, hardTimeout = null;
-  function startBoot() {
-    if (lineTimer) return;   // уже запущен (сплэш мог закончиться раньше)
-    lineTimer = setInterval(() => {
+  let bIdx = 0, bootDone = false, prog = 3;
+  const lineTimer = setInterval(() => {
     if (bIdx < bootStages.length) {
       const st = bootStages[bIdx];
       const div = document.createElement("span");
@@ -1188,25 +819,25 @@
       bStage.textContent = `ЭТАП ${bIdx + 1}/8: ${st.text}`;
       bIdx++;
     } else clearInterval(lineTimer);
-    }, 260);
-    progTimer = setInterval(() => {
+  }, 200);
+  const progTimer = setInterval(() => {
     const target = 3 + (bIdx / bootStages.length) * 97;
-    prog += (target - prog) * 0.11;
+    prog += (target - prog) * 0.24;
     if (bootDone) prog = 100;
     bFill.style.width = Math.min(100, prog) + "%";
     bPct.textContent = Math.min(100, Math.round(prog)) + "%";
     if (prog >= 99.5 && bIdx >= bootStages.length) { bFill.style.width = "100%"; bPct.textContent = "100%"; clearInterval(progTimer); }
-    }, 40);
-    tipTimer = setInterval(() => {
+  }, 40);
+  let tipIdx = 0;
+  const tipTimer = setInterval(() => {
     tipIdx = (tipIdx + 1) % bootTips.length;
     bTip.style.opacity = "0";
     setTimeout(() => { bTip.innerHTML = bootTips[tipIdx]; bTip.style.opacity = "1"; }, 230);
-    }, 2800);
-    doneCheck = setInterval(() => {
-      if (bIdx >= bootStages.length && !bootDone) { clearInterval(doneCheck); setTimeout(finishBoot, 480); }
-    }, 60);
-    hardTimeout = setTimeout(finishBoot, 6000);   // страховка: загрузка не может зависнуть
-  }
+  }, 2800);
+  const doneCheck = setInterval(() => {
+    if (bIdx >= bootStages.length && !bootDone) { clearInterval(doneCheck); setTimeout(finishBoot, 480); }
+  }, 60);
+  const hardTimeout = setTimeout(finishBoot, 4200);   // страховка: загрузка не может зависнуть
   function finishBoot() {
     if (bootDone) return;
     bootDone = true;
@@ -1216,11 +847,9 @@
     bStage.textContent = "СИСТЕМА ГОТОВА. ПЕРО СУДЬБЫ ВЗВЕДЕНО.";
     bFill.style.width = "100%"; bPct.textContent = "100%";
     bScreen.classList.add("hidden");
-    fadeSplashMusic();
-    setTimeout(() => { bScreen.style.display = "none"; }, 1300);
+    setTimeout(() => { bScreen.style.display = "none"; }, 700);
   }
   function skipBoot(e) {
-    if (splashActive) return;   // сплэш ещё идёт — его скипает свой обработчик
     if (e && e.type === "keydown" && e.code !== "Enter" && e.code !== "Space" && e.code !== "Escape") return;
     finishBoot();
   }

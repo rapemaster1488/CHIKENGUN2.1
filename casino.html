@@ -141,26 +141,9 @@ main{position:relative;z-index:3;max-width:1660px;margin:0 auto;padding:28px 24p
 .col-left{position:sticky;top:96px}
 .panel{position:relative;border-radius:26px;padding:22px;background:var(--glass);border:1px solid rgba(var(--acc),.20);
   box-shadow:var(--sh-xl), inset 0 1px 0 rgba(255,255,255,.07);backdrop-filter:blur(10px)}
-/* AAA-вход: медленное плавное появление с расфокусом и ореолом света */
-.js .panel.reveal{opacity:0;transform:translateY(40px) scale(.965);filter:blur(9px);
-  transition:opacity 1.4s cubic-bezier(.16,1,.3,1), transform 1.4s cubic-bezier(.16,1,.3,1), filter 1.4s cubic-bezier(.16,1,.3,1), box-shadow 1.4s cubic-bezier(.16,1,.3,1);
-  box-shadow:var(--sh-xl), 0 0 90px rgba(var(--acc),.42), inset 0 1px 0 rgba(255,255,255,.07)}
-.js .panel.reveal.in{opacity:1;transform:none;filter:blur(0);
-  box-shadow:var(--sh-xl), 0 0 44px rgba(var(--acc),.16), inset 0 1px 0 rgba(255,255,255,.07);
-  animation:panelGlowIn 1.9s cubic-bezier(.16,1,.3,1)}
-@keyframes panelGlowIn{
-  0%{box-shadow:var(--sh-xl), 0 0 110px rgba(var(--acc),.55), inset 0 1px 0 rgba(255,255,255,.07)}
-  100%{box-shadow:var(--sh-xl), 0 0 44px rgba(var(--acc),.16), inset 0 1px 0 rgba(255,255,255,.07)}}
-header .brand,header .simbadge,header .sess,header .wallet{
-  animation:hdrIn 1.25s cubic-bezier(.16,1,.3,1) both}
-header .icon-btn{animation:hdrIn 1.25s cubic-bezier(.16,1,.3,1) backwards}
-header .simbadge{animation-delay:.12s}header .sess{animation-delay:.22s}
-header .wallet{animation-delay:.32s}header .icon-btn{animation-delay:.42s}
-@keyframes hdrIn{from{opacity:0;transform:translateY(24px);filter:blur(8px)}to{opacity:1;transform:none;filter:blur(0)}}
-header .brand h1{animation:h1GlowIn 1.8s cubic-bezier(.16,1,.3,1) .2s both}
-@keyframes h1GlowIn{from{filter:drop-shadow(0 0 26px rgba(var(--acc),.85)) drop-shadow(0 2px 6px rgba(0,0,0,.7))}to{filter:drop-shadow(0 2px 6px rgba(0,0,0,.7))}}
-footer{animation:footIn 1.4s cubic-bezier(.16,1,.3,1) .3s both}
-@keyframes footIn{from{opacity:0;transform:translateY(20px);filter:blur(6px)}to{opacity:1;transform:none;filter:blur(0)}}
+.js .panel.reveal{opacity:0;transform:translateY(26px);
+  transition:opacity .7s cubic-bezier(.2,.8,.3,1), transform .7s cubic-bezier(.2,.8,.3,1)}
+.js .panel.reveal.in{opacity:1;transform:none}
 .panel::before{content:"";position:absolute;top:9px;left:9px;right:9px;bottom:9px;border-radius:18px;pointer-events:none;
   border:1px solid rgba(var(--acc),.10);
   background:
@@ -454,17 +437,17 @@ footer .orn{color:rgba(var(--acc),.55);letter-spacing:8px;font-size:14px;margin-
 #toasts{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);z-index:220;display:flex;flex-direction:column;gap:11px;align-items:center;pointer-events:none}
 .toast{display:flex;align-items:center;gap:11px;padding:14px 24px;border-radius:17px;font-weight:600;font-size:14px;max-width:92vw;backdrop-filter:blur(12px);
   background:linear-gradient(160deg,rgba(var(--glass1),.97),rgba(var(--glass2),.97));border:1px solid rgba(var(--acc),.32);
-  box-shadow:0 24px 50px -14px rgba(0,0,0,.95), inset 0 1px 0 rgba(255,255,255,.1);animation:toastIn .8s cubic-bezier(.16,1,.3,1)}
+  box-shadow:0 24px 50px -14px rgba(0,0,0,.95), inset 0 1px 0 rgba(255,255,255,.1);animation:toastIn .4s cubic-bezier(.2,1.5,.4,1)}
 .toast .ti{font-size:19px}
 .toast.win{border-color:rgba(125,255,175,.55);color:#9dffc4;box-shadow:0 24px 50px -14px rgba(0,0,0,.95),0 0 40px rgba(80,255,150,.28)}
 .toast.lose{border-color:rgba(255,130,150,.4);color:#ffb9c2}
 .toast.info{color:rgb(var(--acc-lt))}
-.toast.out{animation:toastOut .65s cubic-bezier(.16,1,.3,1) forwards}
-@keyframes toastIn{from{opacity:0;transform:translateY(34px) scale(.9);filter:blur(6px)}to{opacity:1;transform:none;filter:blur(0)}}
+.toast.out{animation:toastOut .35s forwards}
+@keyframes toastIn{from{opacity:0;transform:translateY(30px) scale(.85)}to{opacity:1;transform:none}}
 @keyframes toastOut{to{opacity:0;transform:translateY(-18px) scale(.94)}}
 #winBanner{position:fixed;top:0;left:0;right:0;bottom:0;z-index:210;display:none;place-items:center;pointer-events:none}
 #winBanner.show{display:grid}
-.wb{text-align:center;animation:wbIn 1.2s cubic-bezier(.16,1,.3,1)}
+.wb{text-align:center;animation:wbIn .7s cubic-bezier(.2,1.6,.4,1)}
 .wb .t0{font:800 11px 'Montserrat';letter-spacing:4px;color:rgb(var(--acc-lt));text-transform:uppercase;margin-bottom:6px;opacity:.85}
 .wb .t1{font-family:'Cormorant Garamond',serif;font-size:clamp(38px,7vw,76px);font-weight:700;letter-spacing:8px;text-transform:uppercase;
   background:linear-gradient(180deg,var(--gA),var(--gB) 55%,var(--gC));-webkit-background-clip:text;background-clip:text;color:transparent;
@@ -472,19 +455,19 @@ footer .orn{color:rgba(var(--acc),.55);letter-spacing:8px;font-size:14px;margin-
 .wb .t2{font-family:'Montserrat';font-weight:800;font-size:clamp(26px,5vw,52px);color:#fff;margin-top:6px;text-shadow:0 0 40px rgba(var(--acc),.85),0 4px 14px rgba(0,0,0,.9)}
 .wb .t3{font-size:13px;color:rgb(var(--acc-lt));letter-spacing:3px;margin-top:12px;text-transform:uppercase}
 @keyframes wbIn{0%{opacity:0;transform:scale(.55)}60%{opacity:1;transform:scale(1.06)}100%{transform:scale(1)}}
-.wb.hide{animation:wbOut .85s cubic-bezier(.16,1,.3,1) forwards}
+.wb.hide{animation:wbOut .5s forwards}
 @keyframes wbOut{to{opacity:0;transform:scale(1.2) translateY(-30px)}}
 #confetti{position:fixed;top:0;left:0;right:0;bottom:0;z-index:200;overflow:hidden;pointer-events:none}
 .cf{position:absolute;opacity:.97;animation:fall linear forwards}
 @keyframes fall{to{transform:translateY(108vh) rotate(820deg);opacity:.1}}
 
 .modal-bg{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(2,6,4,.86);backdrop-filter:blur(10px);z-index:230;display:none;place-items:center;padding:22px}
-.modal-bg.open{display:grid;animation:fadeIn .7s cubic-bezier(.16,1,.3,1)}
+.modal-bg.open{display:grid;animation:fadeIn .3s}
 @keyframes fadeIn{from{opacity:0}to{opacity:1}}
 .modal{max-width:640px;width:100%;max-height:88vh;overflow:auto;border-radius:26px;padding:30px;
   background:linear-gradient(160deg,var(--modal1),var(--modal2));border:1px solid rgba(var(--acc),.32);
-  box-shadow:var(--sh-xl),0 0 60px rgba(var(--acc),.12);animation:mIn .9s cubic-bezier(.16,1,.3,1)}
-@keyframes mIn{from{transform:translateY(46px) scale(.93);opacity:0;filter:blur(8px)}to{transform:none;opacity:1;filter:blur(0)}}
+  box-shadow:var(--sh-xl),0 0 60px rgba(var(--acc),.12);animation:mIn .45s cubic-bezier(.2,1.4,.4,1)}
+@keyframes mIn{from{transform:translateY(40px) scale(.94);opacity:0}to{transform:none;opacity:1}}
 .modal::-webkit-scrollbar{width:8px}.modal::-webkit-scrollbar-thumb{background:var(--gC);border-radius:8px}
 .modal h3{font-size:24px;letter-spacing:2px;margin-bottom:4px;background:linear-gradient(180deg,var(--gA),var(--gB) 60%,var(--gC));-webkit-background-clip:text;background-clip:text;color:transparent}
 .modal .orn{color:rgba(var(--acc),.55);letter-spacing:6px;margin-bottom:16px;font-size:13px}
@@ -2020,11 +2003,11 @@ function boot(){
   setTimeout(function(){safe(verifyPaint,'paint')},2000);
   if('IntersectionObserver' in window){
     var io=new IntersectionObserver(function(es){es.forEach(function(en){
-      if(en.isIntersecting){en.target.classList.add('in');io.unobserve(en.target)}})},{threshold:.12});
+      if(en.isIntersecting){en.target.classList.add('in');io.unobserve(en.target)}})},{threshold:.06});
     var rv=document.querySelectorAll('.reveal');
-    for(var j=0;j<rv.length;j++){rv[j].style.transitionDelay=(j*170)+'ms';io.observe(rv[j])}
+    for(var j=0;j<rv.length;j++){rv[j].style.transitionDelay=(j*90)+'ms';io.observe(rv[j])}
   }else forcePanelsVisible();
-  setTimeout(forcePanelsVisible,3000);
+  setTimeout(forcePanelsVisible,1600);
   setTimeout(function(){
     if(!EL.board.querySelector('.cell')){safe(buildBoard,'board-retry');safe(renderChips,'chips-retry');}
   },1200);
