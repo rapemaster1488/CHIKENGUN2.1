@@ -571,9 +571,12 @@ private:
     SharedPtr<UIElement> pausePanel_;
     bool pendingUiRebuild_ = false;
     bool rebuildingUI_ = false;
+    float uiRebuildDelay_ = 0.0f;
+    bool windowFocusLost_ = false;
     float lastCrosshairGap_ = -1.0f;
     int uiWidth_ = 0;
     int uiHeight_ = 0;
+    SharedPtr<Viewport> mainViewport_;
 
     // Кэш материалов эффектов: раньше MakeTinted() вызывался на каждый выстрел/снаряд
     // и навсегда оседал в tintedMatStore_ (утечка + churn ресурсов).
@@ -653,19 +656,20 @@ private:
     int menuSel_ = 0;               // 0 тир, 1 арена, 2 баня, 3 рулетка, 4 миниигры, 5 настройки, 6 выход
     bool inSettings_ = false;
     int settingsSel_ = 0;
-    static constexpr int SETTINGS_ROW_COUNT = 14;
-    int gfxQualityIdx_ = 3;         // 0=НИЗКИЙ 1=СРЕДНИЙ 2=ВЫСОКИЙ 3=4K УЛЬТРА
+    static constexpr int SETTINGS_ROW_COUNT = 15;
+    int gfxQualityIdx_ = 2;         // 0=НИЗКИЙ 1=СРЕДНИЙ 2=ВЫСОКИЙ PBR (быстрый 4K баланс) 3=4K УЛЬТРА
     int gfxResIdx_ = 0;             // 0=АВТО(МОНИТОР) 1=3840x2160(4K) 2=2560x1440(2K) 3=1920x1080 4=1280x720
-    int gfxDisplayMode_ = 1;        // 0=ОКНО 1=БЕЗ РАМКИ 2=ПОЛНЫЙ ЭКРАН
-    int gfxMsaaIdx_ = 2;            // 0=ВЫКЛ 1=2x 2=4x 3=8x
-    int gfxShadowIdx_ = 2;          // 0=ВЫКЛ 1=2K PCF 2=4K ULTRA 3=8K EXTREME
-    int gfxGlowIdx_ = 2;            // 0=ВЫКЛ 1=МЯГКИЙ 2=КИНО HDR
-    bool gfxSsao_ = true;           // SSAO4K экранное затенение
+    int gfxDisplayMode_ = 0;        // 0=ОКНО 1=БЕЗ РАМКИ 2=ПОЛНЫЙ ЭКРАН
+    int gfxMonitorIdx_ = 0;         // выбранный монитор (для систем с 2+ мониторами)
+    int gfxMsaaIdx_ = 1;            // 0=ВЫКЛ 1=2x 2=4x 3=8x
+    int gfxShadowIdx_ = 1;          // 0=1024 1=2K PCF 2=4K ULTRA
+    int gfxGlowIdx_ = 1;            // 0=ВЫКЛ 1=МЯГКИЙ HDR 2=КИНО HDR
+    bool gfxSsao_ = false;          // SSAO4K (опционально, в ВЫСОКОМ по умолчанию выкл для 0 лагов)
     bool gfxHdr_ = true;            // ACES Filmic HDR тонмаппинг
-    bool gfxFxaa_ = true;           // FXAA 3.11 Ultra (Preset 39)
+    bool gfxFxaa_ = true;           // FXAA 3.11
     bool gfxSharpen_ = true;        // Contrast-Adaptive 4K Sharpening (CAS)
     bool gfxVsync_ = false;         // вертикальная синхронизация
-    int gfxFpsIdx_ = 2;             // 0=60 FPS 1=120 FPS 2=БЕЗ ЛИМИТА
+    int gfxFpsIdx_ = 1;             // 0=60 FPS 1=120 FPS 2=БЕЗ ЛИМИТА
     int gfxAnisoIdx_ = 2;           // 0=Билинейная 1=Трилинейная 2=Анизотропная 16x
     float fovBase_ = 90.0f;         // базовый горизонтально-комфортный FOV 4K (75..115)
     float uiScale_ = 1.0f;          // авто-масштаб интерфейса под 1080p / 1440p / 4K UHD (3840x2160 -> 2.0x)
@@ -933,20 +937,8 @@ private:
     Vector3 banyaDoorPos_{-28.0f, 0.0f, -30.2f};
     float banyaPromptCooldown_ = 0.0f;
 
-    struct BanyaUIParticle {
-        SharedPtr<BorderImage> el_;
-        float x_ = 0.0f, y_ = 0.0f, vx_ = 0.0f, vy_ = 0.0f;
-        float life_ = 0.0f, ttl_ = 1.5f, sz_ = 6.0f;
-        int   kind_ = 0; // 0=steam, 1=smoke, 2=drop, 3=leaf, 4=snow, 5=ember, 6=spark
-    };
-    Vector<BanyaUIParticle> banyaParticles_;
-
     SharedPtr<UIElement>   banyaPanel_, banyaSceneBox_, banyaRiddleBox_, banyaEndBox_, banyaStatsBox_;
     SharedPtr<BorderImage> banyaHeatWash_, banyaAirWash_, banyaColdWash_, banyaEndTint_;
-    SharedPtr<BorderImage> banyaStoveFire_, banyaStonesGlow_, banyaVenikVis_, banyaRoosterBody_, banyaRoosterComb_, banyaRoosterCrown_;
-    SharedPtr<BorderImage> banyaThermoFill_;
-    Vector<SharedPtr<BorderImage>> banyaSnowMotes_;
-    SharedPtr<Text>        banyaRoosterEyesText_;
     SharedPtr<Text>        banyaTempText_, banyaMoodText_, banyaClockText_, banyaCaptionText_, banyaBadgeText_;
     SharedPtr<BorderImage> banyaBarSteam_, banyaBarFire_, banyaBarAir_, banyaBarLife_, banyaBarTime_;
     SharedPtr<Text>        banyaRiddleQ_, banyaRiddleTime_, banyaRiddleFb_;
@@ -959,6 +951,39 @@ private:
     SharedPtr<BorderImage> banyaEndBtnRestart_, banyaEndBtnStats_, banyaEndBtnBack_;
     SharedPtr<Text>        banyaStatsRunText_, banyaStatsAllText_;
     SharedPtr<BorderImage> banyaStatsCloseBtn_;
+
+    // Реалистичная изолированная 3D-сцена парной «КОЧЕТ В БАНЬКЕ» + пул 3D-частиц
+    struct Banya3DFxMote {
+        SharedPtr<Node> node_;
+        SharedPtr<Material> mat_;
+        Vector3 pos_ = Vector3::ZERO;
+        Vector3 vel_ = Vector3::ZERO;
+        float life_ = 0.0f;
+        float ttl_ = 1.0f;
+        float baseScale_ = 0.2f;
+        float spin_ = 0.0f;
+        int kind_ = -1; // 0=steam, 1=smoke, 2=drop, 3=leaf, 4=snow, 5=ember, 6=spark
+        bool active_ = false;
+    };
+    SharedPtr<Scene>      banyaScene_;
+    SharedPtr<Viewport>   banyaViewport_;
+    SharedPtr<RenderPath> banyaRenderPath_;
+    SharedPtr<Zone>       banyaZone_;
+    SharedPtr<Node>       banyaCamNode_;
+    SharedPtr<Node>       banyaRooster3D_, banyaRoosterHead3D_, banyaRoosterWingL3D_, banyaRoosterWingR3D_, banyaRoosterTail3D_;
+    SharedPtr<Node>       banyaRoosterCrown3D_, banyaRoosterCap3D_, banyaRoosterEyeL3D_, banyaRoosterEyeR3D_;
+    SharedPtr<Node>       banyaVenik3D_, banyaLadle3D_, banyaNeedle3D_, banyaDoor3D_, banyaFlamesRoot3D_;
+    SharedPtr<Light>      banyaFireLight_, banyaLampLight_, banyaWindowLight_;
+    SharedPtr<Material>   banyaRoosterBodyMat_, banyaCombMat_, banyaEmberBedMat_, banyaFlameMat_, banyaGlassMat_, banyaWaterMat_;
+    Vector<SharedPtr<Material>> banyaStoneMats_;
+    Vector<SharedPtr<Node>>     banyaWindowSnow3D_;
+    Vector<Banya3DFxMote>       banya3DFxPool_;
+    int                   banya3DFxCursor_ = 0;
+    float                 banyaLadleAnim_ = 0.0f;
+    float                 banyaDoorTimer_ = 0.0f;
+    String                lastBanyaBadge_, lastBanyaTemp_, lastBanyaMood_, lastBanyaClock_;
+    String                lastBanyaRiddleQ_, lastBanyaRiddleTime_, lastBanyaRiddleFb_;
+    int                   lastBanyaBarW_[5] = { -1, -1, -1, -1, -1 };
 
     // === 2.5 НАТИВНОЕ КАЗИНО [J] («Золотая Рулетка» + «Кибер-Слоты 777») И PIXEL ARCADE [K] (6 игр) ===
     bool casinoOpen_ = false;
@@ -1056,6 +1081,10 @@ private:
     Material* hdHazard_ = nullptr;
     Material* hdBanyaLog_ = nullptr;
     Material* hdBanyaRooster_ = nullptr;
+    Material* hdBanyaPlank_ = nullptr;
+    Material* hdBanyaStone_ = nullptr;
+    Material* hdBanyaCopper_ = nullptr;
+    Material* hdBanyaBirch_ = nullptr;
     SharedPtr<Material> pbrBaseMat_;
     SharedPtr<Material> glowBaseMat_;
     SharedPtr<Material> critTracerMat_;
@@ -1313,8 +1342,11 @@ public:
         }
 
         engineParameters_[EP_WINDOW_TITLE] = "CHIKENGUN 2.5 — ПЕРО СУДЬБЫ (4K ULTRA)";
-        engineParameters_[EP_HIGH_DPI] = true;
-        engineParameters_[EP_WINDOW_RESIZABLE] = true;
+        // Отключаем EP_HIGH_DPI и resizable для borderless/fullscreen: на системах
+        // с 2+ мониторами разного масштаба HighDPI+resizable рвёт геометрию окна и ломает мышь.
+        engineParameters_[EP_HIGH_DPI] = false;
+        engineParameters_[EP_WINDOW_RESIZABLE] = (gfxDisplayMode_ == 0);
+        engineParameters_[EP_MONITOR] = Max(0, gfxMonitorIdx_);
         engineParameters_[EP_TRIPLE_BUFFER] = true;
         engineParameters_[EP_VSYNC] = gfxVsync_;
         engineParameters_[EP_SOUND] = true;
@@ -1346,8 +1378,8 @@ public:
         } else {
             engineParameters_[EP_FULL_SCREEN] = false;
             engineParameters_[EP_BORDERLESS] = false;
-            engineParameters_[EP_WINDOW_WIDTH] = (w > 0) ? w : 1920;
-            engineParameters_[EP_WINDOW_HEIGHT] = (h > 0) ? h : 1080;
+            engineParameters_[EP_WINDOW_WIDTH] = (w > 0) ? w : 1600;
+            engineParameters_[EP_WINDOW_HEIGHT] = (h > 0) ? h : 900;
         }
     }
 
@@ -1826,8 +1858,12 @@ private:
         hdCrate_   = loadPbrMaterial("Materials/Game/CrateWood.xml",    "Textures/CrateWoodDiffuse.png",    "Textures/CrateWoodNormal.png",    "Textures/CrateWoodRoughMetal.png");
         hdFeather_ = loadPbrMaterial("Materials/Game/FeatherPBR.xml",   "Textures/FeatherPBRDiffuse.png",   "Textures/FeatherPBRNormal.png",   "Textures/FeatherPBRRoughMetal.png");
         hdHazard_  = loadPbrMaterial("Materials/Game/HazardMetal.xml",  "Textures/HazardMetalDiffuse.png",  "Textures/HazardMetalNormal.png",  "Textures/HazardMetalRoughMetal.png");
-        hdBanyaLog_ = loadPbrMaterial("Materials/Game/BanyaLog.xml",    "Textures/BanyaLogDiffuse.png",     "Textures/BanyaLogNormal.png",     "Textures/BanyaLogRoughMetal.png");
+        hdBanyaLog_     = loadPbrMaterial("Materials/Game/BanyaLog.xml",     "Textures/BanyaLogDiffuse.png",     "Textures/BanyaLogNormal.png",     "Textures/BanyaLogRoughMetal.png");
         hdBanyaRooster_ = loadPbrMaterial("Materials/Game/BanyaRooster.xml", "Textures/BanyaRoosterDiffuse.png", "Textures/BanyaRoosterNormal.png", "Textures/BanyaRoosterRoughMetal.png");
+        hdBanyaPlank_   = loadPbrMaterial("Materials/Game/BanyaPlank.xml",   "Textures/BanyaPlankDiffuse.png",   "Textures/BanyaPlankNormal.png",   "Textures/BanyaPlankRoughMetal.png");
+        hdBanyaStone_   = loadPbrMaterial("Materials/Game/BanyaStone.xml",   "Textures/BanyaStoneDiffuse.png",   "Textures/BanyaStoneNormal.png",   "Textures/BanyaStoneRoughMetal.png");
+        hdBanyaCopper_  = loadPbrMaterial("Materials/Game/BanyaCopper.xml",  "Textures/BanyaCopperDiffuse.png",  "Textures/BanyaCopperNormal.png",  "Textures/BanyaCopperRoughMetal.png");
+        hdBanyaBirch_   = loadPbrMaterial("Materials/Game/BanyaBirch.xml",   "Textures/BanyaBirchDiffuse.png",   "Textures/BanyaBirchNormal.png",   "Textures/BanyaBirchRoughMetal.png");
         skyTexture_ = cache->GetResource<Texture2D>("Textures/SkyDay.png");
         EnsureSkyCubemap();
 
@@ -1842,6 +1878,10 @@ private:
                 "Textures/HazardMetalDiffuse.png",  "Textures/HazardMetalNormal.png",  "Textures/HazardMetalRoughMetal.png",
                 "Textures/BanyaLogDiffuse.png",     "Textures/BanyaLogNormal.png",     "Textures/BanyaLogRoughMetal.png",
                 "Textures/BanyaRoosterDiffuse.png", "Textures/BanyaRoosterNormal.png", "Textures/BanyaRoosterRoughMetal.png",
+                "Textures/BanyaPlankDiffuse.png",   "Textures/BanyaPlankNormal.png",   "Textures/BanyaPlankRoughMetal.png",
+                "Textures/BanyaStoneDiffuse.png",   "Textures/BanyaStoneNormal.png",   "Textures/BanyaStoneRoughMetal.png",
+                "Textures/BanyaCopperDiffuse.png",  "Textures/BanyaCopperNormal.png",  "Textures/BanyaCopperRoughMetal.png",
+                "Textures/BanyaBirchDiffuse.png",   "Textures/BanyaBirchNormal.png",   "Textures/BanyaBirchRoughMetal.png",
                 "Textures/SkyDay.png"
             };
             anisoTextures_.Clear();
@@ -1870,6 +1910,10 @@ private:
             tileMat(hdHazard_, 1.0f);   // 4K взрывоопасные бочки
             tileMat(hdBanyaLog_, 1.5f);     // 4K липовый сруб баньки
             tileMat(hdBanyaRooster_, 1.5f); // 4K оперение Кочета Смотрящего
+            tileMat(hdBanyaPlank_, 2.0f);   // 4K распаренная липовая вагонка и полок
+            tileMat(hdBanyaStone_, 1.5f);   // 4K габбро-диабаз каменки
+            tileMat(hdBanyaCopper_, 1.0f);  // 4K чеканная полированная медь
+            tileMat(hdBanyaBirch_, 1.5f);   // 4K листва берёзового веника
         }
 
         // Мишени тира: насыщенный PBR с лёгким HDR-само-свечением, чтобы читались на любой дистанции
@@ -2832,60 +2876,110 @@ private:
 
         // --- 3D Деревянная «БАНЬКА СМОТРЯЩЕГО» на арене ([P] — вход в симулятор парной!) ---
         {
-            SharedPtr<Material> warmGlow = MakeHDRGlow(Color(2.5f, 1.45f, 0.38f, 1.0f));
+            SharedPtr<Material> warmGlow = MakeHDRGlow(Color(2.4f, 1.35f, 0.35f, 1.0f));
             SharedPtr<Material> frostWin = MakeHDRGlow(Color(0.85f, 1.45f, 1.95f, 1.0f));
-            Material* woodMat    = hdBanyaLog_ ? hdBanyaLog_ : (hdCrate_ ? hdCrate_ : fallbackMat_);
-            Material* porchMat   = hdCrate_ ? hdCrate_ : woodMat;
-            Material* pipeMat    = hdMetal_ ? hdMetal_ : metalMaterial_;
-            Material* roosterMat = hdBanyaRooster_ ? hdBanyaRooster_ : (hdFeather_ ? hdFeather_ : woodMat);
+            Material* logMat     = hdBanyaLog_    ? hdBanyaLog_    : (hdCrate_ ? hdCrate_ : fallbackMat_);
+            Material* plankMat   = hdBanyaPlank_  ? hdBanyaPlank_  : logMat;
+            Material* stoneBMat  = hdBanyaStone_  ? hdBanyaStone_  : (hdStone_ ? hdStone_ : fallbackMat_);
+            Material* copperMat  = hdBanyaCopper_ ? hdBanyaCopper_ : (hdMetal_ ? hdMetal_ : metalMaterial_);
+            Material* birchMat   = hdBanyaBirch_  ? hdBanyaBirch_  : plankMat;
+            Material* roosterMat = hdBanyaRooster_ ? hdBanyaRooster_ : (hdFeather_ ? hdFeather_ : logMat);
             SharedPtr<Material> towelMat  = MakePBR(Color(246, 240, 224), 0.85f, 0.0f);
-            SharedPtr<Material> combMat   = MakePBR(Color(225, 48, 36), 0.42f, 0.0f);
-            SharedPtr<Material> beakMat   = MakePBR(Color(250, 178, 38), 0.35f, 0.0f);
+            SharedPtr<Material> combMat   = MakePBR(Color(225, 48, 36), 0.38f, 0.0f);
+            SharedPtr<Material> beakMat   = MakePBR(Color(250, 178, 38), 0.30f, 0.0f);
+            SharedPtr<Material> darkIron  = MakePBR(Color(42, 44, 48), 0.45f, 0.88f);
             Vector3 bp(-28.0f, 0.0f, -34.0f);
             Node* banya = scene_->CreateChild("BanyaCabin");
             banya->SetPosition(bp);
-            // Бревенчатый сруб (BanyaLog 4K PBR) + двускатная крыша + крыльцо + печная труба
-            box(banya, Vector3(0.0f, 1.75f, 0.0f),  Vector3(6.8f, 3.5f, 5.8f), woodMat);
-            box(banya, Vector3(0.0f, 3.85f, 0.0f),  Vector3(7.4f, 0.65f, 6.4f), woodMat);
-            box(banya, Vector3(0.0f, 4.35f, 0.0f),  Vector3(5.2f, 0.55f, 6.2f), woodMat);
-            box(banya, Vector3(0.0f, 0.12f, 3.55f), Vector3(3.4f, 0.24f, 1.5f), porchMat);
-            // Светящийся тёплый дверной проём (+Z к центру арены) и запотевшее окошко
-            box(banya, Vector3(0.0f, 1.25f, 2.93f), Vector3(1.45f, 2.35f, 0.12f), warmGlow.Get());
-            box(banya, Vector3(2.05f, 1.95f, 2.93f), Vector3(1.15f, 0.95f, 0.12f), frostWin.Get());
-            // Лавочка и 3D-Кочет Смотрящего на крыльце в банном оперении (BanyaRooster 4K PBR)
-            box(banya, Vector3(2.25f, 0.42f, 3.45f), Vector3(1.65f, 0.22f, 0.78f), porchMat);
-            auto part = [&](const Vector3& pos, const Vector3& scale, Model* m, Material* mat) {
-                Node* pn = banya->CreateChild("BanyaRoosterPart");
+
+            auto cabinPart = [&](const Vector3& pos, const Vector3& scale, Model* m, Material* mat,
+                                 const Quaternion& rot = Quaternion::IDENTITY, bool castShadow = true) -> Node* {
+                Node* pn = banya->CreateChild("BanyaPart");
                 pn->SetPosition(pos);
+                pn->SetRotation(rot);
                 pn->SetScale(scale);
                 StaticModel* sm = pn->CreateComponent<StaticModel>();
                 sm->SetModel(m ? m : boxModel_);
                 sm->SetMaterial(mat ? mat : fallbackMat_);
-                sm->SetCastShadows(true);
+                sm->SetCastShadows(castShadow);
+                return pn;
             };
-            part(Vector3(2.25f, 1.05f, 3.45f), Vector3(0.88f, 0.80f, 0.94f), sphereModel_, roosterMat);
-            part(Vector3(2.25f, 0.84f, 3.45f), Vector3(0.90f, 0.36f, 0.92f), cylModel_,    towelMat.Get());
-            part(Vector3(2.25f, 1.60f, 3.74f), Vector3(0.50f, 0.48f, 0.50f), sphereModel_, roosterMat);
-            part(Vector3(2.25f, 1.94f, 3.76f), Vector3(0.14f, 0.22f, 0.30f), boxModel_,    combMat.Get());
-            part(Vector3(2.25f, 1.56f, 4.06f), Vector3(0.12f, 0.10f, 0.22f), boxModel_,    beakMat.Get());
-            // Стальная труба печи-каменки
-            Node* chim = banya->CreateChild("BanyaChimney");
-            chim->SetPosition(Vector3(-2.1f, 5.2f, -1.2f));
-            chim->SetScale(Vector3(0.55f, 2.4f, 0.55f));
-            StaticModel* csm = chim->CreateComponent<StaticModel>();
-            csm->SetModel(cylModel_ ? cylModel_ : boxModel_);
-            csm->SetMaterial(pipeMat);
+
+            // Каменный цоколь из габбро-диабаза (BanyaStone 4K PBR)
+            cabinPart(Vector3(0.0f, 0.16f, 0.0f), Vector3(7.1f, 0.32f, 6.1f), boxModel_, stoneBMat);
+            // Внутренний тёмный каркас стен (закрывает просветы между брёвнами)
+            cabinPart(Vector3(0.0f, 1.85f, 0.0f), Vector3(6.45f, 3.10f, 5.45f), boxModel_, plankMat);
+            // 7 настоящих венцов оцилиндрованных брёвен (BanyaLog 4K PBR) с перерубами по углам
+            for (int r = 0; r < 7; ++r) {
+                float ry = 0.52f + (float)r * 0.43f;
+                // Фронт и тыл (горизонтальный цилиндр вдоль X)
+                cabinPart(Vector3(0.0f, ry,  2.76f), Vector3(0.46f, 7.25f, 0.46f), cylModel_, logMat, Quaternion(0.0f, 0.0f, 90.0f));
+                cabinPart(Vector3(0.0f, ry, -2.76f), Vector3(0.46f, 7.25f, 0.46f), cylModel_, logMat, Quaternion(0.0f, 0.0f, 90.0f));
+                // Бока (горизонтальный цилиндр вдоль Z, со сдвигом на полвенца)
+                cabinPart(Vector3( 3.26f, ry + 0.21f, 0.0f), Vector3(0.46f, 6.25f, 0.46f), cylModel_, logMat, Quaternion(90.0f, 0.0f, 0.0f));
+                cabinPart(Vector3(-3.26f, ry + 0.21f, 0.0f), Vector3(0.46f, 6.25f, 0.46f), cylModel_, logMat, Quaternion(90.0f, 0.0f, 0.0f));
+            }
+            // Двускатная тесовая крыша (BanyaPlank 4K PBR) + конёк + фронтоны
+            cabinPart(Vector3(-1.95f, 4.18f, 0.0f), Vector3(4.55f, 0.22f, 6.55f), boxModel_, plankMat, Quaternion(0.0f, 0.0f,  26.0f));
+            cabinPart(Vector3( 1.95f, 4.18f, 0.0f), Vector3(4.55f, 0.22f, 6.55f), boxModel_, plankMat, Quaternion(0.0f, 0.0f, -26.0f));
+            cabinPart(Vector3( 0.0f,  5.08f, 0.0f), Vector3(0.36f, 6.70f, 0.36f), cylModel_, logMat,   Quaternion(90.0f, 0.0f, 0.0f));
+            cabinPart(Vector3( 0.0f,  4.05f, 2.75f), Vector3(3.4f, 1.3f, 0.32f), boxModel_, plankMat);
+            cabinPart(Vector3( 0.0f,  4.05f,-2.75f), Vector3(3.4f, 1.3f, 0.32f), boxModel_, plankMat);
+
+            // Крыльцо из распаренных досок + резные столбы + навес
+            cabinPart(Vector3(0.0f, 0.14f, 3.72f), Vector3(3.8f, 0.28f, 1.85f), boxModel_, plankMat);
+            cabinPart(Vector3(-1.55f, 1.55f, 4.35f), Vector3(0.22f, 2.65f, 0.22f), cylModel_, logMat);
+            cabinPart(Vector3( 1.55f, 1.55f, 4.35f), Vector3(0.22f, 2.65f, 0.22f), cylModel_, logMat);
+            cabinPart(Vector3( 0.0f,  2.88f, 3.82f), Vector3(3.9f, 0.18f, 1.75f), boxModel_, plankMat, Quaternion(12.0f, 0.0f, 0.0f));
+
+            // Дубовая дверь с медной ручкой и тёплым предбанниковым свечением
+            cabinPart(Vector3(-0.35f, 1.28f, 2.95f), Vector3(1.38f, 2.18f, 0.14f), boxModel_, plankMat);
+            cabinPart(Vector3(-0.35f, 1.28f, 2.89f), Vector3(1.52f, 2.32f, 0.08f), boxModel_, warmGlow.Get(), Quaternion::IDENTITY, false);
+            cabinPart(Vector3( 0.18f, 1.25f, 3.06f), Vector3(0.14f, 0.26f, 0.10f), sphereModel_, copperMat);
+            // Морозное окно с деревянным переплётом
+            cabinPart(Vector3( 2.05f, 2.05f, 2.95f), Vector3(1.16f, 0.96f, 0.10f), boxModel_, frostWin.Get(), Quaternion::IDENTITY, false);
+            cabinPart(Vector3( 2.05f, 2.05f, 3.01f), Vector3(1.26f, 0.08f, 0.08f), boxModel_, logMat);
+            cabinPart(Vector3( 2.05f, 2.05f, 3.01f), Vector3(0.08f, 1.04f, 0.08f), boxModel_, logMat);
+
+            // Дубовая шайка с медными обручами + берёзовый веник у входа
+            cabinPart(Vector3(-1.32f, 0.56f, 3.75f), Vector3(0.68f, 0.54f, 0.68f), cylModel_, plankMat);
+            cabinPart(Vector3(-1.32f, 0.72f, 3.75f), Vector3(0.71f, 0.06f, 0.71f), cylModel_, copperMat);
+            cabinPart(Vector3(-1.32f, 0.42f, 3.75f), Vector3(0.71f, 0.06f, 0.71f), cylModel_, copperMat);
+            cabinPart(Vector3(-0.82f, 1.32f, 3.08f), Vector3(0.36f, 0.56f, 0.18f), coneModel_, birchMat, Quaternion(170.0f, 0.0f, 15.0f));
+
+            // Деревянная лавочка и детализированный 3D-Кочет Смотрящего на крыльце (BanyaRooster 4K PBR)
+            cabinPart(Vector3(2.25f, 0.42f, 3.55f), Vector3(1.85f, 0.20f, 0.85f), boxModel_, plankMat);
+            cabinPart(Vector3(2.25f, 1.04f, 3.55f), Vector3(0.86f, 0.82f, 0.96f), sphereModel_, roosterMat);
+            cabinPart(Vector3(2.25f, 0.84f, 3.55f), Vector3(0.90f, 0.36f, 0.92f), cylModel_,    towelMat.Get());
+            cabinPart(Vector3(2.74f, 1.02f, 3.55f), Vector3(0.24f, 0.54f, 0.46f), sphereModel_, roosterMat, Quaternion(0, 0, -18));
+            cabinPart(Vector3(1.76f, 1.02f, 3.55f), Vector3(0.24f, 0.54f, 0.46f), sphereModel_, roosterMat, Quaternion(0, 0,  18));
+            cabinPart(Vector3(2.25f, 1.24f, 3.05f), Vector3(0.36f, 0.52f, 0.48f), coneModel_,   roosterMat, Quaternion(-55, 0, 0));
+            cabinPart(Vector3(2.25f, 1.58f, 3.84f), Vector3(0.48f, 0.46f, 0.48f), sphereModel_, roosterMat);
+            cabinPart(Vector3(2.25f, 1.92f, 3.86f), Vector3(0.12f, 0.22f, 0.30f), boxModel_,    combMat.Get());
+            cabinPart(Vector3(2.25f, 1.54f, 4.16f), Vector3(0.11f, 0.09f, 0.22f), coneModel_,   beakMat.Get(), Quaternion(90, 0, 0));
+            cabinPart(Vector3(2.12f, 1.66f, 4.02f), Vector3(0.06f, 0.06f, 0.06f), sphereModel_, darkIron.Get());
+            cabinPart(Vector3(2.38f, 1.66f, 4.02f), Vector3(0.06f, 0.06f, 0.06f), sphereModel_, darkIron.Get());
+
+            // Печная каменная труба с медным зонтиком и живым дымом
+            cabinPart(Vector3(-2.1f, 5.15f, -1.2f), Vector3(0.62f, 2.35f, 0.62f), cylModel_, stoneBMat);
+            cabinPart(Vector3(-2.1f, 6.45f, -1.2f), Vector3(0.95f, 0.26f, 0.95f), coneModel_, copperMat);
+            if (smokeEffect_) {
+                Node* chimSmoke = banya->CreateChild("BanyaChimneySmoke");
+                chimSmoke->SetPosition(Vector3(-2.1f, 6.55f, -1.2f));
+                ParticleEmitter* cpe = chimSmoke->CreateComponent<ParticleEmitter>();
+                cpe->SetEffect(smokeEffect_);
+            }
             // Тёплый оранжевый свет из предбанника
             Node* lNode = banya->CreateChild("BanyaWarmLight");
-            lNode->SetPosition(Vector3(0.0f, 2.2f, 3.9f));
+            lNode->SetPosition(Vector3(0.0f, 2.2f, 4.1f));
             Light* bLight = lNode->CreateComponent<Light>();
             bLight->SetLightType(LIGHT_POINT);
-            bLight->SetColor(Color(1.0f, 0.62f, 0.22f));
-            bLight->SetRange(14.0f);
-            bLight->SetBrightness((gfxQualityIdx_ >= 2) ? 4.5f : 1.2f);
+            bLight->SetColor(Color(1.0f, 0.64f, 0.24f));
+            bLight->SetRange(15.0f);
+            bLight->SetBrightness((gfxQualityIdx_ >= 2) ? 5.0f : 1.3f);
             // Коллайдер сруба для физики и грэппл-крюка
             AddBoxCollider(bp + Vector3(0.0f, 1.9f, 0.0f), Vector3(3.4f, 1.9f, 2.9f));
-            banyaDoorPos_ = bp + Vector3(0.0f, 0.0f, 3.6f);
+            banyaDoorPos_ = bp + Vector3(0.0f, 0.0f, 3.8f);
         }
     }
 
@@ -3194,7 +3288,8 @@ private:
 
     void SyncPostProcessParams() {
         if (!renderPath_) return;
-        bool useSsao   = gfxSsao_ && (gfxQualityIdx_ >= 1);
+        bool inOverlay = inMenu_ || banyaOpen_ || casinoOpen_ || arcadeOpen_;
+        bool useSsao   = gfxSsao_ && (gfxQualityIdx_ >= 1) && !inOverlay;
         bool useBloom  = (gfxGlowIdx_ > 0);
         bool useCinema = true; // ACES tonemap + CAS 4K + виньетка всегда держат идеальный контраст!
         bool useFxaa   = gfxFxaa_;
@@ -3217,6 +3312,14 @@ private:
         renderPath_->SetShaderParameter("ChromaStrength", Variant(gfxQualityIdx_ >= 2 ? 0.0011f : 0.0f));
         renderPath_->SetShaderParameter("SharpenStrength", Variant(gfxSharpen_ ? 0.48f : 0.0f));
         renderPath_->SetShaderParameter("VignetteStrength", Variant(0.20f));
+
+        if (banyaRenderPath_) {
+            banyaRenderPath_->SetEnabled("BloomHDR", useBloom);
+            banyaRenderPath_->SetEnabled("Cinema4K", useCinema);
+            banyaRenderPath_->SetEnabled("FXAA3", useFxaa);
+            banyaRenderPath_->SetShaderParameter("BloomHDRMix", Variant(Vector2(1.0f, bloomMix)));
+            banyaRenderPath_->SetShaderParameter("SharpenStrength", Variant(gfxSharpen_ ? 0.45f : 0.0f));
+        }
     }
 
     // =========================================================================
@@ -3247,8 +3350,10 @@ private:
 
         auto* renderer = GetSubsystem<Renderer>();
         SharedPtr<Viewport> vp(new Viewport(context_, scene_, camera));
+        mainViewport_ = vp;
         renderer->SetViewport(0, vp);
         ConfigureRenderPipeline(vp);
+        SyncActiveViewport();
         CreateWeapon();
     }
     
@@ -4622,6 +4727,7 @@ private:
         } else {
             CreateHelpPanel();
         }
+        SyncMouseLock();
     }
 
     int GetPerkCost(int lvl) const {
@@ -4709,6 +4815,7 @@ private:
             SetGameHudVisible(!photoMode_);
             PlayUISound();
         }
+        SyncMouseLock();
     }
 
     void BuyPerk(int idx) {
@@ -4798,17 +4905,16 @@ private:
     void TogglePause() {
         if (gameOver_ || inMenu_ || loadingScreenActive_) return;
         paused_ = !paused_;
-        auto* input = GetSubsystem<Input>();
         if (paused_) {
             if (pausePanel_) { pausePanel_->Remove(); pausePanel_ = nullptr; }
             CreatePausePanel();
             if (pausePanel_) pausePanel_->SetVisible(true);
             SetGameHudVisible(false);
-            if (input) input->SetMouseVisible(false);
         } else {
             if (pausePanel_) pausePanel_->SetVisible(false);
             SetGameHudVisible(!photoMode_);
         }
+        SyncMouseLock();
     }
 
     // =========================================================================
@@ -4891,19 +4997,86 @@ private:
     }
 
     // =========================================================================
-    // Настройка ввода
+    // Настройка ввода, удержание мыши на мультимониторах и переключение сцен
     // =========================================================================
-    
-    void SetupInput() {
+
+    bool ShouldLockMouse() const {
+        return !loadingScreenActive_ && !inMenu_ && !inSettings_ && !gameOver_ &&
+               !paused_ && !banyaOpen_ && !casinoOpen_ && !arcadeOpen_ &&
+               !helpOpen_ && !armoryOpen_ && !perkShopOpen_ && !windowFocusLost_;
+    }
+
+    void SyncMouseLock() {
         auto* input = GetSubsystem<Input>();
+        if (!input) return;
+        if (ShouldLockMouse()) {
+            if (input->GetMouseMode() != MM_RELATIVE)
+                input->SetMouseMode(MM_RELATIVE);
+            if (input->IsMouseVisible())
+                input->SetMouseVisible(false);
+            isMouseVisible_ = false;
+        } else {
+            if (input->GetMouseMode() != MM_ABSOLUTE)
+                input->SetMouseMode(MM_ABSOLUTE);
+            if (!input->IsMouseVisible())
+                input->SetMouseVisible(true);
+            isMouseVisible_ = true;
+            isAiming_ = false;
+            isSprinting_ = false;
+        }
+    }
+
+    void SyncActiveViewport() {
+        auto* renderer = GetSubsystem<Renderer>();
+        if (!renderer) return;
+
+        if (banyaOpen_) {
+            if (scene_) scene_->SetUpdateEnabled(false);
+            if (banyaScene_) banyaScene_->SetUpdateEnabled(true);
+            if (banyaViewport_) renderer->SetViewport(0, banyaViewport_);
+        } else {
+            if (banyaScene_) banyaScene_->SetUpdateEnabled(false);
+            bool pauseWorld = casinoOpen_ || arcadeOpen_;
+            if (scene_) scene_->SetUpdateEnabled(!pauseWorld);
+            if (mainViewport_) renderer->SetViewport(0, mainViewport_);
+        }
+        SyncPostProcessParams();
+    }
+
+    void HandleInputFocus(StringHash eventType, VariantMap& eventData) {
+        using namespace InputFocus;
+        (void)eventType;
+        bool focus = eventData[P_FOCUS].GetBool();
+        bool minimized = eventData[P_MINIMIZED].GetBool();
+        windowFocusLost_ = (!focus || minimized);
+        if (windowFocusLost_) {
+            isSprinting_ = false;
+            isAiming_ = false;
+        }
+        SyncMouseLock();
+    }
+
+    void HandleScreenMode(StringHash eventType, VariantMap& eventData) {
+        using namespace ScreenMode;
+        (void)eventType; (void)eventData;
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!gfx) return;
+        int w = gfx->GetWidth();
+        int h = gfx->GetHeight();
+        if (w > 0 && h > 0 && (w != uiWidth_ || h != uiHeight_)) {
+            uiWidth_ = w;
+            uiHeight_ = h;
+            uiRebuildDelay_ = 0.08f;
+            pendingUiRebuild_ = true;
+        }
+    }
+
+    void SetupInput() {
         auto* graphics = GetSubsystem<Graphics>();
-        
-        // Скрываем курсор
-        input->SetMouseVisible(false);
-        isMouseVisible_ = false;
-        
-        // Центрируем мышь
-        input->SetMousePosition(IntVector2(graphics->GetWidth() / 2, graphics->GetHeight() / 2));
+        auto* input = GetSubsystem<Input>();
+        if (input && graphics)
+            input->SetMousePosition(IntVector2(graphics->GetWidth() / 2, graphics->GetHeight() / 2));
+        SyncMouseLock();
     }
     
     void SubscribeToEvents() {
@@ -4914,6 +5087,8 @@ private:
         SubscribeToEvent(E_KEYUP, URHO3D_HANDLER(MyApp, HandleKeyUp));
         SubscribeToEvent(E_MOUSEBUTTONDOWN, URHO3D_HANDLER(MyApp, HandleMouseButtonDown));
         SubscribeToEvent(E_MOUSEBUTTONUP, URHO3D_HANDLER(MyApp, HandleMouseButtonUp));
+        SubscribeToEvent(E_INPUTFOCUS, URHO3D_HANDLER(MyApp, HandleInputFocus));
+        SubscribeToEvent(E_SCREENMODE, URHO3D_HANDLER(MyApp, HandleScreenMode));
     }
 
     // =========================================================================
@@ -4935,18 +5110,23 @@ private:
             return;
         }
 
-        // Ресайз окна или переключение разрешения (1080p <-> 1440p <-> 4K UHD)
+        // Дебаунс ресайза окна/смены монитора: исключает дрожание на 2-х мониторах
         {
             auto* gfx = GetSubsystem<Graphics>();
             if (gfx && (gfx->GetWidth() != uiWidth_ || gfx->GetHeight() != uiHeight_)) {
                 uiWidth_ = gfx->GetWidth();
                 uiHeight_ = gfx->GetHeight();
                 pendingUiRebuild_ = true;
+                uiRebuildDelay_ = 0.08f;
             }
         }
         if (pendingUiRebuild_) {
-            pendingUiRebuild_ = false;
-            RebuildUI();
+            if (uiRebuildDelay_ > 0.0f) {
+                uiRebuildDelay_ -= dt;
+            } else {
+                pendingUiRebuild_ = false;
+                RebuildUI();
+            }
         }
 
         UpdateTelemetry(dt);
@@ -4967,6 +5147,11 @@ private:
         }
 
         if (paused_ || helpOpen_ || perkShopOpen_) return;
+
+        if (inMenu_) {
+            AnimateMainMenu(dt);
+            return;
+        }
 
         float rawDt = dt;
         if (slowMoTimer_ > 0.0f) {
@@ -5269,10 +5454,10 @@ private:
             return;
         }
 
-        // ===== Главное меню (7 пунктов: вкл. Баньку, Рулетку, Миниигры) и 14-строчные 4K настройки =====
+        // ===== Главное меню (7 пунктов: вкл. Баньку, Рулетку, Миниигры) и 15-строчные 4K настройки =====
         if (inMenu_) {
             if (inSettings_) {
-                const int kRows = 14;
+                const int kRows = SETTINGS_ROW_COUNT;
                 if (key == KEY_UP || key == KEY_W) { settingsSel_ = (settingsSel_ + kRows - 1) % kRows; PlayUISound(); UpdateSettingsDisplay(); }
                 else if (key == KEY_DOWN || key == KEY_S) { settingsSel_ = (settingsSel_ + 1) % kRows; PlayUISound(); UpdateSettingsDisplay(); }
                 else if (key == KEY_LEFT || key == KEY_A) { ChangeSetting(-1); }
@@ -5479,12 +5664,47 @@ private:
             return;
         }
 
+        if (inMenu_) {
+            auto* input = GetSubsystem<Input>();
+            IntVector2 mp = input ? input->GetMousePosition() : IntVector2(-1, -1);
+            if (inSettings_) {
+                for (unsigned i = 0; i < (unsigned)settingsItems_.Size() && i < (unsigned)SETTINGS_ROW_COUNT; ++i) {
+                    if (HitUIElement(settingsItems_[i].Get(), mp)) {
+                        settingsSel_ = (int)i;
+                        if ((int)i == SETTINGS_ROW_COUNT - 1) { ShowSettings(false); }
+                        else { ChangeSetting(button == MOUSEB_RIGHT ? -1 : 1); }
+                        return;
+                    }
+                }
+                return;
+            }
+            for (unsigned i = 0; i < (unsigned)menuRows_.Size() && i < 7u; ++i) {
+                if (HitUIElement(menuRows_[i], mp) && button == MOUSEB_LEFT) {
+                    menuSel_ = (int)i;
+                    UpdateMainMenuSelection();
+                    PlayUISound();
+                    if (menuSel_ == 0) StartGameMode(MODE_RANGE);
+                    else if (menuSel_ == 1) StartGameMode(MODE_ARENA);
+                    else if (menuSel_ == 2) OpenBanyaSimulator(true);
+                    else if (menuSel_ == 3) OpenCasino(true);
+                    else if (menuSel_ == 4) OpenArcade(true);
+                    else if (menuSel_ == 5) ShowSettings(true);
+                    else engine_->Exit();
+                    return;
+                }
+            }
+            return;
+        }
+
         if (button == MOUSEB_LEFT && !inMenu_ && !gameOver_ && !paused_ && !casinoOpen_ && !arcadeOpen_ && !helpOpen_ && !perkShopOpen_ && !photoMode_ && !isMouseVisible_) {
+            auto* input = GetSubsystem<Input>();
+            if (input && ShouldLockMouse() && input->GetMouseMode() != MM_RELATIVE)
+                SyncMouseLock();
             inspectTimer_ = 0.0f;
             TryFire();
         }
         
-        if (button == MOUSEB_RIGHT) {
+        if (button == MOUSEB_RIGHT && !inMenu_ && !gameOver_ && !paused_ && !casinoOpen_ && !arcadeOpen_ && !helpOpen_ && !perkShopOpen_ && !photoMode_ && !isMouseVisible_) {
             inspectTimer_ = 0.0f;
             isAiming_ = true;
         }
@@ -7366,6 +7586,8 @@ private:
         loadingBarFill_ = nullptr;
         loadingBarShimmer_ = nullptr;
         loadingScreenActive_ = false;
+        SyncMouseLock();
+        SyncActiveViewport();
     }
 
     // =========================================================================
@@ -7852,8 +8074,7 @@ private:
         if (show) gameOverPulse_ = 0.0f;
         if (gameOverPanel_) gameOverPanel_->SetVisible(show);
         SetGameHudVisible(!show);
-        auto* input = GetSubsystem<Input>();
-        if (show && input) input->SetMouseVisible(false);
+        SyncMouseLock();
     }
 
     void RestartArena() {
@@ -7882,19 +8103,15 @@ private:
 // NOTE: methods below are part of class MyApp (do not remove this brace pair)
     void ToggleArmory() {
         armoryOpen_ = !armoryOpen_;
-        auto* input = GetSubsystem<Input>();
-        auto* graphics = GetSubsystem<Graphics>();
         if (armoryOpen_) {
             if (!armoryPanel_) CreateArmoryMenu();
             armoryPanel_->SetVisible(true);
-            input->SetMouseVisible(true);
             ShowMessage("Арсенал: клик по оружию/скину, TAB — закрыть");
             PlayUISound();
         } else {
             if (armoryPanel_) armoryPanel_->SetVisible(false);
-            input->SetMouseVisible(false);
-            input->SetMousePosition(IntVector2(graphics->GetWidth() / 2, graphics->GetHeight() / 2));
         }
+        SyncMouseLock();
         UpdateArmoryHighlight();
     }
 
@@ -8073,6 +8290,7 @@ private:
         gfxQualityIdx_  = Clamp(XmlGetInt(gfx, "qualityPreset", gfxQualityIdx_), 0, 3);
         gfxResIdx_      = Clamp(XmlGetInt(gfx, "resPreset",     gfxResIdx_),     0, 4);
         gfxDisplayMode_ = Clamp(XmlGetInt(gfx, "displayMode",   gfxDisplayMode_),0, 2);
+        gfxMonitorIdx_  = Max(0, XmlGetInt(gfx, "monitor",       gfxMonitorIdx_));
         gfxMsaaIdx_     = Clamp(XmlGetInt(gfx, "msaaIdx",       gfxMsaaIdx_),    0, 3);
         if (!gfx.HasAttribute("msaaIdx") && gfx.HasAttribute("msaa")) {
             int m = XmlGetInt(gfx, "msaa", 4);
@@ -8137,6 +8355,7 @@ private:
         XmlSetInt(gfx, "qualityPreset", gfxQualityIdx_);
         XmlSetInt(gfx, "resPreset",     gfxResIdx_);
         XmlSetInt(gfx, "displayMode",   gfxDisplayMode_);
+        XmlSetInt(gfx, "monitor",       gfxMonitorIdx_);
         XmlSetInt(gfx, "msaa",          kMsaa[Clamp(gfxMsaaIdx_, 0, 3)]);
         XmlSetInt(gfx, "msaaIdx",       gfxMsaaIdx_);
         XmlSetInt(gfx, "shadows",       gfxShadowIdx_);
@@ -8204,20 +8423,30 @@ private:
         static const int kResH[5] = { 0, 2160, 1440, 1080,  900 };
         static const int kMsaa[4] = { 1, 2, 4, 8 };
 
+        int monCount = Max(1, gfx->GetMonitorCount());
+        gfxMonitorIdx_ = Clamp(gfxMonitorIdx_, 0, monCount - 1);
         int idx = Clamp(gfxResIdx_, 0, 4);
         int w = kResW[idx], h = kResH[idx];
+        IntVector2 desk = gfx->GetDesktopResolution(gfxMonitorIdx_);
+        int deskW = desk.x_ > 0 ? desk.x_ : 1920;
+        int deskH = desk.y_ > 0 ? desk.y_ : 1080;
         if (idx == 0) {
-            IntVector2 desk = gfx->GetDesktopResolution(0);
-            w = desk.x_ > 0 ? desk.x_ : 1920;
-            h = desk.y_ > 0 ? desk.y_ : 1080;
-            if (gfxDisplayMode_ == 0 && w > 1920) { w = 1920; h = 1080; }
+            w = deskW;
+            h = deskH;
+            if (gfxDisplayMode_ == 0 && w > 1600) {
+                w = Min(1600, (int)(deskW * 0.85f));
+                h = Min(900,  (int)(deskH * 0.85f));
+            }
         }
         bool full = (gfxDisplayMode_ == 2);
         bool borderless = (gfxDisplayMode_ == 1);
+        bool resizable = (gfxDisplayMode_ == 0); // только в оконном режиме, чтобы WM 2-х мониторов не ломал borderless!
         int msaa = kMsaa[Clamp(gfxMsaaIdx_, 0, 3)];
 
-        gfx->SetMode(w, h, full, borderless, true, true, gfxVsync_, true, msaa, 0, 0);
+        gfx->SetMode(w, h, full, borderless, resizable, false, gfxVsync_, true, msaa, gfxMonitorIdx_, 0);
         pendingUiRebuild_ = true;
+        uiRebuildDelay_ = 0.08f;
+        SyncMouseLock();
     }
 
     void ApplyTextureFiltering() {
@@ -8274,19 +8503,19 @@ private:
     void ApplyQualityPresetDefaults() {
         switch (Clamp(gfxQualityIdx_, 0, 3)) {
         case 0:
-            gfxShadowIdx_ = 0; gfxGlowIdx_ = 0; gfxSsao_ = false;
+            gfxMsaaIdx_ = 0; gfxShadowIdx_ = 0; gfxGlowIdx_ = 0; gfxSsao_ = false;
             gfxHdr_ = false;   gfxFxaa_ = false; gfxSharpen_ = false; gfxAnisoIdx_ = 0;
             break;
         case 1:
-            gfxShadowIdx_ = 1; gfxGlowIdx_ = 1; gfxSsao_ = false;
+            gfxMsaaIdx_ = 0; gfxShadowIdx_ = 1; gfxGlowIdx_ = 1; gfxSsao_ = false;
             gfxHdr_ = true;    gfxFxaa_ = true;  gfxSharpen_ = false; gfxAnisoIdx_ = 1;
             break;
         case 2:
-            gfxShadowIdx_ = 1; gfxGlowIdx_ = 2; gfxSsao_ = true;
+            gfxMsaaIdx_ = 1; gfxShadowIdx_ = 1; gfxGlowIdx_ = 1; gfxSsao_ = false;
             gfxHdr_ = true;    gfxFxaa_ = true;  gfxSharpen_ = true;  gfxAnisoIdx_ = 2;
             break;
         default:
-            gfxShadowIdx_ = 2; gfxGlowIdx_ = 2; gfxSsao_ = true;
+            gfxMsaaIdx_ = 2; gfxShadowIdx_ = 2; gfxGlowIdx_ = 2; gfxSsao_ = true;
             gfxHdr_ = true;    gfxFxaa_ = true;  gfxSharpen_ = true;  gfxAnisoIdx_ = 2;
             break;
         }
@@ -8495,11 +8724,13 @@ private:
             if (!mainMenuPanel_) CreateMainMenu();
             mainMenuPanel_->SetVisible(true);
             SetGameHudVisible(false);
-            auto* input = GetSubsystem<Input>();
-            if (input) input->SetMouseVisible(false);
+            SyncMouseLock();
+            SyncActiveViewport();
         } else {
             if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
             SetGameHudVisible(!photoMode_);
+            SyncMouseLock();
+            SyncActiveViewport();
         }
     }
 
@@ -8575,7 +8806,7 @@ private:
     }
 
     // =========================================================================
-    // ПАНЕЛЬ НАСТРОЕК 4K ULTRA (14 интерактивных строк)
+    // ПАНЕЛЬ НАСТРОЕК 4K ULTRA (15 интерактивных строк)
     // =========================================================================
 
     void CreateSettingsPanel() {
@@ -8594,35 +8825,35 @@ private:
         bg->SetColor(Color(0.008f, 0.016f, 0.036f, 0.93f));
 
         BorderImage* card = settingsPanel_->CreateChild<BorderImage>();
-        int cw = S(820), ch = S(610);
+        int cw = S(840), ch = S(640);
         card->SetPosition(sw / 2 - cw / 2, sh / 2 - ch / 2);
         card->SetSize(cw, ch);
-        card->SetColor(Color(0.016f, 0.032f, 0.064f, 0.82f));
+        card->SetColor(Color(0.016f, 0.032f, 0.064f, 0.84f));
 
         Text* title = settingsPanel_->CreateChild<Text>();
         title->SetFont(font_, SF(34));
         title->SetText("НАСТРОЙКИ ГРАФИКИ 4K ULTRA И ЗВУКА");
         title->SetTextAlignment(HA_CENTER);
-        title->SetPosition(sw / 2 - S(400), sh / 2 - S(288));
+        title->SetPosition(sw / 2 - S(400), sh / 2 - S(300));
         title->SetWidth(S(800));
         title->SetColor(Color(1.0f, 0.86f, 0.25f, 1.0f));
         StyleCrispText(title, true);
 
         settingsItems_.Clear();
-        for (int i = 0; i < 14; ++i) {
+        for (int i = 0; i < SETTINGS_ROW_COUNT; ++i) {
             Text* row = settingsPanel_->CreateChild<Text>();
-            row->SetFont(font_, SF(19));
-            row->SetPosition(sw / 2 - S(360), sh / 2 - S(226) + i * S(34));
-            row->SetWidth(S(720));
+            row->SetFont(font_, SF(18));
+            row->SetPosition(sw / 2 - S(365), sh / 2 - S(238) + i * S(32));
+            row->SetFixedWidth(S(730));
             StyleCrispText(row);
             settingsItems_.Push(SharedPtr<Text>(row));
         }
 
         Text* hint = settingsPanel_->CreateChild<Text>();
         hint->SetFont(font_, SF(15));
-        hint->SetText("W/S — строка   •   A/D или стрелки — изменить   •   ENTER / ESC — сохранить и вернуться");
+        hint->SetText("W/S или мышь — строка   •   A/D или клик — изменить   •   ENTER / ESC — сохранить и вернуться");
         hint->SetTextAlignment(HA_CENTER);
-        hint->SetPosition(sw / 2 - S(450), sh / 2 + S(264));
+        hint->SetPosition(sw / 2 - S(450), sh / 2 + S(278));
         hint->SetWidth(S(900));
         hint->SetColor(Color(0.68f, 0.84f, 0.96f, 0.92f));
         StyleCrispText(hint);
@@ -8641,6 +8872,7 @@ private:
             SaveSettingsFile();
             PlayUISound();
         }
+        SyncMouseLock();
     }
 
     void UpdateSettingsDisplay() {
@@ -8654,10 +8886,11 @@ private:
         static const char* fpsNames[3]    = { "60 FPS", "120 FPS", "БЕЗ ЛИМИТА" };
         static const char* sensNames[3]   = { "Низкая", "Обычная", "Высокая" };
 
-        const char* names[14] = {
+        const char* names[SETTINGS_ROW_COUNT] = {
             "Пресет графики",
             "Разрешение рендера",
             "Режим экрана",
+            "Монитор экрана",
             "Сглаживание MSAA + FXAA",
             "Карты теней (4 каскада)",
             "SSAO4K (затенение углов)",
@@ -8671,25 +8904,33 @@ private:
             "Готово"
         };
 
-        String vals[14];
+        auto* gfx = GetSubsystem<Graphics>();
+        int monCount = gfx ? Max(1, gfx->GetMonitorCount()) : 1;
+        int curMon = Clamp(gfxMonitorIdx_, 0, monCount - 1);
+        IntVector2 desk = gfx ? gfx->GetDesktopResolution(curMon) : IntVector2(1920, 1080);
+        String monVal = "Монитор " + String(curMon + 1) + "/" + String(monCount) +
+                        " (" + String(desk.x_ > 0 ? desk.x_ : 1920) + "×" + String(desk.y_ > 0 ? desk.y_ : 1080) + ")";
+
+        String vals[SETTINGS_ROW_COUNT];
         vals[0]  = qualNames[Clamp(gfxQualityIdx_, 0, 3)];
         vals[1]  = resNames[Clamp(gfxResIdx_, 0, 4)];
         vals[2]  = modeNames[Clamp(gfxDisplayMode_, 0, 2)];
-        vals[3]  = String(msaaNames[Clamp(gfxMsaaIdx_, 0, 3)]) + (gfxFxaa_ ? " + FXAA3" : "");
-        vals[4]  = shadowNames[Clamp(gfxShadowIdx_, 0, 2)];
-        vals[5]  = gfxSsao_ ? "ВКЛ (16 сэмплов)" : "ВЫКЛ";
-        vals[6]  = String(bloomNames[Clamp(gfxGlowIdx_, 0, 2)]) + (gfxHdr_ ? " [HDR ON]" : " [SDR]");
-        vals[7]  = gfxSharpen_ ? "ВКЛ (Чёткость 4K)" : "ВЫКЛ";
-        vals[8]  = filterNames[Clamp(gfxAnisoIdx_, 0, 2)];
-        vals[9]  = String(fpsNames[Clamp(gfxFpsIdx_, 0, 2)]) + (gfxVsync_ ? " | VSync ВКЛ" : " | VSync ВЫКЛ");
-        vals[10] = String((int)fovBase_) + "°";
-        vals[11] = sensNames[Clamp(mouseSensIdx_, 0, 2)];
-        vals[12] = "SFX " + String((int)(sfxVolume_ * 100.0f + 0.5f)) + "%  /  МУЗ " + String((int)(musicVolume_ * 100.0f + 0.5f)) + "%";
-        vals[13] = "‹ СОХРАНИТЬ И ВЫЙТИ В МЕНЮ";
+        vals[3]  = monVal;
+        vals[4]  = String(msaaNames[Clamp(gfxMsaaIdx_, 0, 3)]) + (gfxFxaa_ ? " + FXAA3" : "");
+        vals[5]  = shadowNames[Clamp(gfxShadowIdx_, 0, 2)];
+        vals[6]  = gfxSsao_ ? "ВКЛ (8 сэмплов)" : "ВЫКЛ";
+        vals[7]  = String(bloomNames[Clamp(gfxGlowIdx_, 0, 2)]) + (gfxHdr_ ? " [HDR ON]" : " [SDR]");
+        vals[8]  = gfxSharpen_ ? "ВКЛ (Чёткость 4K)" : "ВЫКЛ";
+        vals[9]  = filterNames[Clamp(gfxAnisoIdx_, 0, 2)];
+        vals[10] = String(fpsNames[Clamp(gfxFpsIdx_, 0, 2)]) + (gfxVsync_ ? " | VSync ВКЛ" : " | VSync ВЫКЛ");
+        vals[11] = String((int)fovBase_) + "°";
+        vals[12] = sensNames[Clamp(mouseSensIdx_, 0, 2)];
+        vals[13] = "SFX " + String((int)(sfxVolume_ * 100.0f + 0.5f)) + "%  /  МУЗ " + String((int)(musicVolume_ * 100.0f + 0.5f)) + "%";
+        vals[14] = "‹ СОХРАНИТЬ И ВЫЙТИ В МЕНЮ";
 
-        for (unsigned i = 0; i < (unsigned)settingsItems_.Size() && i < 14; ++i) {
+        for (unsigned i = 0; i < (unsigned)settingsItems_.Size() && i < (unsigned)SETTINGS_ROW_COUNT; ++i) {
             bool sel = ((int)i == settingsSel_);
-            if (i == 13)
+            if ((int)i == SETTINGS_ROW_COUNT - 1)
                 settingsItems_[i]->SetText((sel ? "›  " : "   ") + vals[i]);
             else
                 settingsItems_[i]->SetText((sel ? "›  " : "   ") + String(names[i]) + ":   " + vals[i]);
@@ -8699,6 +8940,8 @@ private:
 
     void ChangeSetting(int delta) {
         bool displayChanged = false;
+        auto* gfx = GetSubsystem<Graphics>();
+        int monCount = gfx ? Max(1, gfx->GetMonitorCount()) : 1;
         switch (settingsSel_) {
         case 0:
             gfxQualityIdx_ = Clamp(gfxQualityIdx_ + delta, 0, 3);
@@ -8713,25 +8956,29 @@ private:
             displayChanged = true;
             break;
         case 3:
+            gfxMonitorIdx_ = (gfxMonitorIdx_ + delta + monCount) % monCount;
+            displayChanged = true;
+            break;
+        case 4:
             gfxMsaaIdx_ = Clamp(gfxMsaaIdx_ + delta, 0, 3);
             gfxFxaa_ = (gfxMsaaIdx_ >= 1);
             displayChanged = true;
             break;
-        case 4: gfxShadowIdx_ = Clamp(gfxShadowIdx_ + delta, 0, 2); break;
-        case 5: gfxSsao_ = !gfxSsao_; break;
-        case 6:
+        case 5: gfxShadowIdx_ = Clamp(gfxShadowIdx_ + delta, 0, 2); break;
+        case 6: gfxSsao_ = !gfxSsao_; break;
+        case 7:
             gfxGlowIdx_ = Clamp(gfxGlowIdx_ + delta, 0, 2);
             gfxHdr_ = (gfxGlowIdx_ > 0);
             break;
-        case 7: gfxSharpen_ = !gfxSharpen_; break;
-        case 8: gfxAnisoIdx_ = Clamp(gfxAnisoIdx_ + delta, 0, 2); break;
-        case 9:
+        case 8: gfxSharpen_ = !gfxSharpen_; break;
+        case 9: gfxAnisoIdx_ = Clamp(gfxAnisoIdx_ + delta, 0, 2); break;
+        case 10:
             gfxFpsIdx_ = (gfxFpsIdx_ + delta + 3) % 3;
             if (delta < 0 && gfxFpsIdx_ == 2) gfxVsync_ = !gfxVsync_;
             break;
-        case 10: fovBase_ = (float)Clamp((int)fovBase_ + delta * 5, 75, 105); break;
-        case 11: mouseSensIdx_ = Clamp(mouseSensIdx_ + delta, 0, 2); break;
-        case 12:
+        case 11: fovBase_ = (float)Clamp((int)fovBase_ + delta * 5, 75, 105); break;
+        case 12: mouseSensIdx_ = Clamp(mouseSensIdx_ + delta, 0, 2); break;
+        case 13:
             sfxVolume_   = Clamp(sfxVolume_   + delta * 0.1f, 0.0f, 1.0f);
             musicVolume_ = Clamp(musicVolume_ + delta * 0.05f, 0.0f, 1.0f);
             break;
@@ -10013,8 +10260,8 @@ private:
         if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
         if (casinoPanel_) casinoPanel_->SetVisible(true);
         SetGameHudVisible(false);
-        auto* input = GetSubsystem<Input>();
-        if (input) { input->SetMouseVisible(true); isMouseVisible_ = true; }
+        SyncMouseLock();
+        SyncActiveViewport();
         UpdateCasinoVisuals();
         PlayUISound();
     }
@@ -10024,13 +10271,12 @@ private:
         casinoOpen_ = false;
         if (casinoPanel_) casinoPanel_->SetVisible(false);
         SaveSettingsFile();
-        auto* input = GetSubsystem<Input>();
         if (casinoFromMenu_) {
-            if (input) { input->SetMouseVisible(false); isMouseVisible_ = false; }
             ShowMainMenu(true);
         } else {
             SetGameHudVisible(!photoMode_);
-            if (input) { input->SetMouseVisible(false); isMouseVisible_ = false; }
+            SyncMouseLock();
+            SyncActiveViewport();
             UpdateScoreDisplay();
         }
     }
@@ -10181,15 +10427,9 @@ private:
     // =========================================================================
 
     void ResetBanyaUIPointers() {
-        banyaParticles_.Clear();
-        banyaSnowMotes_.Clear();
         banyaPanel_ = nullptr; banyaSceneBox_ = nullptr;
         banyaRiddleBox_ = nullptr; banyaEndBox_ = nullptr; banyaStatsBox_ = nullptr;
         banyaHeatWash_ = nullptr; banyaAirWash_ = nullptr; banyaColdWash_ = nullptr; banyaEndTint_ = nullptr;
-        banyaStoveFire_ = nullptr; banyaStonesGlow_ = nullptr; banyaVenikVis_ = nullptr;
-        banyaThermoFill_ = nullptr;
-        banyaRoosterBody_ = nullptr; banyaRoosterComb_ = nullptr; banyaRoosterCrown_ = nullptr;
-        banyaRoosterEyesText_ = nullptr;
         banyaTempText_ = nullptr; banyaMoodText_ = nullptr; banyaClockText_ = nullptr;
         banyaCaptionText_ = nullptr; banyaBadgeText_ = nullptr;
         banyaBarSteam_ = nullptr; banyaBarFire_ = nullptr; banyaBarAir_ = nullptr;
@@ -10202,6 +10442,9 @@ private:
         banyaEndTitle_ = nullptr; banyaEndText_ = nullptr; banyaEndHint_ = nullptr; banyaEndStats_ = nullptr;
         banyaEndBtnRestart_ = nullptr; banyaEndBtnStats_ = nullptr; banyaEndBtnBack_ = nullptr;
         banyaStatsRunText_ = nullptr; banyaStatsAllText_ = nullptr; banyaStatsCloseBtn_ = nullptr;
+        lastBanyaBadge_.Clear(); lastBanyaTemp_.Clear(); lastBanyaMood_.Clear(); lastBanyaClock_.Clear();
+        lastBanyaRiddleQ_.Clear(); lastBanyaRiddleTime_.Clear(); lastBanyaRiddleFb_.Clear();
+        for (int i = 0; i < 5; ++i) lastBanyaBarW_[i] = -1;
     }
 
     static String FormatBanyaClock(float sec) {
@@ -10227,29 +10470,365 @@ private:
         banyaLastWarnTime_ = timeAcc_;
     }
 
-    void SpawnBanyaParticle(float nx, float ny, float vx, float vy, float ttl, float sz, int kind) {
-        if (!banyaSceneBox_) return;
-        if (banyaParticles_.Size() >= 96) {
-            if (banyaParticles_[0].el_) banyaParticles_[0].el_->Remove();
-            banyaParticles_.Erase(0);
+    SharedPtr<Material> MakeBanyaAlphaMat(const Color& col, bool additive = false) {
+        auto* cache = GetSubsystem<ResourceCache>();
+        SharedPtr<Material> m(new Material(context_));
+        const char* techName = additive ? "Techniques/NoTextureAddAlpha.xml" : "Techniques/NoTextureUnlitAlpha.xml";
+        Technique* tech = cache ? cache->GetResource<Technique>(techName) : nullptr;
+        if (!tech && cache) tech = cache->GetResource<Technique>("Techniques/NoTextureAlpha.xml");
+        if (!tech && fallbackMat_) tech = fallbackMat_->GetTechnique(0);
+        if (tech) m->SetTechnique(0, tech);
+        m->SetShaderParameter("MatDiffColor", Variant(col));
+        return m;
+    }
+
+    // Создаёт полноценную 3D PBR парную «Кочет в баньке» (0% пересоздания узлов в игре!)
+    void CreateBanyaScene3D() {
+        if (banyaScene_) return;
+        auto* cache = GetSubsystem<ResourceCache>();
+
+        banyaScene_ = SharedPtr<Scene>(new Scene(context_));
+        banyaScene_->CreateComponent<Octree>();
+
+        // 1. Зона и динамический тёплый туман-пар парной
+        Node* zoneNode = banyaScene_->CreateChild("BanyaZone");
+        banyaZone_ = SharedPtr<Zone>(zoneNode->CreateComponent<Zone>());
+        banyaZone_->SetBoundingBox(BoundingBox(-30.0f, 30.0f));
+        banyaZone_->SetAmbientColor(Color(0.32f, 0.24f, 0.18f, 0.72f));
+        banyaZone_->SetFogColor(Color(0.24f, 0.17f, 0.12f));
+        banyaZone_->SetFogStart(3.5f);
+        banyaZone_->SetFogEnd(14.0f);
+
+        // 2. Камера парной — глубокий кинематографический ракурс с видом на печь, полок и окно
+        banyaCamNode_ = SharedPtr<Node>(banyaScene_->CreateChild("BanyaCamera"));
+        banyaCamNode_->SetPosition(Vector3(0.10f, 1.80f, -3.45f));
+        banyaCamNode_->LookAt(Vector3(0.05f, 1.38f, 1.05f));
+        Camera* cam = banyaCamNode_->CreateComponent<Camera>();
+        cam->SetFov(52.0f);
+        cam->SetNearClip(0.08f);
+        cam->SetFarClip(60.0f);
+
+        banyaViewport_ = SharedPtr<Viewport>(new Viewport(context_, banyaScene_, cam));
+        if (cache) {
+            if (XMLFile* hwDepth = cache->GetResource<XMLFile>("RenderPaths/ForwardHWDepth.xml")) {
+                SharedPtr<RenderPath> rp(new RenderPath());
+                if (rp->Load(hwDepth)) banyaViewport_->SetRenderPath(rp);
+            }
+            banyaRenderPath_ = banyaViewport_->GetRenderPath();
+            if (banyaRenderPath_) {
+                if (XMLFile* bloomXml = cache->GetResource<XMLFile>("PostProcess/BloomHDR.xml"))
+                    banyaRenderPath_->Append(bloomXml);
+                if (XMLFile* cinemaXml = cache->GetResource<XMLFile>("PostProcess/Cinema4K.xml"))
+                    banyaRenderPath_->Append(cinemaXml);
+                if (XMLFile* fxaaXml = cache->GetResource<XMLFile>("PostProcess/FXAA3.xml"))
+                    banyaRenderPath_->Append(fxaaXml);
+                banyaRenderPath_->SetEnabled("BloomHDR", gfxGlowIdx_ > 0);
+                banyaRenderPath_->SetEnabled("Cinema4K", true);
+                banyaRenderPath_->SetEnabled("FXAA3", gfxFxaa_);
+                banyaRenderPath_->SetShaderParameter("BloomHDRThreshold", Variant(0.95f));
+                banyaRenderPath_->SetShaderParameter("BloomHDRMix", Variant(Vector2(1.0f, 0.28f)));
+                banyaRenderPath_->SetShaderParameter("CinemaExposure", Variant(1.08f));
+                banyaRenderPath_->SetShaderParameter("CinemaSaturation", Variant(1.12f));
+                banyaRenderPath_->SetShaderParameter("SharpenStrength", Variant(gfxSharpen_ ? 0.45f : 0.0f));
+                banyaRenderPath_->SetShaderParameter("VignetteStrength", Variant(0.24f));
+            }
         }
-        BorderImage* p = banyaSceneBox_->CreateChild<BorderImage>();
-        int pxSz = Max(2, S(sz));
-        p->SetSize(pxSz, pxSz);
-        Color col(1.0f, 1.0f, 1.0f, 0.35f);
-        if (kind == 1)      col = Color(0.28f, 0.20f, 0.14f, 0.45f); // smoke
-        else if (kind == 2) col = Color(0.72f, 0.90f, 0.98f, 0.85f); // water drop
-        else if (kind == 3) col = Color(0.45f, 0.62f, 0.28f, 0.90f); // birch leaf
-        else if (kind == 4) col = Color(0.95f, 0.98f, 1.00f, 0.88f); // snow
-        else if (kind == 5) col = Color(1.00f, 0.62f, 0.18f, 0.95f); // ember
-        else if (kind == 6) col = Color(1.00f, 0.90f, 0.55f, 0.95f); // spark
-        p->SetColor(col);
-        p->SetPosition((int)(nx * banyaSceneBox_->GetWidth()), (int)(ny * banyaSceneBox_->GetHeight()));
-        BanyaUIParticle bp;
-        bp.el_ = SharedPtr<BorderImage>(p);
-        bp.x_ = nx; bp.y_ = ny; bp.vx_ = vx; bp.vy_ = vy;
-        bp.life_ = 0.0f; bp.ttl_ = ttl; bp.sz_ = sz; bp.kind_ = kind;
-        banyaParticles_.Push(bp);
+
+        // 3. Освещение 3D парной (живой очаг + медовый фонарь + холодный лунный свет из окна)
+        float pbr = (gfxQualityIdx_ >= 2) ? 6.5f : 1.15f;
+        {
+            Node* fillN = banyaScene_->CreateChild("BanyaFill");
+            fillN->SetDirection(Vector3(0.25f, -0.82f, 0.48f).Normalized());
+            Light* fill = fillN->CreateComponent<Light>();
+            fill->SetLightType(LIGHT_DIRECTIONAL);
+            fill->SetColor(Color(1.0f, 0.88f, 0.72f));
+            fill->SetBrightness(0.45f * pbr);
+            fill->SetSpecularIntensity(0.65f);
+            fill->SetCastShadows(false);
+
+            Node* fireLN = banyaScene_->CreateChild("BanyaFireLight");
+            fireLN->SetPosition(Vector3(-1.45f, 0.92f, 0.55f));
+            banyaFireLight_ = SharedPtr<Light>(fireLN->CreateComponent<Light>());
+            banyaFireLight_->SetLightType(LIGHT_POINT);
+            banyaFireLight_->SetColor(Color(1.0f, 0.48f, 0.14f));
+            banyaFireLight_->SetRange(10.5f);
+            banyaFireLight_->SetBrightness(2.1f * pbr);
+            banyaFireLight_->SetRadius(0.35f);
+            banyaFireLight_->SetCastShadows(gfxQualityIdx_ >= 1);
+
+            Node* lampLN = banyaScene_->CreateChild("BanyaLampLight");
+            lampLN->SetPosition(Vector3(1.85f, 2.75f, 1.45f));
+            banyaLampLight_ = SharedPtr<Light>(lampLN->CreateComponent<Light>());
+            banyaLampLight_->SetLightType(LIGHT_POINT);
+            banyaLampLight_->SetColor(Color(1.0f, 0.78f, 0.44f));
+            banyaLampLight_->SetRange(12.0f);
+            banyaLampLight_->SetBrightness(1.45f * pbr);
+            banyaLampLight_->SetRadius(0.28f);
+            banyaLampLight_->SetCastShadows(false);
+
+            Node* winLN = banyaScene_->CreateChild("BanyaWindowLight");
+            winLN->SetPosition(Vector3(2.85f, 1.85f, 0.45f));
+            winLN->SetDirection(Vector3(-0.92f, -0.30f, 0.12f).Normalized());
+            banyaWindowLight_ = SharedPtr<Light>(winLN->CreateComponent<Light>());
+            banyaWindowLight_->SetLightType(LIGHT_SPOT);
+            banyaWindowLight_->SetColor(Color(0.54f, 0.78f, 1.0f));
+            banyaWindowLight_->SetRange(8.5f);
+            banyaWindowLight_->SetFov(62.0f);
+            banyaWindowLight_->SetBrightness(1.35f * pbr);
+            banyaWindowLight_->SetCastShadows(false);
+        }
+
+        // 4. 4K PBR материалы парной
+        Material* logMat     = hdBanyaLog_     ? hdBanyaLog_     : (hdCrate_ ? hdCrate_ : fallbackMat_);
+        Material* plankMat   = hdBanyaPlank_   ? hdBanyaPlank_   : logMat;
+        Material* stoneMat   = hdBanyaStone_   ? hdBanyaStone_   : (hdStone_ ? hdStone_ : fallbackMat_);
+        Material* copperMat  = hdBanyaCopper_  ? hdBanyaCopper_  : (hdMetal_ ? hdMetal_ : metalMaterial_);
+        Material* birchMat   = hdBanyaBirch_   ? hdBanyaBirch_   : plankMat;
+        Material* roosterBase= hdBanyaRooster_ ? hdBanyaRooster_ : (hdFeather_ ? hdFeather_ : logMat);
+        Material* ironMat    = weaponDarkMat_  ? weaponDarkMat_.Get() : (hdMetal_ ? hdMetal_ : fallbackMat_);
+
+        banyaRoosterBodyMat_ = roosterBase->Clone();
+        banyaCombMat_        = MakePBR(Color(232, 34, 30), 0.36f, 0.02f);
+        SharedPtr<Material> beakMat    = MakePBR(Color(250, 178, 36), 0.28f, 0.06f);
+        SharedPtr<Material> towelMat   = MakePBR(Color(246, 240, 224), 0.85f, 0.0f);
+        SharedPtr<Material> towelTrim  = MakePBR(Color(198, 42, 34), 0.75f, 0.0f);
+        SharedPtr<Material> eyeDarkMat = MakePBR(Color(18, 12, 10), 0.14f, 0.10f);
+        SharedPtr<Material> feltCapMat = MakePBR(Color(236, 228, 212), 0.92f, 0.0f);
+        SharedPtr<Material> lampGlow   = MakeHDRGlow(Color(2.4f, 1.55f, 0.65f, 1.0f));
+        SharedPtr<Material> nightMat   = MakeHDRGlow(Color(0.06f, 0.14f, 0.32f, 1.0f));
+        SharedPtr<Material> dialMat    = MakePBR(Color(246, 240, 224), 0.45f, 0.0f);
+        SharedPtr<Material> needleMat  = MakePBR(Color(195, 32, 24), 0.35f, 0.25f);
+        banyaEmberBedMat_  = MakeHDRGlow(Color(2.8f, 0.72f, 0.10f, 1.0f));
+        banyaFlameMat_     = MakeHDRGlow(Color(3.4f, 1.25f, 0.18f, 1.0f));
+        banyaGlassMat_     = MakeBanyaAlphaMat(Color(0.72f, 0.88f, 1.0f, 0.30f));
+        banyaWaterMat_     = MakeBanyaAlphaMat(Color(0.28f, 0.72f, 0.82f, 0.76f));
+
+        auto addObj = [&](Node* parent, const char* name, const Vector3& pos, const Vector3& scale,
+                          Model* m, Material* mat, const Quaternion& rot = Quaternion::IDENTITY, bool shadow = true) -> Node* {
+            Node* p = (parent ? parent : banyaScene_.Get())->CreateChild(name);
+            p->SetPosition(pos);
+            p->SetRotation(rot);
+            p->SetScale(scale);
+            StaticModel* sm = p->CreateComponent<StaticModel>();
+            sm->SetModel(m ? m : boxModel_);
+            sm->SetMaterial(mat ? mat : fallbackMat_);
+            sm->SetCastShadows(shadow);
+            return p;
+        };
+
+        // 5. Пол (10 липовых половиц) и тёплый потолок с балками-матицами
+        for (int i = 0; i < 10; ++i) {
+            float px = -2.75f + (float)i * 0.61f;
+            addObj(nullptr, "BanyaFloorPlank", Vector3(px, -0.05f, 0.15f), Vector3(0.58f, 0.10f, 6.2f), boxModel_, plankMat, Quaternion::IDENTITY, false);
+        }
+        addObj(nullptr, "BanyaCeiling", Vector3(0.0f, 3.35f, 0.15f), Vector3(6.6f, 0.18f, 6.4f), boxModel_, plankMat);
+        for (int b = -1; b <= 1; ++b) {
+            addObj(nullptr, "BanyaBeam", Vector3(0.0f, 3.16f, (float)b * 1.45f), Vector3(0.32f, 6.4f, 0.32f), cylModel_, logMat, Quaternion(0, 0, 90));
+        }
+
+        // 6. Стены из реальных оцилиндрованных брёвен + задняя вагонка
+        addObj(nullptr, "BackPlankCore", Vector3(0.0f, 1.65f, 2.38f), Vector3(6.2f, 3.4f, 0.12f), boxModel_, plankMat);
+        addObj(nullptr, "LeftPlankCore", Vector3(-2.95f, 1.65f, 0.15f), Vector3(0.12f, 3.4f, 6.2f), boxModel_, plankMat);
+        for (int r = 0; r < 8; ++r) {
+            float ry = 0.22f + (float)r * 0.42f;
+            addObj(nullptr, "BackLog", Vector3(0.0f, ry, 2.26f), Vector3(0.44f, 6.3f, 0.44f), cylModel_, logMat, Quaternion(0, 0, 90));
+            addObj(nullptr, "LeftLog", Vector3(-2.82f, ry + 0.18f, 0.15f), Vector3(0.44f, 6.2f, 0.44f), cylModel_, logMat, Quaternion(90, 0, 0));
+            if (r < 3 || r > 6) {
+                addObj(nullptr, "RightLog", Vector3(2.82f, ry + 0.18f, 0.15f), Vector3(0.44f, 6.2f, 0.44f), cylModel_, logMat, Quaternion(90, 0, 0));
+            }
+        }
+        // Колонны-стойки правой стены по краям окна
+        addObj(nullptr, "RightWallF", Vector3(2.80f, 1.70f, -1.30f), Vector3(0.30f, 3.4f, 2.35f), boxModel_, plankMat);
+        addObj(nullptr, "RightWallB", Vector3(2.80f, 1.70f,  1.80f), Vector3(0.30f, 3.4f, 1.45f), boxModel_, plankMat);
+
+        // Приоткрывающаяся банная дверь справа в ближнем углу (для [4] Проветрить)
+        addObj(nullptr, "DoorFrame", Vector3(2.68f, 1.10f, -1.65f), Vector3(0.18f, 2.25f, 1.05f), boxModel_, logMat);
+        banyaDoor3D_ = SharedPtr<Node>(banyaScene_->CreateChild("BanyaDoorPivot"));
+        banyaDoor3D_->SetPosition(Vector3(2.60f, 1.10f, -2.10f));
+        addObj(banyaDoor3D_.Get(), "DoorLeaf", Vector3(0.0f, 0.0f, 0.45f), Vector3(0.08f, 2.08f, 0.90f), boxModel_, plankMat);
+        addObj(banyaDoor3D_.Get(), "DoorHandle", Vector3(-0.08f, -0.05f, 0.78f), Vector3(0.06f, 0.18f, 0.06f), sphereModel_, copperMat);
+
+        // Деревянный абажур банного фонаря на стене справа сверху
+        addObj(nullptr, "LampShade", Vector3(2.05f, 2.75f, 1.75f), Vector3(0.42f, 0.48f, 0.28f), boxModel_, plankMat);
+        addObj(nullptr, "LampCore",  Vector3(2.02f, 2.75f, 1.75f), Vector3(0.24f, 0.30f, 0.16f), sphereModel_, lampGlow.Get(), Quaternion::IDENTITY, false);
+
+        // 7. Морозное зимнее окно справа с падающими 3D-снежинками
+        addObj(nullptr, "NightBackdrop", Vector3(3.35f, 1.85f, 0.45f), Vector3(0.10f, 1.65f, 2.10f), boxModel_, nightMat.Get(), Quaternion::IDENTITY, false);
+        addObj(nullptr, "WinGlass",      Vector3(2.78f, 1.85f, 0.45f), Vector3(0.04f, 1.18f, 1.48f), boxModel_, banyaGlassMat_.Get(), Quaternion::IDENTITY, false);
+        addObj(nullptr, "WinFrameTop",   Vector3(2.74f, 2.48f, 0.45f), Vector3(0.18f, 0.12f, 1.64f), boxModel_, logMat);
+        addObj(nullptr, "WinFrameBot",   Vector3(2.74f, 1.22f, 0.45f), Vector3(0.22f, 0.14f, 1.68f), boxModel_, logMat);
+        addObj(nullptr, "WinCrossV",     Vector3(2.74f, 1.85f, 0.45f), Vector3(0.12f, 1.20f, 0.07f), boxModel_, plankMat);
+        addObj(nullptr, "WinCrossH",     Vector3(2.74f, 1.85f, 0.45f), Vector3(0.12f, 0.07f, 1.52f), boxModel_, plankMat);
+        banyaWindowSnow3D_.Clear();
+        SharedPtr<Material> snowMat = MakeHDRGlow(Color(1.4f, 1.7f, 2.1f, 1.0f));
+        for (int sf = 0; sf < 14; ++sf) {
+            Node* sn = addObj(nullptr, "WinSnowflake", Vector3(2.96f + (sf % 3) * 0.11f, 1.3f + (sf % 5) * 0.22f, -0.20f + (float)sf * 0.095f),
+                              Vector3(0.045f, 0.045f, 0.045f), sphereModel_, snowMat.Get(), Quaternion::IDENTITY, false);
+            banyaWindowSnow3D_.Push(SharedPtr<Node>(sn));
+        }
+
+        // 8. Настенный медный термометр со стрелкой
+        addObj(nullptr, "ThermoRim",  Vector3(1.10f, 2.15f, 2.02f), Vector3(0.46f, 0.46f, 0.08f), cylModel_, copperMat, Quaternion(90, 0, 0));
+        addObj(nullptr, "ThermoDial", Vector3(1.10f, 2.15f, 1.97f), Vector3(0.38f, 0.38f, 0.04f), cylModel_, dialMat.Get(), Quaternion(90, 0, 0));
+        banyaNeedle3D_ = SharedPtr<Node>(banyaScene_->CreateChild("ThermoNeedlePivot"));
+        banyaNeedle3D_->SetPosition(Vector3(1.10f, 2.15f, 1.94f));
+        addObj(banyaNeedle3D_.Get(), "ThermoNeedle", Vector3(0.0f, 0.075f, 0.0f), Vector3(0.022f, 0.16f, 0.015f), boxModel_, needleMat.Get());
+
+        // 9. Печь-каменка «Царь-Пар» слева: каменный подиум, чугунная топка, угли, 3D огонь, дымоход, 22 камня
+        addObj(nullptr, "StoveHearth", Vector3(-1.82f, 0.10f, 0.72f), Vector3(1.65f, 0.20f, 1.55f), boxModel_, stoneMat);
+        addObj(nullptr, "StoveBackShield", Vector3(-2.55f, 1.30f, 0.72f), Vector3(0.16f, 2.40f, 1.65f), boxModel_, stoneMat);
+        addObj(nullptr, "StoveBody",   Vector3(-1.82f, 0.68f, 0.72f), Vector3(1.12f, 0.96f, 1.06f), boxModel_, ironMat);
+        addObj(nullptr, "StoveCollar", Vector3(-1.82f, 1.18f, 0.72f), Vector3(1.20f, 0.10f, 1.14f), boxModel_, copperMat);
+        addObj(nullptr, "StovePipe",   Vector3(-2.05f, 2.28f, 1.02f), Vector3(0.28f, 2.15f, 0.28f), cylModel_, copperMat);
+        addObj(nullptr, "StoveFlange", Vector3(-2.05f, 3.22f, 1.02f), Vector3(0.56f, 0.06f, 0.56f), cylModel_, ironMat);
+        // Топочный зев + светящиеся угли + анимированные лепестки пламени
+        addObj(nullptr, "StoveDoorOpen", Vector3(-1.24f, 0.52f, 0.30f), Vector3(0.06f, 0.38f, 0.34f), boxModel_, ironMat, Quaternion(0, -48, 0));
+        addObj(nullptr, "EmberBed",    Vector3(-1.55f, 0.36f, 0.72f), Vector3(0.68f, 0.14f, 0.62f), boxModel_, banyaEmberBedMat_.Get(), Quaternion::IDENTITY, false);
+        banyaFlamesRoot3D_ = SharedPtr<Node>(banyaScene_->CreateChild("BanyaFlamesRoot"));
+        banyaFlamesRoot3D_->SetPosition(Vector3(-1.42f, 0.42f, 0.68f));
+        for (int f = 0; f < 5; ++f) {
+            float fx = -0.14f + (float)f * 0.07f;
+            float fz = ((f % 2) == 0 ? 0.08f : -0.06f);
+            addObj(banyaFlamesRoot3D_.Get(), "Flame", Vector3(fx, 0.14f, fz), Vector3(0.11f, 0.28f + (f % 3) * 0.07f, 0.11f),
+                   coneModel_, banyaFlameMat_.Get(), Quaternion::IDENTITY, false);
+        }
+        // Куча из 22 объёмных 3D-камней габбро-диабаза сверху печи (раскаляются от температуры!)
+        banyaStoneMats_.Clear();
+        for (int st = 0; st < 22; ++st) {
+            SharedPtr<Material> smat = stoneMat->Clone();
+            banyaStoneMats_.Push(smat);
+            int layer = (st < 12) ? 0 : (st < 19 ? 1 : 2);
+            float rad = (layer == 0) ? 0.38f : (layer == 1 ? 0.23f : 0.08f);
+            float ang = (float)st * 2.39996f;
+            float sy  = 1.24f + (float)layer * 0.12f;
+            Vector3 sp(-1.72f + cosf(ang) * rad, sy, 0.68f + sinf(ang) * rad * 0.85f);
+            Vector3 ss(0.24f + (st % 3) * 0.04f, 0.17f + (st % 2) * 0.04f, 0.22f + ((st + 1) % 3) * 0.03f);
+            addObj(nullptr, "BanyaHotStone", sp, ss, sphereModel_, smat.Get(), Quaternion((float)(st * 37), (float)(st * 53), 0.0f));
+        }
+
+        // 10. Двухъярусный липовый полок + подголовник + дубовая шайка с водой + медный ковш
+        addObj(nullptr, "UpperBench",  Vector3(0.62f, 0.86f, 1.32f), Vector3(3.15f, 0.12f, 1.32f), boxModel_, plankMat);
+        addObj(nullptr, "UpperSkirt",  Vector3(0.62f, 0.56f, 0.68f), Vector3(3.10f, 0.55f, 0.08f), boxModel_, plankMat);
+        addObj(nullptr, "Headrest",    Vector3(1.58f, 0.96f, 1.32f), Vector3(0.48f, 0.12f, 0.88f), boxModel_, plankMat, Quaternion(0, 0, -14));
+        addObj(nullptr, "LowerBench",  Vector3(0.75f, 0.44f, 0.28f), Vector3(2.85f, 0.11f, 0.82f), boxModel_, plankMat);
+        addObj(nullptr, "BenchLegL",   Vector3(-0.58f, 0.22f, 0.28f), Vector3(0.14f, 0.44f, 0.72f), boxModel_, logMat);
+        addObj(nullptr, "BenchLegR",   Vector3( 2.08f, 0.22f, 0.28f), Vector3(0.14f, 0.44f, 0.72f), boxModel_, logMat);
+
+        // Дубовая шайка на нижнем полке + два медных обруча + вода + подвижный медный ковш
+        addObj(nullptr, "TubBody",   Vector3(-0.35f, 0.70f, 0.20f), Vector3(0.56f, 0.42f, 0.56f), cylModel_, plankMat);
+        addObj(nullptr, "TubHoopT",  Vector3(-0.35f, 0.84f, 0.20f), Vector3(0.59f, 0.05f, 0.59f), cylModel_, copperMat);
+        addObj(nullptr, "TubHoopB",  Vector3(-0.35f, 0.56f, 0.20f), Vector3(0.59f, 0.05f, 0.59f), cylModel_, copperMat);
+        addObj(nullptr, "TubWater",  Vector3(-0.35f, 0.89f, 0.20f), Vector3(0.49f, 0.03f, 0.49f), cylModel_, banyaWaterMat_.Get(), Quaternion::IDENTITY, false);
+
+        banyaLadle3D_ = SharedPtr<Node>(banyaScene_->CreateChild("BanyaCopperLadle"));
+        banyaLadle3D_->SetPosition(Vector3(-0.35f, 0.95f, 0.20f));
+        addObj(banyaLadle3D_.Get(), "LadleCup",    Vector3(0.0f, 0.0f, 0.0f),   Vector3(0.20f, 0.12f, 0.20f), cylModel_, copperMat);
+        addObj(banyaLadle3D_.Get(), "LadleShaft",  Vector3(0.26f, 0.08f, 0.0f), Vector3(0.46f, 0.032f, 0.032f), boxModel_, copperMat, Quaternion(0, 0, 18));
+        addObj(banyaLadle3D_.Get(), "LadleHandle", Vector3(0.49f, 0.16f, 0.0f), Vector3(0.20f, 0.055f, 0.055f), boxModel_, plankMat,  Quaternion(0, 0, 18));
+
+        // 11. 3D Берёзовый веник (ручка + 7 пучков 4K листвы BanyaBirch)
+        banyaVenik3D_ = SharedPtr<Node>(banyaScene_->CreateChild("BanyaBirchVenik"));
+        banyaVenik3D_->SetPosition(Vector3(-0.38f, 1.88f, 1.88f));
+        addObj(banyaVenik3D_.Get(), "VenikHandle", Vector3(0.0f, -0.26f, 0.0f), Vector3(0.07f, 0.28f, 0.07f), cylModel_, plankMat);
+        for (int lf = 0; lf < 7; ++lf) {
+            float ox = (float)((lf % 3) - 1) * 0.11f;
+            float oy = 0.04f + (float)(lf / 3) * 0.14f;
+            float oz = ((lf % 2) == 0 ? 0.05f : -0.05f);
+            addObj(banyaVenik3D_.Get(), "VenikLeaf", Vector3(ox, oy, oz), Vector3(0.26f, 0.34f, 0.12f),
+                   sphereModel_, birchMat, Quaternion((float)(lf * 17 - 30), (float)(lf * 29), (float)(lf * 13 - 25)));
+        }
+
+        // 12. Главный герой — 3D КОЧЕТ СМОТРЯЩЕГО на верхнем полке (4K PBR BanyaRooster!)
+        banyaRooster3D_ = SharedPtr<Node>(banyaScene_->CreateChild("BanyaRooster3D"));
+        banyaRooster3D_->SetPosition(Vector3(0.62f, 1.32f, 1.25f));
+        banyaRooster3D_->SetRotation(Quaternion(0.0f, 165.0f, 0.0f));
+
+        addObj(banyaRooster3D_.Get(), "RoosterTorso",  Vector3(0.0f, 0.0f, 0.0f),    Vector3(0.76f, 0.72f, 0.84f), sphereModel_, banyaRoosterBodyMat_.Get());
+        addObj(banyaRooster3D_.Get(), "RoosterTowel",  Vector3(0.0f, -0.18f, 0.0f),  Vector3(0.80f, 0.34f, 0.82f), cylModel_,    towelMat.Get());
+        addObj(banyaRooster3D_.Get(), "RoosterStripe", Vector3(0.0f, -0.22f, 0.0f),  Vector3(0.82f, 0.06f, 0.84f), cylModel_,    towelTrim.Get());
+
+        banyaRoosterWingL3D_ = SharedPtr<Node>(banyaRooster3D_->CreateChild("WingL"));
+        banyaRoosterWingL3D_->SetPosition(Vector3(-0.38f, 0.05f, 0.02f));
+        addObj(banyaRoosterWingL3D_.Get(), "WingLMesh", Vector3(-0.08f, -0.06f, 0.0f), Vector3(0.22f, 0.50f, 0.42f), sphereModel_, banyaRoosterBodyMat_.Get(), Quaternion(0, 0, 18));
+
+        banyaRoosterWingR3D_ = SharedPtr<Node>(banyaRooster3D_->CreateChild("WingR"));
+        banyaRoosterWingR3D_->SetPosition(Vector3(0.38f, 0.05f, 0.02f));
+        addObj(banyaRoosterWingR3D_.Get(), "WingRMesh", Vector3(0.08f, -0.06f, 0.0f), Vector3(0.22f, 0.50f, 0.42f), sphereModel_, banyaRoosterBodyMat_.Get(), Quaternion(0, 0, -18));
+
+        banyaRoosterTail3D_ = SharedPtr<Node>(banyaRooster3D_->CreateChild("TailFan"));
+        banyaRoosterTail3D_->SetPosition(Vector3(0.0f, 0.16f, -0.44f));
+        for (int tf = -2; tf <= 2; ++tf) {
+            addObj(banyaRoosterTail3D_.Get(), "TailFeather", Vector3((float)tf * 0.09f, 0.18f - fabsf((float)tf) * 0.04f, -0.14f),
+                   Vector3(0.11f, 0.48f, 0.18f), coneModel_, banyaRoosterBodyMat_.Get(), Quaternion(-38.0f, (float)tf * 14.0f, 0.0f));
+        }
+
+        banyaRoosterHead3D_ = SharedPtr<Node>(banyaRooster3D_->CreateChild("Head"));
+        banyaRoosterHead3D_->SetPosition(Vector3(0.0f, 0.46f, 0.22f));
+        addObj(banyaRoosterHead3D_.Get(), "Skull",  Vector3(0.0f, 0.0f, 0.0f),     Vector3(0.46f, 0.44f, 0.46f), sphereModel_, banyaRoosterBodyMat_.Get());
+        addObj(banyaRoosterHead3D_.Get(), "BeakU",  Vector3(0.0f, -0.03f, 0.27f),  Vector3(0.12f, 0.09f, 0.24f), coneModel_,   beakMat.Get(), Quaternion(95, 0, 0));
+        addObj(banyaRoosterHead3D_.Get(), "WattleL",Vector3(-0.06f, -0.16f, 0.18f),Vector3(0.07f, 0.14f, 0.07f), sphereModel_, banyaCombMat_.Get());
+        addObj(banyaRoosterHead3D_.Get(), "WattleR",Vector3( 0.06f, -0.16f, 0.18f),Vector3(0.07f, 0.14f, 0.07f), sphereModel_, banyaCombMat_.Get());
+        // 3-зубцовый красный гребень
+        addObj(banyaRoosterHead3D_.Get(), "Comb1", Vector3(0.0f, 0.25f, 0.06f),  Vector3(0.09f, 0.19f, 0.12f), sphereModel_, banyaCombMat_.Get());
+        addObj(banyaRoosterHead3D_.Get(), "Comb2", Vector3(0.0f, 0.27f, -0.04f), Vector3(0.09f, 0.22f, 0.12f), sphereModel_, banyaCombMat_.Get());
+        addObj(banyaRoosterHead3D_.Get(), "Comb3", Vector3(0.0f, 0.22f, -0.14f), Vector3(0.08f, 0.17f, 0.11f), sphereModel_, banyaCombMat_.Get());
+        // Живые глаза и веки
+        addObj(banyaRoosterHead3D_.Get(), "EyeL", Vector3(-0.14f, 0.06f, 0.19f), Vector3(0.075f, 0.075f, 0.06f), sphereModel_, eyeDarkMat.Get());
+        addObj(banyaRoosterHead3D_.Get(), "EyeR", Vector3( 0.14f, 0.06f, 0.19f), Vector3(0.075f, 0.075f, 0.06f), sphereModel_, eyeDarkMat.Get());
+        banyaRoosterEyeL3D_ = SharedPtr<Node>(addObj(banyaRoosterHead3D_.Get(), "EyelidL", Vector3(-0.14f, 0.10f, 0.19f), Vector3(0.088f, 0.01f, 0.07f), sphereModel_, banyaRoosterBodyMat_.Get()));
+        banyaRoosterEyeR3D_ = SharedPtr<Node>(addObj(banyaRoosterHead3D_.Get(), "EyelidR", Vector3( 0.14f, 0.10f, 0.19f), Vector3(0.088f, 0.01f, 0.07f), sphereModel_, banyaRoosterBodyMat_.Get()));
+
+        // Банная войлочная шапочка + золотая корона Смотрящего
+        banyaRoosterCap3D_ = SharedPtr<Node>(banyaRoosterHead3D_->CreateChild("BanyaFeltCap"));
+        banyaRoosterCap3D_->SetPosition(Vector3(0.0f, 0.14f, -0.02f));
+        addObj(banyaRoosterCap3D_.Get(), "CapBell", Vector3(0.0f, 0.06f, 0.0f),  Vector3(0.50f, 0.34f, 0.50f), coneModel_, feltCapMat.Get());
+        addObj(banyaRoosterCap3D_.Get(), "CapBrim", Vector3(0.0f, -0.08f, 0.0f), Vector3(0.54f, 0.08f, 0.54f), cylModel_,  feltCapMat.Get());
+
+        banyaRoosterCrown3D_ = SharedPtr<Node>(banyaRoosterHead3D_->CreateChild("BanyaStewardCrown"));
+        banyaRoosterCrown3D_->SetPosition(Vector3(0.0f, 0.34f, 0.0f));
+        addObj(banyaRoosterCrown3D_.Get(), "CrownRing", Vector3(0.0f, 0.0f, 0.0f), Vector3(0.32f, 0.09f, 0.32f), cylModel_, copperMat);
+        for (int cp = 0; cp < 5; ++cp) {
+            float ca = (float)cp * 1.2566f;
+            addObj(banyaRoosterCrown3D_.Get(), "CrownTip", Vector3(cosf(ca) * 0.12f, 0.08f, sinf(ca) * 0.12f),
+                   Vector3(0.06f, 0.12f, 0.06f), coneModel_, copperMat);
+        }
+        banyaRoosterCrown3D_->SetEnabled(false);
+
+        // 13. Кольцевой пул из 48 3D частиц (0 аллокаций в рантайме!)
+        banya3DFxPool_.Clear();
+        banya3DFxCursor_ = 0;
+        for (int i = 0; i < 48; ++i) {
+            Banya3DFxMote m;
+            m.mat_ = MakeBanyaAlphaMat(Color(1.0f, 1.0f, 1.0f, 0.0f), false);
+            m.node_ = SharedPtr<Node>(banyaScene_->CreateChild("BanyaFxMote"));
+            m.node_->SetEnabled(false);
+            StaticModel* sm = m.node_->CreateComponent<StaticModel>();
+            sm->SetModel(sphereModel_ ? sphereModel_ : boxModel_);
+            sm->SetMaterial(m.mat_.Get());
+            sm->SetCastShadows(false);
+            banya3DFxPool_.Push(m);
+        }
+    }
+
+    void SpawnBanya3DParticle(const Vector3& pos, const Vector3& vel, float ttl, float sz, int kind) {
+        if (banya3DFxPool_.Empty()) return;
+        Banya3DFxMote& m = banya3DFxPool_[banya3DFxCursor_];
+        banya3DFxCursor_ = (banya3DFxCursor_ + 1) % (int)banya3DFxPool_.Size();
+
+        m.pos_ = pos;
+        m.vel_ = vel;
+        m.life_ = 0.0f;
+        m.ttl_ = Max(0.2f, ttl);
+        m.baseScale_ = sz;
+        m.spin_ = (float)((rand() % 160) - 80);
+        m.kind_ = kind;
+        m.active_ = true;
+
+        if (m.node_) {
+            m.node_->SetPosition(pos);
+            m.node_->SetScale(Vector3::ONE * sz);
+            m.node_->SetEnabled(true);
+        }
     }
 
     void CreateBanyaPanel() {
@@ -10265,207 +10844,44 @@ private:
         banyaPanel_->SetSize(sw, sh);
         banyaPanel_->SetPriority(700);
 
-        // Тёплый хвойно-древесный фон предбанника
-        BorderImage* outerBg = banyaPanel_->CreateChild<BorderImage>();
-        outerBg->SetSize(sw, sh);
-        outerBg->SetColor(Color(0.09f, 0.06f, 0.04f, 0.97f));
+        // Прозрачный контейнер поверх реальной 3D PBR сцены парной
+        banyaSceneBox_ = banyaPanel_->CreateChild<UIElement>("BanyaSceneOverlay");
+        banyaSceneBox_->SetSize(sw, sh);
 
-        // Верхняя плашка интеграции CHIKENGUN 2.5
+        // Тонкие полноэкранные эффекты опасности/концовок (alpha=0 в норме)
+        banyaColdWash_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaColdWash_->SetSize(sw, sh);
+        banyaColdWash_->SetColor(Color(0.55f, 0.82f, 0.98f, 0.0f));
+
+        banyaHeatWash_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaHeatWash_->SetSize(sw, sh);
+        banyaHeatWash_->SetColor(Color(1.0f, 0.24f, 0.05f, 0.0f));
+
+        banyaAirWash_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaAirWash_->SetSize(sw, sh);
+        banyaAirWash_->SetColor(Color(0.03f, 0.06f, 0.03f, 0.0f));
+
+        banyaEndTint_ = banyaSceneBox_->CreateChild<BorderImage>();
+        banyaEndTint_->SetSize(sw, sh);
+        banyaEndTint_->SetColor(Color(0.0f, 0.0f, 0.0f, 0.0f));
+
+        // Верхняя компактная плашка CHIKENGUN 2.5
         BorderImage* topStrip = banyaPanel_->CreateChild<BorderImage>();
         topStrip->SetPosition(0, 0);
-        topStrip->SetSize(sw, S(40));
-        topStrip->SetColor(Color(0.14f, 0.08f, 0.04f, 0.95f));
+        topStrip->SetSize(sw, S(36));
+        topStrip->SetColor(Color(0.08f, 0.04f, 0.02f, 0.78f));
 
         banyaBadgeText_ = topStrip->CreateChild<Text>();
         banyaBadgeText_->SetFont(font_, SF(14));
-        banyaBadgeText_->SetPosition(S(18), S(10));
+        banyaBadgeText_->SetPosition(S(18), S(8));
         banyaBadgeText_->SetColor(Color(1.0f, 0.86f, 0.62f, 1.0f));
         StyleCrispText(banyaBadgeText_);
 
-        // Сцена парной (пропорции 1000x600 по центру экрана)
-        int scW = Min(sw - S(40), S(1120));
-        int scH = Min(sh - S(150), (int)(scW * 0.60f));
-        int scX = (sw - scW) / 2;
-        int scY = S(48);
-
-        banyaSceneBox_ = banyaPanel_->CreateChild<UIElement>("BanyaScene");
-        banyaSceneBox_->SetPosition(scX, scY);
-        banyaSceneBox_->SetSize(scW, scH);
-        banyaSceneBox_->SetClipChildren(true);
-
-        // Бревенчатая стена (с 4K PBR текстурой сруба, если загружена)
-        ResourceCache* cache = GetSubsystem<ResourceCache>();
-        Texture2D* banyaWallTex = cache ? cache->GetResource<Texture2D>("Textures/BanyaLogDiffuse.png") : nullptr;
-        Texture2D* banyaRoosterTex = cache ? cache->GetResource<Texture2D>("Textures/BanyaRoosterDiffuse.png") : nullptr;
-        BorderImage* wall = banyaSceneBox_->CreateChild<BorderImage>();
-        wall->SetSize(scW, scH);
-        if (banyaWallTex) {
-            wall->SetTexture(banyaWallTex);
-            wall->SetFullImageRect();
-            wall->SetColor(Color(0.86f, 0.78f, 0.70f, 1.0f));
-        } else {
-            wall->SetColor(Color(0.36f, 0.22f, 0.12f, 1.0f));
-            for (int i = 0; i < 12; ++i) {
-                BorderImage* plank = banyaSceneBox_->CreateChild<BorderImage>();
-                plank->SetPosition((scW * i) / 12, 0);
-                plank->SetSize(Max(2, S(2)), scH);
-                plank->SetColor(Color(0.16f, 0.09f, 0.04f, 0.52f));
-            }
-        }
-        // Потолочная балка и пол
-        BorderImage* ceil = banyaSceneBox_->CreateChild<BorderImage>();
-        ceil->SetPosition(0, 0); ceil->SetSize(scW, (int)(scH * 0.11f));
-        ceil->SetColor(Color(0.22f, 0.13f, 0.07f, 1.0f));
-
-        BorderImage* floorPlank = banyaSceneBox_->CreateChild<BorderImage>();
-        floorPlank->SetPosition(0, (int)(scH * 0.81f));
-        floorPlank->SetSize(scW, scH - (int)(scH * 0.81f));
-        floorPlank->SetColor(Color(0.27f, 0.16f, 0.09f, 1.0f));
-
-        // Заснеженное окно справа
-        BorderImage* winFrame = banyaSceneBox_->CreateChild<BorderImage>();
-        winFrame->SetPosition((int)(scW * 0.76f), (int)(scH * 0.16f));
-        winFrame->SetSize((int)(scW * 0.19f), (int)(scH * 0.30f));
-        winFrame->SetColor(Color(0.18f, 0.10f, 0.05f, 1.0f));
-
-        BorderImage* winGlass = winFrame->CreateChild<BorderImage>();
-        winGlass->SetPosition(S(6), S(6));
-        winGlass->SetSize(winFrame->GetWidth() - S(12), winFrame->GetHeight() - S(12));
-        winGlass->SetColor(Color(0.72f, 0.86f, 0.94f, 1.0f));
-        winGlass->SetClipChildren(true);
-        banyaSnowMotes_.Clear();
-        for (int sf = 0; sf < 8; ++sf) {
-            BorderImage* mote = winGlass->CreateChild<BorderImage>();
-            int sz = Max(2, S(3 + (sf % 3)));
-            mote->SetSize(sz, sz);
-            mote->SetColor(Color(0.96f, 0.99f, 1.0f, 0.82f));
-            mote->SetPosition((sf * winGlass->GetWidth()) / 8, (sf * 29) % Max(16, winGlass->GetHeight()));
-            banyaSnowMotes_.Push(SharedPtr<BorderImage>(mote));
-        }
-
-        // Настенный градусник пара между окном и печью
-        BorderImage* thermoFrame = banyaSceneBox_->CreateChild<BorderImage>();
-        thermoFrame->SetPosition((int)(scW * 0.705f), (int)(scH * 0.16f));
-        thermoFrame->SetSize(S(18), (int)(scH * 0.24f));
-        thermoFrame->SetColor(Color(0.24f, 0.14f, 0.07f, 0.95f));
-        BorderImage* thermoTrack = thermoFrame->CreateChild<BorderImage>();
-        thermoTrack->SetPosition(S(5), S(6));
-        thermoTrack->SetSize(S(8), thermoFrame->GetHeight() - S(12));
-        thermoTrack->SetColor(Color(0.09f, 0.06f, 0.04f, 0.95f));
-        banyaThermoFill_ = thermoTrack->CreateChild<BorderImage>();
-        banyaThermoFill_->SetSize(S(8), S(20));
-        banyaThermoFill_->SetColor(Color(0.95f, 0.35f, 0.16f, 1.0f));
-
-        // Каменная печь слева + труба + топка + камни
-        BorderImage* pipe = banyaSceneBox_->CreateChild<BorderImage>();
-        pipe->SetPosition((int)(scW * 0.15f), (int)(scH * 0.11f));
-        pipe->SetSize((int)(scW * 0.08f), (int)(scH * 0.34f));
-        pipe->SetColor(Color(0.36f, 0.34f, 0.31f, 1.0f));
-
-        BorderImage* stove = banyaSceneBox_->CreateChild<BorderImage>();
-        stove->SetPosition((int)(scW * 0.06f), (int)(scH * 0.44f));
-        stove->SetSize((int)(scW * 0.28f), (int)(scH * 0.42f));
-        stove->SetColor(Color(0.29f, 0.25f, 0.22f, 1.0f));
-
-        banyaStoveFire_ = stove->CreateChild<BorderImage>();
-        banyaStoveFire_->SetPosition((int)(stove->GetWidth() * 0.30f), (int)(stove->GetHeight() * 0.56f));
-        banyaStoveFire_->SetSize((int)(stove->GetWidth() * 0.40f), (int)(stove->GetHeight() * 0.38f));
-        banyaStoveFire_->SetColor(Color(1.0f, 0.58f, 0.16f, 0.95f));
-
-        banyaStonesGlow_ = banyaSceneBox_->CreateChild<BorderImage>();
-        banyaStonesGlow_->SetPosition((int)(scW * 0.09f), (int)(scH * 0.40f));
-        banyaStonesGlow_->SetSize((int)(scW * 0.22f), (int)(scH * 0.06f));
-        banyaStonesGlow_->SetColor(Color(0.45f, 0.41f, 0.38f, 1.0f));
-
-        // Двухъярусный деревянный полок + шайка с водой
-        BorderImage* bench1 = banyaSceneBox_->CreateChild<BorderImage>();
-        bench1->SetPosition((int)(scW * 0.42f), (int)(scH * 0.54f));
-        bench1->SetSize((int)(scW * 0.55f), (int)(scH * 0.06f));
-        bench1->SetColor(Color(0.76f, 0.56f, 0.35f, 1.0f));
-
-        BorderImage* bench2 = banyaSceneBox_->CreateChild<BorderImage>();
-        bench2->SetPosition((int)(scW * 0.47f), (int)(scH * 0.71f));
-        bench2->SetSize((int)(scW * 0.46f), (int)(scH * 0.05f));
-        bench2->SetColor(Color(0.68f, 0.48f, 0.29f, 1.0f));
-
-        BorderImage* bucket = banyaSceneBox_->CreateChild<BorderImage>();
-        bucket->SetPosition((int)(scW * 0.74f), (int)(scH * 0.78f));
-        bucket->SetSize((int)(scW * 0.10f), (int)(scH * 0.13f));
-        bucket->SetColor(Color(0.54f, 0.35f, 0.19f, 1.0f));
-        BorderImage* bucketWater = bucket->CreateChild<BorderImage>();
-        bucketWater->SetPosition(S(4), S(3));
-        bucketWater->SetSize(bucket->GetWidth() - S(8), S(8));
-        bucketWater->SetColor(Color(0.32f, 0.62f, 0.72f, 0.95f));
-
-        // Берёзовый веник на гвоздике (анимируется к кочету при [2])
-        banyaVenikVis_ = banyaSceneBox_->CreateChild<BorderImage>();
-        banyaVenikVis_->SetPosition((int)(scW * 0.41f), (int)(scH * 0.31f));
-        banyaVenikVis_->SetSize((int)(scW * 0.05f), (int)(scH * 0.14f));
-        banyaVenikVis_->SetColor(Color(0.38f, 0.56f, 0.26f, 1.0f));
-
-        // Кочет в полотенце на полке (с 4K PBR оперением, если текстура загружена)
-        banyaRoosterBody_ = banyaSceneBox_->CreateChild<BorderImage>();
-        banyaRoosterBody_->SetPosition((int)(scW * 0.61f), (int)(scH * 0.36f));
-        banyaRoosterBody_->SetSize((int)(scW * 0.11f), (int)(scH * 0.18f));
-        if (banyaRoosterTex) {
-            banyaRoosterBody_->SetTexture(banyaRoosterTex);
-            banyaRoosterBody_->SetFullImageRect();
-        }
-        banyaRoosterBody_->SetColor(Color(0.96f, 0.91f, 0.82f, 1.0f));
-
-        BorderImage* towel = banyaRoosterBody_->CreateChild<BorderImage>();
-        towel->SetPosition(0, (int)(banyaRoosterBody_->GetHeight() * 0.54f));
-        towel->SetSize(banyaRoosterBody_->GetWidth(), (int)(banyaRoosterBody_->GetHeight() * 0.42f));
-        towel->SetColor(Color(0.93f, 0.89f, 0.82f, 1.0f));
-        BorderImage* towelStripe = towel->CreateChild<BorderImage>();
-        towelStripe->SetPosition(0, towel->GetHeight() / 2);
-        towelStripe->SetSize(towel->GetWidth(), Max(2, S(4)));
-        towelStripe->SetColor(Color(0.76f, 0.29f, 0.21f, 0.9f));
-
-        banyaRoosterComb_ = banyaRoosterBody_->CreateChild<BorderImage>();
-        banyaRoosterComb_->SetPosition(S(8), -S(14));
-        banyaRoosterComb_->SetSize((int)(banyaRoosterBody_->GetWidth() * 0.42f), S(15));
-        banyaRoosterComb_->SetColor(Color(0.88f, 0.26f, 0.18f, 1.0f));
-
-        banyaRoosterCrown_ = banyaRoosterBody_->CreateChild<BorderImage>();
-        banyaRoosterCrown_->SetPosition(S(6), -S(24));
-        banyaRoosterCrown_->SetSize((int)(banyaRoosterBody_->GetWidth() * 0.50f), S(12));
-        banyaRoosterCrown_->SetColor(Color(1.0f, 0.84f, 0.26f, 1.0f));
-        banyaRoosterCrown_->SetVisible(false);
-
-        BorderImage* beak = banyaRoosterBody_->CreateChild<BorderImage>();
-        beak->SetPosition(-S(14), S(14));
-        beak->SetSize(S(15), S(10));
-        beak->SetColor(Color(0.98f, 0.72f, 0.22f, 1.0f));
-
-        banyaRoosterEyesText_ = banyaRoosterBody_->CreateChild<Text>();
-        banyaRoosterEyesText_->SetFont(font_, SF(15));
-        banyaRoosterEyesText_->SetPosition(S(10), S(8));
-        banyaRoosterEyesText_->SetColor(Color(0.14f, 0.08f, 0.04f, 1.0f));
-        banyaRoosterEyesText_->SetText("•");
-
-        // Атмосферные фильтры опасности / концовок
-        banyaColdWash_ = banyaSceneBox_->CreateChild<BorderImage>();
-        banyaColdWash_->SetSize(scW, scH);
-        banyaColdWash_->SetColor(Color(0.66f, 0.85f, 0.94f, 0.0f));
-
-        banyaHeatWash_ = banyaSceneBox_->CreateChild<BorderImage>();
-        banyaHeatWash_->SetSize(scW, scH);
-        banyaHeatWash_->SetColor(Color(1.0f, 0.28f, 0.08f, 0.0f));
-
-        banyaAirWash_ = banyaSceneBox_->CreateChild<BorderImage>();
-        banyaAirWash_->SetSize(scW, scH);
-        banyaAirWash_->SetColor(Color(0.04f, 0.08f, 0.04f, 0.0f));
-
-        banyaEndTint_ = banyaSceneBox_->CreateChild<BorderImage>();
-        banyaEndTint_->SetSize(scW, scH);
-        banyaEndTint_->SetColor(Color(0.0f, 0.0f, 0.0f, 0.0f));
-
-        // HUD термометра и 4 шкал слева сверху
+        // Полупрозрачная карточка термометра и 4 шкал слева сверху
         BorderImage* hudCard = banyaSceneBox_->CreateChild<BorderImage>();
-        hudCard->SetPosition(S(16), S(16));
-        hudCard->SetSize(S(216), S(178));
-        hudCard->SetColor(Color(0.14f, 0.08f, 0.05f, 0.84f));
+        hudCard->SetPosition(S(18), S(50));
+        hudCard->SetSize(S(230), S(182));
+        hudCard->SetColor(Color(0.09f, 0.05f, 0.03f, 0.74f));
 
         banyaTempText_ = hudCard->CreateChild<Text>();
         banyaTempText_->SetFont(font_, SF(28));
@@ -10476,7 +10892,7 @@ private:
         banyaMoodText_ = hudCard->CreateChild<Text>();
         banyaMoodText_->SetFont(font_, SF(13));
         banyaMoodText_->SetPosition(S(14), S(46));
-        banyaMoodText_->SetColor(Color(0.96f, 0.90f, 0.80f, 0.90f));
+        banyaMoodText_->SetColor(Color(0.96f, 0.90f, 0.80f, 0.92f));
         StyleCrispText(banyaMoodText_);
 
         const char* barNames[4] = { "ПАР", "ПЕЧЬ", "ВОЗДУХ", "КОЧЕТ" };
@@ -10492,13 +10908,13 @@ private:
             lbl->SetFont(font_, SF(11));
             lbl->SetText(barNames[i]);
             lbl->SetPosition(S(14), S(74 + i * 24));
-            lbl->SetColor(Color(0.92f, 0.84f, 0.72f, 0.85f));
+            lbl->SetColor(Color(0.92f, 0.84f, 0.72f, 0.88f));
             StyleCrispText(lbl);
 
             BorderImage* trk = hudCard->CreateChild<BorderImage>();
-            trk->SetPosition(S(74), S(79 + i * 24));
-            trk->SetSize(S(126), S(8));
-            trk->SetColor(Color(1.0f, 1.0f, 1.0f, 0.15f));
+            trk->SetPosition(S(78), S(79 + i * 24));
+            trk->SetSize(S(134), S(8));
+            trk->SetColor(Color(1.0f, 1.0f, 1.0f, 0.16f));
 
             BorderImage* fill = trk->CreateChild<BorderImage>();
             fill->SetSize(S(60), S(8));
@@ -10506,55 +10922,55 @@ private:
             *(barTargets[i]) = SharedPtr<BorderImage>(fill);
         }
 
-        // Таймер 3:00 и счётчик загадок по центру сверху
+        // Таймер 3:00 по центру сверху
         BorderImage* clockCard = banyaSceneBox_->CreateChild<BorderImage>();
-        clockCard->SetPosition(scW / 2 - S(95), S(16));
-        clockCard->SetSize(S(190), S(54));
-        clockCard->SetColor(Color(0.14f, 0.08f, 0.05f, 0.84f));
+        clockCard->SetPosition(sw / 2 - S(105), S(48));
+        clockCard->SetSize(S(210), S(54));
+        clockCard->SetColor(Color(0.09f, 0.05f, 0.03f, 0.74f));
 
         banyaClockText_ = clockCard->CreateChild<Text>();
         banyaClockText_->SetFont(font_, SF(16));
         banyaClockText_->SetTextAlignment(HA_CENTER);
         banyaClockText_->SetPosition(S(8), S(7));
-        banyaClockText_->SetWidth(S(174));
+        banyaClockText_->SetWidth(S(194));
         banyaClockText_->SetColor(Color(1.0f, 0.91f, 0.78f, 1.0f));
         StyleCrispText(banyaClockText_);
 
         BorderImage* timeTrk = clockCard->CreateChild<BorderImage>();
         timeTrk->SetPosition(S(18), S(36));
-        timeTrk->SetSize(S(154), S(7));
+        timeTrk->SetSize(S(174), S(7));
         timeTrk->SetColor(Color(1.0f, 1.0f, 1.0f, 0.16f));
         banyaBarTime_ = timeTrk->CreateChild<BorderImage>();
-        banyaBarTime_->SetSize(S(154), S(7));
+        banyaBarTime_->SetSize(S(174), S(7));
         banyaBarTime_->SetColor(Color(1.0f, 0.78f, 0.42f, 1.0f));
 
         // Кнопка Статистика [6] справа сверху
         banyaStatsBtnBg_ = banyaSceneBox_->CreateChild<BorderImage>();
-        banyaStatsBtnBg_->SetPosition(scW - S(168), S(16));
-        banyaStatsBtnBg_->SetSize(S(152), S(38));
-        banyaStatsBtnBg_->SetColor(Color(0.22f, 0.13f, 0.07f, 0.90f));
+        banyaStatsBtnBg_->SetPosition(sw - S(178), S(50));
+        banyaStatsBtnBg_->SetSize(S(160), S(38));
+        banyaStatsBtnBg_->SetColor(Color(0.16f, 0.09f, 0.04f, 0.82f));
         Text* stLbl = banyaStatsBtnBg_->CreateChild<Text>();
         stLbl->SetFont(font_, SF(13));
         stLbl->SetText("[6] СТАТИСТИКА");
         stLbl->SetTextAlignment(HA_CENTER);
         stLbl->SetPosition(S(6), S(9));
-        stLbl->SetWidth(S(140));
+        stLbl->SetWidth(S(148));
         stLbl->SetColor(Color(1.0f, 0.89f, 0.74f, 1.0f));
         StyleCrispText(stLbl);
 
-        // Живая карточка загадки смотрящего (игра НЕ останавливается!)
-        int rW = Min(scW - S(32), S(650));
+        // Живая карточка загадки смотрящего
+        int rW = Min(sw - S(40), S(680));
         banyaRiddleBox_ = banyaSceneBox_->CreateChild<BorderImage>();
-        banyaRiddleBox_->SetPosition((scW - rW) / 2, scH - S(238));
+        banyaRiddleBox_->SetPosition((sw - rW) / 2, sh - S(308));
         banyaRiddleBox_->SetSize(rW, S(196));
-        static_cast<BorderImage*>(banyaRiddleBox_.Get())->SetColor(Color(0.18f, 0.10f, 0.05f, 0.96f));
+        static_cast<BorderImage*>(banyaRiddleBox_.Get())->SetColor(Color(0.12f, 0.06f, 0.03f, 0.90f));
         banyaRiddleBox_->SetVisible(false);
 
         Text* rKick = banyaRiddleBox_->CreateChild<Text>();
         rKick->SetFont(font_, SF(12));
         rKick->SetText("ЗАГАДКА СМОТРЯЩЕГО (ответь мышью или Q / W / E / R)");
         rKick->SetPosition(S(14), S(8));
-        rKick->SetColor(Color(0.96f, 0.82f, 0.62f, 0.85f));
+        rKick->SetColor(Color(0.96f, 0.82f, 0.62f, 0.88f));
         StyleCrispText(rKick);
 
         banyaRiddleTime_ = banyaRiddleBox_->CreateChild<Text>();
@@ -10577,7 +10993,7 @@ private:
             BorderImage* ob = banyaRiddleBox_->CreateChild<BorderImage>();
             ob->SetPosition(S(14) + (i % 2) * (optW + S(8)), S(76) + (i / 2) * S(38));
             ob->SetSize(optW, S(33));
-            ob->SetColor(Color(0.30f, 0.19f, 0.10f, 0.90f));
+            ob->SetColor(Color(0.28f, 0.17f, 0.09f, 0.92f));
             banyaRiddleOptBg_[i] = SharedPtr<BorderImage>(ob);
 
             Text* ot = ob->CreateChild<Text>();
@@ -10605,13 +11021,13 @@ private:
         banyaRiddleFb_->SetColor(Color(0.85f, 0.95f, 0.78f, 1.0f));
         StyleCrispText(banyaRiddleFb_);
 
-        // Строка реплик и 5 кнопок действий под сценой
+        // Строка реплик и 5 кнопок действий в нижней полосе
         banyaCaptionText_ = banyaSceneBox_->CreateChild<Text>();
-        banyaCaptionText_->SetFont(font_, SF(15));
+        banyaCaptionText_->SetFont(font_, SF(16));
         banyaCaptionText_->SetTextAlignment(HA_CENTER);
-        banyaCaptionText_->SetPosition(S(40), scH - S(34));
-        banyaCaptionText_->SetWidth(scW - S(80));
-        banyaCaptionText_->SetColor(Color(1.0f, 0.94f, 0.84f, 0.96f));
+        banyaCaptionText_->SetPosition(S(40), sh - S(104));
+        banyaCaptionText_->SetWidth(sw - S(80));
+        banyaCaptionText_->SetColor(Color(1.0f, 0.94f, 0.84f, 0.98f));
         StyleCrispText(banyaCaptionText_, true);
 
         const char* actLabels[5] = {
@@ -10624,19 +11040,19 @@ private:
         int btnW = S(186), btnGap = S(10);
         int totalBtnsW = btnW * 5 + btnGap * 4;
         int btnStartX = (sw - totalBtnsW) / 2;
-        int btnY = scY + scH + S(12);
+        int btnY = sh - S(74);
         for (int i = 0; i < 5; ++i) {
             BorderImage* b = banyaPanel_->CreateChild<BorderImage>();
             b->SetPosition(btnStartX + i * (btnW + btnGap), btnY);
-            b->SetSize(btnW, S(42));
-            b->SetColor(Color(0.27f, 0.16f, 0.09f, 0.95f));
+            b->SetSize(btnW, S(40));
+            b->SetColor(Color(0.20f, 0.11f, 0.05f, 0.86f));
             banyaActBtnBg_[i] = SharedPtr<BorderImage>(b);
 
             Text* bt = b->CreateChild<Text>();
             bt->SetFont(font_, SF(14));
             bt->SetText(actLabels[i]);
             bt->SetTextAlignment(HA_CENTER);
-            bt->SetPosition(S(6), S(11));
+            bt->SetPosition(S(6), S(10));
             bt->SetWidth(btnW - S(12));
             bt->SetColor(Color(1.0f, 0.91f, 0.78f, 1.0f));
             StyleCrispText(bt);
@@ -10645,9 +11061,9 @@ private:
         Text* foot = banyaPanel_->CreateChild<Text>();
         foot->SetFont(font_, SF(12));
         foot->SetTextAlignment(HA_CENTER);
-        foot->SetPosition(S(20), btnY + S(50));
+        foot->SetPosition(S(20), sh - S(26));
         foot->SetWidth(sw - S(40));
-        foot->SetColor(Color(0.84f, 0.76f, 0.64f, 0.72f));
+        foot->SetColor(Color(0.92f, 0.84f, 0.72f, 0.82f));
         foot->SetText("Цель: 3 минуты и минимум 3 загадки смотрящего (6 — на Ковш Смотрящего). [1..5] действия, [Q/W/E/R] ответы, [6] статистика, [ESC] выход.");
         StyleCrispText(foot);
 
@@ -10656,7 +11072,7 @@ private:
         int eW = S(580), eH = S(360);
         banyaEndBox_->SetPosition((sw - eW) / 2, (sh - eH) / 2);
         banyaEndBox_->SetSize(eW, eH);
-        static_cast<BorderImage*>(banyaEndBox_.Get())->SetColor(Color(0.18f, 0.11f, 0.06f, 0.98f));
+        static_cast<BorderImage*>(banyaEndBox_.Get())->SetColor(Color(0.14f, 0.08f, 0.04f, 0.96f));
         banyaEndBox_->SetVisible(false);
 
         banyaEndTitle_ = banyaEndBox_->CreateChild<Text>();
@@ -10710,12 +11126,12 @@ private:
         banyaEndBtnStats_   = mkEndBtn(S(206), "[6] Статистика",   Color(0.24f, 0.15f, 0.08f, 0.95f));
         banyaEndBtnBack_    = mkEndBtn(S(386), "[ESC] В Чикенган", Color(0.14f, 0.34f, 0.24f, 0.98f));
 
-        // Двухколоночная панель статистики [6] (ставит симуляцию и таймер загадки на паузу!)
+        // Двухколоночная панель статистики [6]
         banyaStatsBox_ = banyaPanel_->CreateChild<BorderImage>();
         int sW = S(640), sH = S(420);
         banyaStatsBox_->SetPosition((sw - sW) / 2, (sh - sH) / 2);
         banyaStatsBox_->SetSize(sW, sH);
-        static_cast<BorderImage*>(banyaStatsBox_.Get())->SetColor(Color(0.16f, 0.10f, 0.05f, 0.98f));
+        static_cast<BorderImage*>(banyaStatsBox_.Get())->SetColor(Color(0.14f, 0.08f, 0.04f, 0.96f));
         banyaStatsBox_->SetVisible(false);
 
         Text* stHead = banyaStatsBox_->CreateChild<Text>();
@@ -10760,17 +11176,21 @@ private:
         banyaSim_.Seed((uint32_t)(timeAcc_ * 1000.0f) ^ (uint32_t)rand() ^ 0xC0C4E7u);
         banyaSim_.Reset();
         banyaVenikAnim_ = 0.0f;
+        banyaLadleAnim_ = 0.0f;
+        banyaDoorTimer_ = 0.0f;
+        for (unsigned i = 0; i < (unsigned)banya3DFxPool_.Size(); ++i) {
+            banya3DFxPool_[i].active_ = false;
+            if (banya3DFxPool_[i].node_) banya3DFxPool_[i].node_->SetEnabled(false);
+        }
 
+        CreateBanyaScene3D();
         if (!banyaPanel_) CreateBanyaPanel();
         if (banyaPanel_) banyaPanel_->SetVisible(true);
         if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
         SetGameHudVisible(false);
 
-        auto* input = GetSubsystem<Input>();
-        if (input) {
-            input->SetMouseVisible(true);
-            isMouseVisible_ = true;
-        }
+        SyncMouseLock();
+        SyncActiveViewport();
         SetBanyaCaption("Банька натоплена. Три минуты, три загадки смотрящего — и выйдешь с зачётом.", 6.0f);
         SyncBanyaVisuals(0.0f);
     }
@@ -10781,15 +11201,12 @@ private:
         if (banyaPanel_) banyaPanel_->SetVisible(false);
         if (banyaStatsBox_) banyaStatsBox_->SetVisible(false);
 
-        auto* input = GetSubsystem<Input>();
         if (banyaFromMenu_) {
             ShowMainMenu(true);
         } else {
             SetGameHudVisible(!photoMode_);
-            if (input) {
-                input->SetMouseVisible(false);
-                isMouseVisible_ = false;
-            }
+            SyncMouseLock();
+            SyncActiveViewport();
             UpdateHealthDisplay();
             UpdateScoreDisplay();
             UpdateDashAndBuffHUD();
@@ -10891,9 +11308,12 @@ private:
 
         if (actIdx == 0) {
             if (banyaSim_.ActSteam()) {
+                banyaLadleAnim_ = 1.2f;
                 PlayBanyaSound(banyaSteamSound_ ? banyaSteamSound_ : barrelBoomSound_, 0.85f);
-                for (int i = 0; i < 16; ++i)
-                    SpawnBanyaParticle(0.18f + (rand() % 100) * 0.0012f, 0.42f, ((rand() % 100) - 50) * 0.001f, -0.14f - (rand() % 100) * 0.001f, 1.8f, 12.0f, 0);
+                for (int i = 0; i < 14; ++i)
+                    SpawnBanya3DParticle(Vector3(-1.70f + ((rand() % 100) - 50) * 0.005f, 1.38f, 0.65f + ((rand() % 100) - 50) * 0.004f),
+                                         Vector3(((rand() % 100) - 50) * 0.008f, 0.85f + (rand() % 60) * 0.01f, ((rand() % 100) - 50) * 0.006f),
+                                         1.9f, 0.34f, 0);
                 if (banyaSim_.phase == Banya::PHASE_PLAY)
                     SetBanyaCaption("Пшшш… пар пошёл под потолок, камни довольны.");
             }
@@ -10901,26 +11321,34 @@ private:
             if (banyaSim_.ActVenik()) {
                 banyaVenikAnim_ = 1.6f;
                 PlayBanyaSound(banyaVenikSound_ ? banyaVenikSound_ : wingSlapSound_, 0.88f);
-                for (int i = 0; i < 14; ++i)
-                    SpawnBanyaParticle(0.62f + (rand() % 100) * 0.001f, 0.38f, ((rand() % 100) - 50) * 0.002f, 0.10f + (rand() % 100) * 0.001f, 1.6f, 6.0f, 3);
+                for (int i = 0; i < 10; ++i)
+                    SpawnBanya3DParticle(Vector3(0.62f + ((rand() % 100) - 50) * 0.006f, 1.85f, 1.18f + ((rand() % 100) - 50) * 0.004f),
+                                         Vector3(((rand() % 100) - 50) * 0.012f, -0.45f - (rand() % 40) * 0.01f, ((rand() % 100) - 50) * 0.01f),
+                                         1.5f, 0.11f, 3);
                 if (banyaSim_.phase == Banya::PHASE_PLAY)
                     SetBanyaCaption("Берёзовый дух… косточки размякли, кочет тает.");
             }
         } else if (actIdx == 2) {
             bool wasCold = false;
             if (banyaSim_.ActWater(&wasCold)) {
+                banyaLadleAnim_ = 1.2f;
                 PlayBanyaSound(banyaSplashSound_ ? banyaSplashSound_ : armorPickupSound_, 0.85f);
-                for (int i = 0; i < 16; ++i)
-                    SpawnBanyaParticle(0.76f + (rand() % 100) * 0.0008f, 0.76f, ((rand() % 100) - 65) * 0.002f, -0.18f + (rand() % 100) * 0.002f, 1.1f, 5.0f, 2);
+                for (int i = 0; i < 14; ++i)
+                    SpawnBanya3DParticle(Vector3(0.45f + ((rand() % 100) - 50) * 0.005f, 1.75f, 1.10f),
+                                         Vector3(((rand() % 100) - 40) * 0.014f, 0.65f + (rand() % 60) * 0.01f, ((rand() % 100) - 50) * 0.01f),
+                                         1.05f, 0.07f, 2);
                 if (banyaSim_.phase == Banya::PHASE_PLAY)
                     SetBanyaCaption(wasCold ? "Ледяная вода по остывшему кочету — брр, квохчет от холода!" : "Ух! Прохладная водица из шайки — голова ясная.");
             }
         } else if (actIdx == 3) {
             bool wasCold = false;
             if (banyaSim_.ActVent(&wasCold)) {
+                banyaDoorTimer_ = 2.6f;
                 PlayBanyaSound(banyaDoorSound_ ? banyaDoorSound_ : dashSound_, 0.80f);
-                for (int i = 0; i < 20; ++i)
-                    SpawnBanyaParticle(0.78f + (rand() % 100) * 0.0014f, 0.22f + (rand() % 100) * 0.0018f, -0.10f - (rand() % 100) * 0.001f, 0.08f, 1.9f, 4.5f, 4);
+                for (int i = 0; i < 16; ++i)
+                    SpawnBanya3DParticle(Vector3(2.45f, 1.2f + (rand() % 100) * 0.01f, -1.65f + (rand() % 80) * 0.01f),
+                                         Vector3(-1.35f - (rand() % 50) * 0.01f, -0.18f, 0.45f),
+                                         1.8f, 0.06f, 4);
                 if (banyaSim_.phase == Banya::PHASE_PLAY)
                     SetBanyaCaption(wasCold ? "И без того прохладно, а ты дверь настежь — кочет дрожит!" : "Дверь скрипнула, морозный воздух — дышать легче.");
             }
@@ -10933,7 +11361,9 @@ private:
             bool ok = (optIdx == banyaSim_.riddle.correctIdx);
             PlayBanyaSound(ok ? comboSound_ : emptyClickSound_, 0.85f);
             for (int i = 0; i < 12; ++i)
-                SpawnBanyaParticle(0.65f, 0.36f, ((rand() % 100) - 50) * 0.0025f, -0.12f, 1.2f, 5.0f, ok ? 6 : 1);
+                SpawnBanya3DParticle(Vector3(0.62f, 1.80f, 1.25f),
+                                     Vector3(((rand() % 100) - 50) * 0.018f, 0.7f + (rand() % 60) * 0.01f, ((rand() % 100) - 50) * 0.015f),
+                                     1.15f, 0.08f, ok ? 6 : 1);
         }
     }
 
@@ -11022,128 +11452,223 @@ private:
 
     void SyncBanyaVisuals(float dt) {
         if (!banyaPanel_ || !banyaSceneBox_) return;
-        int scW = banyaSceneBox_->GetWidth(), scH = banyaSceneBox_->GetHeight();
 
+        // 1. Кэшированное обновление HUD (без перерисовки шрифтовых глифов, пока значения не изменились!)
         int wallet = banyaFromMenu_ ? (100 + banyaBonusCredits_) : credits_;
         String buffStr = (banyaBuffTier_ >= 2) ? "◆ КОВШ СМОТРЯЩЕГО (+50HP/+15%УР)"
                        : (banyaBuffTier_ == 1) ? "• БАННЫЙ ЗАКАЛ (+25HP/+25БР)"
                                                : "нет баффа";
-        if (banyaBadgeText_) {
-            banyaBadgeText_->SetText("CHIKENGUN 2.5  •  КОШЕЛЁК: " + String(wallet) + "¤  •  БАФФ АРЕНЫ: " + buffStr +
-                                     "  •  ОТКРЫТО КОНЦОВОК: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + "/14");
+        String badgeStr = "CHIKENGUN 2.5  •  КОШЕЛЁК: " + String(wallet) + "¤  •  БАФФ АРЕНЫ: " + buffStr +
+                          "  •  ОТКРЫТО КОНЦОВОК: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + "/14";
+        if (banyaBadgeText_ && badgeStr != lastBanyaBadge_) {
+            lastBanyaBadge_ = badgeStr;
+            banyaBadgeText_->SetText(badgeStr);
         }
 
-        if (banyaTempText_) {
-            banyaTempText_->SetText(String((int)lroundf(banyaSim_.temp)) + " °C");
+        String tempStr = String((int)lroundf(banyaSim_.temp)) + " °C";
+        if (banyaTempText_ && tempStr != lastBanyaTemp_) {
+            lastBanyaTemp_ = tempStr;
+            banyaTempText_->SetText(tempStr);
             banyaTempText_->SetColor(banyaSim_.temp > 100.0f ? Color(1.0f, 0.52f, 0.36f, 1.0f) : Color(1.0f, 0.87f, 0.68f, 1.0f));
         }
-        if (banyaMoodText_)  banyaMoodText_->SetText(banyaSim_.CurrentMood());
-        if (banyaClockText_) banyaClockText_->SetText(FormatBanyaClock(banyaSim_.left) + "   |   ✓ " + String(banyaSim_.riddles) + "/3");
+        String moodStr = banyaSim_.CurrentMood();
+        if (banyaMoodText_ && moodStr != lastBanyaMood_) {
+            lastBanyaMood_ = moodStr;
+            banyaMoodText_->SetText(moodStr);
+        }
+        String clockStr = FormatBanyaClock(banyaSim_.left) + "   |   ✓ " + String(banyaSim_.riddles) + "/3";
+        if (banyaClockText_ && clockStr != lastBanyaClock_) {
+            lastBanyaClock_ = clockStr;
+            banyaClockText_->SetText(clockStr);
+        }
 
-        auto setBar = [&](BorderImage* b, float ratio, int fullW) {
-            if (b) b->SetSize(Clamp((int)(fullW * Clamp(ratio, 0.0f, 1.0f)), 0, fullW), b->GetHeight());
+        auto setBarCached = [&](BorderImage* b, int idx, float ratio, int fullW) {
+            if (!b) return;
+            int w = Clamp((int)(fullW * Clamp(ratio, 0.0f, 1.0f)), 0, fullW);
+            if (idx >= 0 && idx < 5) {
+                if (lastBanyaBarW_[idx] == w) return;
+                lastBanyaBarW_[idx] = w;
+            }
+            b->SetSize(w, b->GetHeight());
         };
-        setBar(banyaBarSteam_.Get(), banyaSim_.steam, S(126));
-        setBar(banyaBarFire_.Get(),  banyaSim_.fire / 100.0f, S(126));
-        setBar(banyaBarAir_.Get(),   banyaSim_.air  / 100.0f, S(126));
-        setBar(banyaBarLife_.Get(),  banyaSim_.life / 100.0f, S(126));
-        setBar(banyaBarTime_.Get(),  banyaSim_.left / Banya::DURATION, S(154));
+        setBarCached(banyaBarSteam_.Get(), 0, banyaSim_.steam, S(134));
+        setBarCached(banyaBarFire_.Get(),  1, banyaSim_.fire / 100.0f, S(134));
+        setBarCached(banyaBarAir_.Get(),   2, banyaSim_.air  / 100.0f, S(134));
+        setBarCached(banyaBarLife_.Get(),  3, banyaSim_.life / 100.0f, S(134));
+        setBarCached(banyaBarTime_.Get(),  4, banyaSim_.left / Banya::DURATION, S(174));
 
-        // Настенный термометр + падающие снежинки за окном
-        if (banyaThermoFill_ && banyaThermoFill_->GetParent()) {
-            int fullH = banyaThermoFill_->GetParent()->GetHeight();
-            float tr = Clamp((banyaSim_.temp - 40.0f) / 85.0f, 0.06f, 1.0f);
-            int fillH = Clamp((int)(fullH * tr), 2, fullH);
-            banyaThermoFill_->SetPosition(0, fullH - fillH);
-            banyaThermoFill_->SetSize(banyaThermoFill_->GetWidth(), fillH);
-            banyaThermoFill_->SetColor(banyaSim_.temp > 98.0f ? Color(1.0f, 0.25f, 0.15f, 1.0f)
-                                     : banyaSim_.temp < 62.0f ? Color(0.32f, 0.78f, 1.0f, 1.0f)
-                                                              : Color(0.98f, 0.62f, 0.20f, 1.0f));
-        }
-        for (unsigned i = 0; i < (unsigned)banyaSnowMotes_.Size(); ++i) {
-            BorderImage* m = banyaSnowMotes_[i].Get();
-            if (!m || !m->GetParent()) continue;
-            int gw = Max(16, m->GetParent()->GetWidth());
-            int gh = Max(16, m->GetParent()->GetHeight());
-            float fy = fmodf(timeAcc_ * (18.0f + (float)(i % 3) * 9.0f) + (float)i * 23.0f, (float)gh);
-            int fx = (int)(((float)i + 0.5f) * (float)gw / (float)banyaSnowMotes_.Size() + sinf(timeAcc_ * 1.4f + (float)i) * 5.0f);
-            m->SetPosition(Clamp(fx, 0, gw - m->GetWidth()), (int)fy);
-        }
+        // 2. Живая 3D-анимация парной, Кочета, каменки, ковша, веника и окна!
+        float pbr = (gfxQualityIdx_ >= 2) ? 6.5f : 1.15f;
+        if (banyaScene_) {
+            // Туман-пар в 3D-сцене в зависимости от влажности steam и воздуха
+            if (banyaZone_) {
+                float steamDen = Clamp(banyaSim_.steam, 0.0f, 1.0f);
+                float fogStart = 7.0f - steamDen * 5.2f;
+                float fogEnd   = 18.0f - steamDen * 11.5f;
+                banyaZone_->SetFogStart(fogStart);
+                banyaZone_->SetFogEnd(Max(fogStart + 1.5f, fogEnd));
+                banyaZone_->SetFogColor(Color(0.24f + 0.30f * steamDen, 0.18f + 0.30f * steamDen, 0.14f + 0.30f * steamDen));
+            }
+            // Живая камера (плавное дыхание + наезд при загадке Смотрящего)
+            if (banyaCamNode_) {
+                bool focusRooster = banyaSim_.riddle.active && banyaSim_.phase == Banya::PHASE_PLAY;
+                Vector3 camPos = focusRooster
+                    ? Vector3(0.32f + sinf(timeAcc_ * 0.7f) * 0.05f, 1.72f + sinf(timeAcc_ * 1.1f) * 0.02f, -2.65f)
+                    : Vector3(0.08f + sinf(timeAcc_ * 0.45f) * 0.08f, 1.80f + sinf(timeAcc_ * 0.8f) * 0.025f, -3.45f);
+                Vector3 lookAtPos = focusRooster ? Vector3(0.55f, 1.58f, 1.15f) : Vector3(0.05f, 1.38f, 1.05f);
+                banyaCamNode_->SetPosition(banyaCamNode_->GetPosition().Lerp(camPos, Clamp(dt * 4.5f, 0.05f, 1.0f)));
+                banyaCamNode_->LookAt(lookAtPos);
+            }
+            // Стрелка настенного термометра (-115°..+115° по циферблату)
+            if (banyaNeedle3D_) {
+                float tNorm = Clamp((banyaSim_.temp - 40.0f) / 85.0f, 0.0f, 1.0f);
+                float angle = 115.0f - tNorm * 230.0f;
+                banyaNeedle3D_->SetRotation(Quaternion(0.0f, 0.0f, angle));
+            }
+            // Мерцающий огонь печи-каменки + свечение камней габбро-диабаза
+            float fireNorm = Clamp(banyaSim_.fire / 100.0f, 0.05f, 1.0f);
+            float flicker = 0.85f + 0.15f * sinf(timeAcc_ * 13.7f) + 0.08f * cosf(timeAcc_ * 23.1f);
+            if (banyaFireLight_) {
+                banyaFireLight_->SetBrightness((0.6f + 2.2f * fireNorm) * flicker * pbr);
+            }
+            if (banyaEmberBedMat_) {
+                banyaEmberBedMat_->SetShaderParameter("MatDiffColor", Variant(Color(1.0f + 2.2f * fireNorm, 0.28f + 0.55f * fireNorm, 0.06f, 1.0f)));
+            }
+            if (banyaFlamesRoot3D_) {
+                float fsc = Clamp(0.25f + fireNorm * 1.15f * flicker, 0.15f, 1.5f);
+                banyaFlamesRoot3D_->SetScale(Vector3(0.85f + 0.25f * fireNorm, fsc, 0.85f + 0.25f * fireNorm));
+            }
+            float hot = Clamp((banyaSim_.temp - 80.0f) / 34.0f, 0.0f, 1.0f);
+            for (unsigned st = 0; st < (unsigned)banyaStoneMats_.Size(); ++st) {
+                if (banyaStoneMats_[st]) {
+                    float stGlow = hot * (0.45f + 0.55f * ((st % 3) * 0.35f + 0.2f));
+                    banyaStoneMats_[st]->SetShaderParameter("MatEmissiveColor", Variant(Color(stGlow * 1.15f, stGlow * 0.24f, 0.02f)));
+                }
+            }
+            // Медный ковш: взлетает при поддаче / окачивании
+            if (banyaLadle3D_) {
+                if (banyaLadleAnim_ > 0.0f) {
+                    float u = 1.0f - banyaLadleAnim_ / 1.2f;
+                    float arc = sinf(u * 3.14159f);
+                    banyaLadle3D_->SetPosition(Vector3(-0.35f - arc * 1.05f, 0.95f + arc * 0.62f, 0.20f + arc * 0.42f));
+                    banyaLadle3D_->SetRotation(Quaternion(0.0f, 0.0f, arc * 58.0f));
+                } else {
+                    banyaLadle3D_->SetPosition(Vector3(-0.35f, 0.95f, 0.20f));
+                    banyaLadle3D_->SetRotation(Quaternion::IDENTITY);
+                }
+            }
+            // Берёзовый веник: подлетает и парит Кочета при [2]
+            if (banyaVenik3D_) {
+                if (banyaVenikAnim_ > 0.0f) {
+                    float u = 1.0f - banyaVenikAnim_ / 1.6f;
+                    float arch = sinf(u * 3.14159f);
+                    float slap = sinf(u * 18.85f);
+                    banyaVenik3D_->SetPosition(Vector3(-0.38f + arch * 0.95f, 1.88f - arch * 0.28f + slap * 0.14f, 1.88f - arch * 0.72f));
+                    banyaVenik3D_->SetRotation(Quaternion(slap * 35.0f, arch * 25.0f, -slap * 22.0f));
+                } else {
+                    banyaVenik3D_->SetPosition(Vector3(-0.38f, 1.88f, 1.88f));
+                    banyaVenik3D_->SetRotation(Quaternion(0.0f, 0.0f, 18.0f));
+                }
+            }
+            // Дверь приоткрывается при проветривании [4]
+            if (banyaDoor3D_) {
+                float openAng = (banyaDoorTimer_ > 0.0f) ? Min(34.0f, banyaDoorTimer_ * 22.0f) : 0.0f;
+                banyaDoor3D_->SetRotation(Quaternion(0.0f, -openAng, 0.0f));
+                if (banyaWindowLight_) {
+                    banyaWindowLight_->SetBrightness((banyaDoorTimer_ > 0.0f ? 2.4f : 1.35f) * pbr);
+                }
+            }
+            // Снежинки за зимним окном
+            for (unsigned sf = 0; sf < (unsigned)banyaWindowSnow3D_.Size(); ++sf) {
+                Node* sn = banyaWindowSnow3D_[sf].Get();
+                if (!sn) continue;
+                float y = 2.48f - fmodf(timeAcc_ * (0.32f + (float)(sf % 3) * 0.14f) + (float)sf * 0.37f, 1.28f);
+                float z = -0.25f + fmodf((float)sf * 0.11f + sinf(timeAcc_ * 1.2f + (float)sf) * 0.06f + 2.0f, 1.45f);
+                sn->SetPosition(Vector3(2.96f + (float)(sf % 3) * 0.10f, y, z));
+            }
+            // 3D Кочет Смотрящего: дыхание, покачивание, цвет от температуры, веки и Корона Смотрящего
+            if (banyaRooster3D_) {
+                float breath = 1.0f + 0.025f * sinf(timeAcc_ * 2.4f);
+                float sway = (banyaSim_.blissRemaining > 0.0f) ? (sinf(timeAcc_ * 3.0f) * 6.0f)
+                           : (banyaSim_.ventRemaining  > 0.0f) ? (sinf(timeAcc_ * 24.0f) * 3.0f) : 0.0f;
+                banyaRooster3D_->SetScale(Vector3(breath, 1.0f, breath));
+                banyaRooster3D_->SetRotation(Quaternion(0.0f, 165.0f + sway, 0.0f));
 
-        // Свечение печи и камней от температуры
-        if (banyaStonesGlow_) {
-            float hot = Clamp((banyaSim_.temp - 80.0f) / 32.0f, 0.0f, 1.0f);
-            banyaStonesGlow_->SetColor(Color(0.45f + 0.55f * hot, 0.41f - 0.12f * hot, 0.38f - 0.25f * hot, 1.0f));
-        }
-        if (banyaStoveFire_) {
-            float f = Clamp(0.35f + banyaSim_.fire / 110.0f, 0.2f, 1.0f);
-            banyaStoveFire_->SetColor(Color(1.0f, 0.42f + 0.32f * f, 0.12f, f));
-        }
+                if (banyaRoosterWingL3D_ && banyaRoosterWingR3D_) {
+                    float flap = (banyaVenikAnim_ > 0.0f) ? (sinf(timeAcc_ * 16.0f) * 18.0f)
+                               : (banyaSim_.blissRemaining > 0.0f ? -8.0f : 0.0f);
+                    banyaRoosterWingL3D_->SetRotation(Quaternion(0.0f, 0.0f,  flap));
+                    banyaRoosterWingR3D_->SetRotation(Quaternion(0.0f, 0.0f, -flap));
+                }
+                if (banyaRoosterHead3D_) {
+                    float lookYaw = banyaSim_.riddle.active ? -18.0f : sinf(timeAcc_ * 0.9f) * 8.0f;
+                    float tiltX = (banyaSim_.blissRemaining > 0.0f) ? -12.0f : 0.0f;
+                    banyaRoosterHead3D_->SetRotation(Quaternion(tiltX, lookYaw, 0.0f));
+                }
+                bool closeEyes = (banyaSim_.blissRemaining > 0.0f) || (banyaSim_.phase == Banya::PHASE_OVER &&
+                                  banyaSim_.ending != Banya::END_WIN && banyaSim_.ending != Banya::END_STEWARD);
+                float lidY = closeEyes ? 0.088f : 0.01f;
+                if (banyaRoosterEyeL3D_) banyaRoosterEyeL3D_->SetScale(Vector3(0.088f, lidY, 0.07f));
+                if (banyaRoosterEyeR3D_) banyaRoosterEyeR3D_->SetScale(Vector3(0.088f, lidY, 0.07f));
 
-        // Анимация веника и мимики Кочета
-        if (banyaVenikVis_) {
-            if (banyaVenikAnim_ > 0.0f) {
-                float u = 1.0f - banyaVenikAnim_ / 1.6f;
-                int vx = (int)(scW * (0.41f + 0.20f * sinf(u * 3.14159f)));
-                int vy = (int)(scH * (0.31f + 0.05f * sinf(u * 12.56f)));
-                banyaVenikVis_->SetPosition(vx, vy);
-            } else {
-                banyaVenikVis_->SetPosition((int)(scW * 0.41f), (int)(scH * 0.31f));
+                bool hasCrown = (banyaSim_.phase == Banya::PHASE_OVER && banyaSim_.ending == Banya::END_STEWARD) || (banyaBuffTier_ >= 2);
+                if (banyaRoosterCrown3D_) banyaRoosterCrown3D_->SetEnabled(hasCrown);
+                if (banyaRoosterCap3D_)   banyaRoosterCap3D_->SetEnabled(!hasCrown);
+
+                if (banyaRoosterBodyMat_) {
+                    Color tint(1.0f, 1.0f, 1.0f, 1.0f);
+                    if (banyaSim_.phase == Banya::PHASE_OVER) {
+                        if (banyaSim_.ending == Banya::END_FROZEN) tint = Color(0.55f, 0.85f, 1.0f, 1.0f);
+                        else if (banyaSim_.ending == Banya::END_BURNED || banyaSim_.ending == Banya::END_FIRE || banyaSim_.ending == Banya::END_BLAST)
+                            tint = Color(0.32f, 0.18f, 0.12f, 1.0f);
+                        else if (banyaSim_.ending == Banya::END_VAPOR || banyaSim_.ending == Banya::END_ESCAPE)
+                            tint = Color(0.95f, 0.95f, 0.95f, 0.25f);
+                    } else if (banyaSim_.temp > 100.0f) {
+                        tint = Color(1.0f, 0.65f, 0.56f, 1.0f);
+                    } else if (banyaSim_.temp < 60.0f) {
+                        tint = Color(0.76f, 0.88f, 1.0f, 1.0f);
+                    }
+                    banyaRoosterBodyMat_->SetShaderParameter("MatDiffColor", Variant(tint));
+                }
             }
         }
-        if (banyaRoosterBody_ && banyaRoosterEyesText_) {
-            int baseX = (int)(scW * 0.61f), baseY = (int)(scH * 0.36f);
-            if (banyaSim_.phase == Banya::PHASE_OVER) {
-                banyaRoosterEyesText_->SetText((banyaSim_.ending == Banya::END_WIN || banyaSim_.ending == Banya::END_STEWARD) ? "^" : "×");
-                banyaRoosterCrown_->SetVisible(banyaSim_.ending == Banya::END_STEWARD);
-                if (banyaSim_.ending == Banya::END_FROZEN)      banyaRoosterBody_->SetColor(Color(0.68f, 0.88f, 0.98f, 1.0f));
-                else if (banyaSim_.ending == Banya::END_BURNED || banyaSim_.ending == Banya::END_FIRE || banyaSim_.ending == Banya::END_BLAST)
-                    banyaRoosterBody_->SetColor(Color(0.38f, 0.24f, 0.18f, 1.0f));
-                else if (banyaSim_.ending == Banya::END_VAPOR || banyaSim_.ending == Banya::END_ESCAPE)
-                    banyaRoosterBody_->SetColor(Color(0.95f, 0.95f, 0.95f, 0.12f));
-                else banyaRoosterBody_->SetColor(Color(0.96f, 0.91f, 0.82f, 1.0f));
-            } else {
-                banyaRoosterCrown_->SetVisible(false);
-                int sway = (banyaSim_.blissRemaining > 0.0f) ? (int)(sinf(timeAcc_ * 3.0f) * S(4.0f))
-                         : (banyaSim_.ventRemaining  > 0.0f) ? (int)(sinf(timeAcc_ * 22.0f)  * S(2.0f)) : 0;
-                banyaRoosterBody_->SetPosition(baseX + sway, baseY);
-                banyaRoosterEyesText_->SetText(banyaSim_.blissRemaining > 0.0f ? "v" : "•");
-                Color bodyC = (banyaSim_.temp > 100.0f) ? Color(1.0f, 0.72f, 0.64f, 1.0f)
-                            : (banyaSim_.temp < 60.0f)  ? Color(0.84f, 0.91f, 0.98f, 1.0f)
-                                                        : Color(0.96f, 0.91f, 0.82f, 1.0f);
-                banyaRoosterBody_->SetColor(bodyC);
-            }
-        }
 
-        // Опасные виньетки
+        // 3. Лёгкие экранные индикаторы жара / духоты / холода
         if (banyaHeatWash_) {
-            float ha = banyaSim_.temp > 100.0f ? Clamp((banyaSim_.temp - 100.0f) / 18.0f, 0.0f, 0.42f) : 0.0f;
-            banyaHeatWash_->SetColor(Color(1.0f, 0.25f, 0.06f, ha));
+            float ha = banyaSim_.temp > 100.0f ? Clamp((banyaSim_.temp - 100.0f) / 18.0f, 0.0f, 0.36f) : 0.0f;
+            banyaHeatWash_->SetColor(Color(1.0f, 0.24f, 0.05f, ha));
         }
         if (banyaAirWash_) {
-            float aa = banyaSim_.air < 30.0f ? Clamp((30.0f - banyaSim_.air) / 30.0f, 0.0f, 0.55f) : 0.0f;
+            float aa = banyaSim_.air < 30.0f ? Clamp((30.0f - banyaSim_.air) / 30.0f, 0.0f, 0.48f) : 0.0f;
             banyaAirWash_->SetColor(Color(0.03f, 0.06f, 0.03f, aa));
         }
         if (banyaColdWash_) {
-            float ca = banyaSim_.ventRemaining > 0.0f ? 0.16f : 0.0f;
-            banyaColdWash_->SetColor(Color(0.66f, 0.86f, 0.95f, ca));
+            float ca = banyaSim_.ventRemaining > 0.0f ? 0.14f : 0.0f;
+            banyaColdWash_->SetColor(Color(0.62f, 0.84f, 0.96f, ca));
         }
 
-        // Карточка загадки
+        // 4. Карточка загадки (только при смене состояния/текста)
         if (banyaRiddleBox_) {
             bool showR = banyaSim_.riddle.active && banyaSim_.phase == Banya::PHASE_PLAY;
             banyaRiddleBox_->SetVisible(showR);
             if (showR) {
                 const auto& rd = banyaSim_.riddle;
-                banyaRiddleQ_->SetText(rd.q);
-                banyaRiddleTime_->SetText(String(rd.timeLeft, 1) + "с");
+                if (lastBanyaRiddleQ_ != rd.q) {
+                    lastBanyaRiddleQ_ = rd.q;
+                    banyaRiddleQ_->SetText(rd.q);
+                }
+                String rtStr = String(rd.timeLeft, 1) + "с";
+                if (rtStr != lastBanyaRiddleTime_) {
+                    lastBanyaRiddleTime_ = rtStr;
+                    banyaRiddleTime_->SetText(rtStr);
+                }
                 int rBarFull = banyaRiddleBox_->GetWidth() - S(28);
-                setBar(banyaRiddleTimerBar_.Get(), rd.timeLeft / 15.0f, rBarFull);
+                setBarCached(banyaRiddleTimerBar_.Get(), -1, rd.timeLeft / 15.0f, rBarFull);
                 static const char* kPref[4] = { "[Q] ", "[W] ", "[E] ", "[R] " };
                 for (int i = 0; i < 4; ++i) {
                     banyaRiddleOptTxt_[i]->SetText(String(kPref[i]) + rd.opts[i]);
                     if (!rd.settled) {
-                        banyaRiddleOptBg_[i]->SetColor(Color(0.30f, 0.19f, 0.10f, 0.92f));
+                        banyaRiddleOptBg_[i]->SetColor(Color(0.28f, 0.17f, 0.09f, 0.92f));
                     } else if (i == rd.correctIdx) {
                         banyaRiddleOptBg_[i]->SetColor(Color(0.20f, 0.52f, 0.22f, 0.95f));
                     } else if (i == rd.chosenIdx) {
@@ -11152,23 +11677,29 @@ private:
                         banyaRiddleOptBg_[i]->SetColor(Color(0.22f, 0.14f, 0.08f, 0.70f));
                     }
                 }
+                String fb;
                 if (rd.settled) {
                     bool ok = (rd.chosenIdx == rd.correctIdx);
-                    String fb = ok ? (String("Верно! ") + rd.explanation)
-                                   : (String(rd.chosenIdx < 0 ? "Молчание! " : "Мимо! ") + "Правильно: «" + rd.opts[rd.correctIdx] + "». " + rd.explanation);
-                    banyaRiddleFb_->SetText(fb);
-                    banyaRiddleFb_->SetColor(ok ? Color(0.75f, 0.95f, 0.68f, 1.0f) : Color(1.0f, 0.74f, 0.66f, 1.0f));
-                } else {
+                    fb = ok ? (String("Верно! ") + rd.explanation)
+                            : (String(rd.chosenIdx < 0 ? "Молчание! " : "Мимо! ") + "Правильно: «" + rd.opts[rd.correctIdx] + "». " + rd.explanation);
+                    if (fb != lastBanyaRiddleFb_) {
+                        lastBanyaRiddleFb_ = fb;
+                        banyaRiddleFb_->SetText(fb);
+                        banyaRiddleFb_->SetColor(ok ? Color(0.75f, 0.95f, 0.68f, 1.0f) : Color(1.0f, 0.74f, 0.66f, 1.0f));
+                    }
+                } else if (!lastBanyaRiddleFb_.Empty()) {
+                    lastBanyaRiddleFb_.Clear();
                     banyaRiddleFb_->SetText("");
                 }
             }
         }
 
-        // Карточка концовки
+        // 5. Карточка концовки
         if (banyaEndBox_) {
             bool over = (banyaSim_.phase == Banya::PHASE_OVER);
+            bool wasVisible = banyaEndBox_->IsVisible();
             banyaEndBox_->SetVisible(over);
-            if (over) {
+            if (over && !wasVisible) {
                 ApplyBanyaEndingRewards();
                 const auto& ei = Banya::GetEndingInfo(banyaSim_.ending);
                 int pts = banyaSim_.CurrentScore();
@@ -11186,41 +11717,62 @@ private:
                     String(banyaSim_.riddles) + "  •  очков " + String(pts) + "\n" +
                     "Открыто концовок: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + " из 14\n" +
                     rewardLine);
-            } else {
+            } else if (!over && wasVisible) {
                 banyaEndTint_->SetColor(Color(0.0f, 0.0f, 0.0f, 0.0f));
             }
         }
 
-        // Фоновые частицы пара
+        // 6. Кольцевой пул 3D-частиц пара/воды/листьев/искр (без аллокаций!)
         if (dt > 0.0f) {
             if (banyaSim_.phase == Banya::PHASE_PLAY && !banyaSim_.paused) {
-                banyaSteamAcc_ += dt * (2.5f + banyaSim_.steam * 10.0f);
+                banyaSteamAcc_ += dt * (2.2f + banyaSim_.steam * 8.0f);
                 while (banyaSteamAcc_ >= 1.0f) {
                     banyaSteamAcc_ -= 1.0f;
-                    SpawnBanyaParticle(0.14f + (rand() % 100) * 0.0016f, 0.42f,
-                                       ((rand() % 100) - 50) * 0.0006f, -0.09f - (rand() % 100) * 0.0006f,
-                                       2.2f, 10.0f + banyaSim_.steam * 10.0f, 0);
+                    SpawnBanya3DParticle(
+                        Vector3(-1.72f + ((rand() % 100) - 50) * 0.005f, 1.38f, 0.68f + ((rand() % 100) - 50) * 0.004f),
+                        Vector3(((rand() % 100) - 50) * 0.004f, 0.55f + (rand() % 50) * 0.008f, ((rand() % 100) - 50) * 0.003f),
+                        2.1f, 0.24f + banyaSim_.steam * 0.22f, 0);
                 }
             }
-            for (unsigned i = banyaParticles_.Size(); i-- > 0;) {
-                BanyaUIParticle& p = banyaParticles_[i];
-                p.life_ += dt;
-                if (p.life_ >= p.ttl_ || !p.el_) {
-                    if (p.el_) p.el_->Remove();
-                    banyaParticles_.Erase(i);
+            for (unsigned i = 0; i < (unsigned)banya3DFxPool_.Size(); ++i) {
+                Banya3DFxMote& m = banya3DFxPool_[i];
+                if (!m.active_) continue;
+                m.life_ += dt;
+                if (m.life_ >= m.ttl_) {
+                    m.active_ = false;
+                    if (m.node_) m.node_->SetEnabled(false);
                     continue;
                 }
-                if (p.kind_ == 2) p.vy_ += 0.45f * dt;
-                p.x_ += p.vx_ * dt;
-                p.y_ += p.vy_ * dt;
-                p.el_->SetPosition((int)(p.x_ * scW), (int)(p.y_ * scH));
-                p.el_->SetOpacity(Clamp(1.0f - p.life_ / p.ttl_, 0.0f, 1.0f) * (p.kind_ == 0 ? 0.35f : 0.85f));
+                if (m.kind_ == 2) m.vel_.y_ -= 2.4f * dt; // капли воды падают
+                if (m.kind_ == 0) m.vel_.x_ += sinf(timeAcc_ * 1.5f + (float)i) * 0.15f * dt;
+                m.pos_ += m.vel_ * dt;
+                float u = m.life_ / m.ttl_;
+                float alpha = Clamp((1.0f - u) * (m.kind_ == 0 ? 0.34f : 0.88f), 0.0f, 1.0f);
+                float sc = m.baseScale_ * (m.kind_ == 0 ? (0.8f + u * 1.6f) : (1.0f - u * 0.3f));
+
+                Color col(1.0f, 1.0f, 1.0f, alpha);
+                if (m.kind_ == 1)      col = Color(0.24f, 0.18f, 0.14f, alpha); // smoke
+                else if (m.kind_ == 2) col = Color(0.55f, 0.88f, 1.00f, alpha); // water drop
+                else if (m.kind_ == 3) col = Color(0.42f, 0.65f, 0.24f, alpha); // birch leaf
+                else if (m.kind_ == 4) col = Color(0.92f, 0.97f, 1.00f, alpha); // snow
+                else if (m.kind_ == 5) col = Color(1.00f, 0.56f, 0.14f, alpha); // ember
+                else if (m.kind_ == 6) col = Color(1.00f, 0.88f, 0.42f, alpha); // spark
+
+                if (m.mat_) m.mat_->SetShaderParameter("MatDiffColor", Variant(col));
+                if (m.node_) {
+                    m.node_->SetPosition(m.pos_);
+                    m.node_->SetScale(Vector3::ONE * sc);
+                    if (m.kind_ == 3) m.node_->SetScale(Vector3(sc * 1.4f, sc * 0.4f, sc));
+                    m.node_->Rotate(Quaternion(m.spin_ * dt, m.spin_ * 0.6f * dt, 0.0f));
+                }
             }
         }
     }
 
     void UpdateBanyaSimulator(float dt) {
         if (banyaVenikAnim_ > 0.0f) banyaVenikAnim_ = Max(0.0f, banyaVenikAnim_ - dt);
+        if (banyaLadleAnim_ > 0.0f) banyaLadleAnim_ = Max(0.0f, banyaLadleAnim_ - dt);
+        if (banyaDoorTimer_ > 0.0f) banyaDoorTimer_ = Max(0.0f, banyaDoorTimer_ - dt);
         if (banyaCaptionTimer_ > 0.0f) {
             banyaCaptionTimer_ -= dt;
             if (banyaCaptionTimer_ <= 0.0f && banyaCaptionText_)
@@ -11424,7 +11976,8 @@ private:
         if (arcadePanel_) arcadePanel_->SetVisible(true);
         if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
         SetGameHudVisible(false);
-        if (auto* input = GetSubsystem<Input>()) { input->SetMouseVisible(true); isMouseVisible_ = true; }
+        SyncMouseLock();
+        SyncActiveViewport();
         SyncArcadeUI();
         PlayUISound();
     }
@@ -11437,7 +11990,8 @@ private:
             ShowMainMenu(true);
         } else {
             SetGameHudVisible(!photoMode_);
-            if (auto* input = GetSubsystem<Input>()) { input->SetMouseVisible(false); isMouseVisible_ = false; }
+            SyncMouseLock();
+            SyncActiveViewport();
             UpdateScoreDisplay();
         }
     }
