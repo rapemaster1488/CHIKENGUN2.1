@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 # ============================================================================
-# CHIKENGUN 2.5.6 — интро-тема «ОСЕНЬ В ЛАГЕРЯХ» (оригинальное произведение, A minor)
-# Тихий заунывный шансон: дрожащая гармонь, дождь, винил, минорные i–iv–V.
+# CHIKENGUN 2.5.6 — интро-тема «Осенняя заунывость» (оригинальное произведение, A minor)
+# Меланхоличный гармонь-шансон: felt piano, щипковый бас, дождь, ветер, винил.
+# Без единой расстроенной пилы: всё синусоидальное -> трансляция-«кукольное» звучание.
 # Звучит на заставке koch.studios → powered by fall.os → CHICHKENCUM 2.1
 # Сгенерировано tools/gen_splash_theme.py → Data/Music/KochSplashTheme.wav
-# ВНИМАНИЕ: это ОРИГИНАЛЬНАЯ композиция. «Какая осень в лагерях» — чужое
-# произведение, в репозиторий не вшивается. Своя лицензионная копия —
-# локально поверх этого файла (не коммитить!).
+# ВНИМАНИЕ: это ОРИГИНАЛЬНАЯ композиция. Песни в репозиторий не продаются.
 #   Запуск: python3 tools/gen_splash_theme.py   (нужны numpy, soundfile)
 # ============================================================================
 import numpy as np
@@ -16,32 +15,27 @@ import os
 SR = 44100
 OUT = os.path.join(os.path.dirname(__file__), "..", "Data", "Music", "KochSplashTheme.wav")
 
-rng = np.random.default_rng(19540703)   # застывшая дата осени, для стабильного рендера
+rng = np.random.default_rng(19541007)   # стабильный рендер из раза в раз
 
 def t_arr(dur):
     return np.arange(int(dur * SR), dtype=np.float32) / SR
 
 def sine(freq, dur, amp=1.0):
-    t = t_arr(dur)
-    return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+    return (amp * np.sin(2 * np.pi * freq * t_arr(dur))).astype(np.float32)
 
 def sweep_sine(f0, f1, dur, amp=1.0):
     t = t_arr(dur)
-    phase = 2 * np.pi * f0 * (np.log(f1 / f0) ** -1) * ((f1 / f0) ** t - 1) if f1 != f0 else 2 * np.pi * f0 * t
+    T = max(dur, 1e-6)
+    if f1 != f0 and f0 > 0 and f1 > 0:
+        # экспоненциальное скольжение: f(t) = f0 * (f1/f0)^(t/T) — интеграл точный
+        k = np.log(f1 / f0) / T
+        phase = 2 * np.pi * f0 * np.expm1(k * t) / k
+    else:
+        phase = 2 * np.pi * f0 * t
     return (amp * np.sin(phase)).astype(np.float32)
 
-def saw(freq, dur, amp=1.0, detune=0.0, harmonics=26):
-    t = t_arr(dur)
-    f = freq * (1.0 + detune)
-    out = np.zeros_like(t)
-    for k in range(1, harmonics + 1):
-        fk = f * k
-        if fk > SR * 0.45:
-            break
-        out += (1.0 / k) * np.sin(2 * np.pi * fk * t)
-    return (amp * out / 1.9).astype(np.float32)
-
 def lowpass(x, cutoff):
+    """Однополюсный интегратор — сглаживает пилу в «бархат»."""
     a = min(1.0, 2 * np.pi * cutoff / SR)
     y = np.empty_like(x)
     acc = 0.0
@@ -64,114 +58,121 @@ def adsr(n, attack, decay, sustain_level, release):
     if r > 0: env[-r:] = sustain_level * np.linspace(1.0, 0.0, r, dtype=np.float32)
     return env
 
-def tremolo(sig, rate=5.8, depth=0.38):
-    t = np.arange(len(sig), dtype=np.float32) / SR
-    lfo = (1.0 - depth) + depth * (0.5 + 0.5 * np.sin(2 * np.pi * rate * t))
-    return (sig * lfo.astype(np.float32)).astype(np.float32)
+def humanize(delay=0.014, amp=0.10):
+    """Человеческая неточность: задержка и громкость ±случайность."""
+    return rng.uniform(-delay, delay), 1.0 + rng.uniform(-amp, amp)
 
-def accordion(freqs, dur, amp=0.30, cutoff=2100.0, rate=5.8):
-    """Гармонь: две слегка расстроенные пилы в узкой полосе + тремоло."""
-    out = np.zeros(int(dur * SR), dtype=np.float32)
-    for f in freqs:
-        for det in (-0.006, 0.006):
-            out += saw(f, dur, amp / (len(freqs) * 2), detune=det, harmonics=18)
-    out = bandpass(out, 260.0, cutoff)
-    out = tremolo(out, rate, 0.36)
-    return (out * adsr(len(out), 0.03, 0.12, 0.72, 0.14)).astype(np.float32)
-
-def pad(freqs, dur, amp=0.40):
-    out = np.zeros(int(dur * SR), dtype=np.float32)
-    for f in freqs:
-        for det in (-0.007, 0.0, 0.007):
-            out += saw(f, dur, amp / (len(freqs) * 3), detune=det, harmonics=22)
-    out = lowpass(out, 1050.0)
-    env = np.ones(len(out), dtype=np.float32)
-    a = min(len(out), int(1.1 * SR)); r = min(len(out), int(1.3 * SR))
-    env[:a] = np.linspace(0.0, 1.0, a, dtype=np.float32)
-    env[-r:] = np.linspace(1.0, 0.0, r, dtype=np.float32)
-    return out * env
-
-def pluck(freq, dur=1.1, amp=0.5):
-    """Щипок баса: резонансный sine + щелчок — имитация струны."""
+def felt_piano(freq, dur, amp=0.5):
+    """Felt piano / рояль под войлок: синус + 2-я/3-я/4-я частичные с затуханием."""
     t = t_arr(dur)
-    tone = np.sin(2 * np.pi * freq * t) * np.exp(-t * 2.6)
-    tone += 0.4 * np.sin(4 * np.pi * freq * t) * np.exp(-t * 5.0)
-    click = bandpass(rng.standard_normal(int(0.02 * SR)).astype(np.float32), 700, 5200) * np.exp(-t_arr(0.02) * 160)
-    out = tone.astype(np.float32)
-    out[:len(click)] += click * 0.6
+    out = (1.00 * np.sin(2 * np.pi * freq * t) * np.exp(-t * 2.1)
+         + 0.42 * np.sin(2 * np.pi * freq * 2 * t + 0.3) * np.exp(-t * 3.4)
+         + 0.16 * np.sin(2 * np.pi * freq * 3 * t + 0.7) * np.exp(-t * 5.2)
+         + 0.06 * np.sin(2 * np.pi * freq * 4.16 * t + 1.1) * np.exp(-t * 7.0))
+    # молоточек
+    hit_len = min(len(t), int(0.008 * SR))
+    hit = rng.standard_normal(hit_len).astype(np.float32) * np.exp(-t_arr(0.008) * 300)
+    out = out.astype(np.float32)
+    out[:hit_len] += hit * 0.20
+    out = lowpass(out, 4600.0)
+    # короткая посылка вместо ADSR: пиковая атака 12 мс
+    a = min(len(out), int(0.012 * SR))
+    out[:a] *= np.linspace(0.0, 1.0, a, dtype=np.float32)
     return (amp * out).astype(np.float32)
 
-def lead(freq, dur, amp=0.30):
-    """Заунывная гармонь-соло: расстроенные пилы, высокий тремоло, вибрато."""
+def harmonium(freq, dur, amp=0.30, rate=5.4, depth=0.26):
+    """Гармонь: треугольная волна из 3 синусов, два расстроенных голоса, тремоло+вибрато."""
     t = t_arr(dur)
-    vib = 1.0 + 0.007 * np.sin(2 * np.pi * 5.2 * t)
+    vib = 1.0 + 0.0055 * np.sin(2 * np.pi * 5.1 * t)
     phase = 2 * np.pi * np.cumsum(freq * vib) / SR
-    out = np.sin(phase) + 0.55 * np.sin(2 * phase) + 0.22 * np.sin(3 * phase) + 0.07 * np.sin(4 * phase)
-    out = bandpass(out.astype(np.float32), 180.0, 2350.0)
-    out = tremolo(out, 6.1, 0.30)
-    return (amp * out * adsr(len(out), 0.05, 0.14, 0.78, 0.16)).astype(np.float32)
+    voice = (np.sin(phase)
+             + 0.42 * np.sin(2 * phase + 0.15)
+             + 0.15 * np.sin(3 * phase + 0.4))
+    phase2 = 2 * np.pi * np.cumsum(freq * 0.997 * vib) / SR   # второй голос ниже на ~5 центов
+    voice += 0.55 * (np.sin(phase2) + 0.38 * np.sin(2 * phase2))
+    out = bandpass(voice.astype(np.float32), 210.0, 2450.0)
+    lfo = (1.0 - depth) + depth * (0.5 + 0.5 * np.sin(2 * np.pi * rate * t))
+    out *= lfo.astype(np.float32)
+    return (amp * out * adsr(len(out), 0.07, 0.18, 0.80, 0.22)).astype(np.float32)
 
-def brush(dur=0.09, amp=0.13):
-    n = bandpass(rng.standard_normal(int(dur * SR)).astype(np.float32), 3200, 15000)
-    return (n * np.exp(-t_arr(dur) * 55)).astype(np.float32)
+def bass_pluck(freq, dur=1.6, amp=0.42):
+    """Щипковая басовая струна: быстрый щелчок + медленный хвост."""
+    t = t_arr(dur)
+    tone = np.sin(2 * np.pi * freq * t) * np.exp(-t * 1.9)
+    tone += 0.35 * np.sin(4 * np.pi * freq * t + 0.2) * np.exp(-t * 4.2)
+    tone = lowpass(tone.astype(np.float32), 1300.0)
+    click_len = min(len(t), int(0.006 * SR))
+    click = rng.standard_normal(click_len).astype(np.float32) * np.exp(-t_arr(0.006) * 260)
+    out = tone
+    out[:click_len] += click * 0.25
+    return (amp * out).astype(np.float32)
 
-def kick(dur=0.5, f0=135.0, f1=44.0, amp=0.62):
-    body = sweep_sine(f0, f1, dur, amp) * np.exp(-t_arr(dur) * 6.5)
-    click = rng.standard_normal(int(0.010 * SR)).astype(np.float32)
-    click *= np.exp(-t_arr(0.010) * 220) * 0.4
+def brush(dur=0.09, amp=0.10):
+    n = bandpass(rng.standard_normal(int(dur * SR)).astype(np.float32), 2900, 14000)
+    return (amp * n * np.exp(-t_arr(dur) * 55)).astype(np.float32)
+
+def kick(dur=0.42, f0=118.0, f1=46.0, amp=0.5):
+    body = sweep_sine(f0, f1, dur, amp) * np.exp(-t_arr(dur) * 7.5)
+    click_len = int(0.008 * SR)
+    click = rng.standard_normal(click_len).astype(np.float32) * np.exp(-t_arr(0.008) * 240) * 0.25
     out = body
-    out[:len(click)] += click
+    out[:click_len] += click
     return out
 
-def thump(dur=0.34, amp=0.85):
-    return sweep_sine(82.0, 34.0, dur, amp) * np.exp(-t_arr(dur) * 8.0)
-
-def taiko(dur=0.95, amp=0.8):
-    lo = sine(73.4, dur, amp * 0.8) * np.exp(-t_arr(dur) * 3.4)
-    mid = sine(146.8, dur * 0.8, amp * 0.35) * np.exp(-t_arr(dur * 0.8) * 5.5)
-    hit = bandpass(rng.standard_normal(int(0.07 * SR)).astype(np.float32), 800, 3600) * np.exp(-t_arr(0.07) * 50)
+def taiko(dur=1.1, amp=0.66):
+    lo = sine(73.42, dur, amp * 0.75) * np.exp(-t_arr(dur) * 3.1)
+    mid = sine(146.83, dur * 0.72, amp * 0.30) * np.exp(-t_arr(dur * 0.72) * 4.6)
+    hit_len = int(0.05 * SR)
+    hit = bandpass(rng.standard_normal(hit_len).astype(np.float32), 700, 3200) * np.exp(-t_arr(0.05) * 55)
     out = lo
     out[:len(mid)] += mid
-    out[:len(hit)] += hit * 0.5
+    out[:hit_len] += hit * 0.4
     return out
 
-def boom_slam(dur=1.7, amp=1.0):
-    body = sweep_sine(88.0, 36.0, dur, amp) * np.exp(-t_arr(dur) * 2.3)
-    crash = bandpass(rng.standard_normal(int(min(1.5, dur) * SR)).astype(np.float32), 450, 7200) * np.exp(-t_arr(min(1.5, dur)) * 2.4)
+def soft_slam(dur=1.7, amp=0.8):
+    body = sweep_sine(84.0, 37.0, dur, amp) * np.exp(-t_arr(dur) * 2.6)
+    wash = bandpass(rng.standard_normal(int(min(1.4, dur) * SR)).astype(np.float32), 380, 5200) * np.exp(-t_arr(min(1.4, dur)) * 2.9)
     out = body
-    out[:len(crash)] += crash * 0.5
+    out[:len(wash)] += wash * 0.30
     return out
 
-def rain(dur, amp=0.045):
-    """Дождь: мягкий шум + редкие капли."""
-    n = rng.standard_normal(int(dur * SR)).astype(np.float32)
-    base = lowpass(bandpass(n, 150, 2600), 1500)
-    drops = np.zeros_like(n)
-    n_drops = int(dur * 7.5)
-    for _ in range(n_drops):
-        i = rng.integers(0, len(drops) - 40)
-        drops[i] = rng.uniform(0.5, 1.0)
-    drops = lowpass(drops, 5200) * 3.0
-    return (amp * (base + drops * 0.4)).astype(np.float32)
+def heartbeat(dur=0.3, amp=0.55):
+    return sweep_sine(62.0, 40.0, dur, amp) * np.exp(-t_arr(dur) * 9.0)
 
-def vinyl_crackle(dur, amp=0.012):
+def rain(dur, amp=0.020):
+    n = rng.standard_normal(int(dur * SR)).astype(np.float32)
+    base = lowpass(bandpass(n, 160, 2300), 1050.0)
+    drops = np.zeros_like(n)
+    for _ in range(int(dur * 6)):
+        i = rng.integers(0, len(drops) - 40)
+        drops[i] = rng.uniform(0.4, 1.0)
+    drops = lowpass(drops, 4600.0) * 2.4
+    return (amp * (base + drops * 0.35)).astype(np.float32)
+
+def wind(dur, amp=0.010):
+    n = lowpass(rng.standard_normal(int(dur * SR)).astype(np.float32), 420.0)
+    t = t_arr(dur)
+    lfo = 0.6 + 0.4 * np.sin(2 * np.pi * 0.11 * t + 1.3)   # медленное дыхание ветра
+    return (amp * n * lfo).astype(np.float32)
+
+def vinyl(dur, amp=0.006):
     n = np.zeros(int(dur * SR), dtype=np.float32)
-    for _ in range(int(dur * 22)):
+    for _ in range(int(dur * 14)):
         i = rng.integers(0, len(n) - 30)
         n[i] = rng.uniform(0.4, 1.0) * (1 if rng.random() < 0.5 else -1)
-    return lowpass(n, 6300) * amp
+    return lowpass(n, 6200.0) * amp
 
-def riser(dur, f_lo=240.0, f_hi=5200.0, amp=0.22):
+def riser(dur, f_lo=300.0, f_hi=2400.0, amp=0.10):
     t = t_arr(dur)
     n = rng.standard_normal(len(t)).astype(np.float32)
     y = np.empty_like(n)
-    cutoff = f_lo * (f_hi / f_lo) ** (t / t[-1])
+    cutoff = f_lo * (f_hi / f_lo) ** (t / max(t[-1], 1e-6))
     a = 2 * np.pi * cutoff / SR
     acc = 0.0
     for i in range(len(n)):
         acc += a[i] * (n[i] - acc)
         y[i] = acc
-    y *= np.linspace(0.06, 1.0, len(y), dtype=np.float32) ** 2
+    y *= np.linspace(0.10, 1.0, len(y), dtype=np.float32) ** 2.2
     return (amp * y).astype(np.float32)
 
 def place(dst, src, at_sec, gain=1.0):
@@ -180,126 +181,116 @@ def place(dst, src, at_sec, gain=1.0):
     if i < len(dst):
         dst[i:j] += src[:j - i] * gain
 
-# === ноты A minor (i–iv–V с шестыми — шансонная гармония) ===
-A2, E2, D2, F2, G2 = 110.00, 82.41, 73.42, 87.31, 98.00
-A3, C4, D4, E4, F4, G4, B4 = 220.00, 261.63, 293.66, 329.63, 349.23, 392.00, 493.88
-A4, B4n, C5, D5, E5 = 440.00, 493.88, 523.25, 587.33, 659.26
-Gsharp4 = 415.30
-CH = {
-    "Am": [A3, C4, E4, A4],
-    "F":  [F2 * 2, A3, C4],
-    "Dm": [D4, F4, A4],
-    "E7": [E4, Gsharp4, B4],
-    "Am6": [A3, C4, E4, F4],
-}
+def chord_notes(notes, dur, amp, fn):
+    """Сыграет аккорд из нот одной артикуляцией, возвращает просуммированный сигнал."""
+    out = np.zeros(int(dur * SR), dtype=np.float32)
+    for f in notes:
+        out += fn(f, dur, amp / len(notes) ** 0.5)
+    return out
 
-TOTAL = 15.4
+# === НОТЫ (A minor) ===
+A1, A2, D2, E2, F2 = 55.00, 110.00, 73.42, 82.41, 87.31
+A3, C4, D4, E4, F4, G4 = 220.00, 261.63, 293.66, 329.63, 349.23, 392.00
+A4, B4, C5, D5, E5, F5 = 440.00, 493.88, 523.25, 587.33, 659.26, 698.46
+Gsharp4 = 415.30
+Am  = [A3, C4, E4, A4]
+Dm  = [D4, F4, A4]
+E7  = [E4, Gsharp4, B4]
+F   = [F4, A4, C5]
+Am_low = [A3, E4, A4]
+
+BEAT = 0.625            # 96 BPM
+BAR = 3 * BEAT          # 3/4
+TOTAL = 16.6
 mix = np.zeros(int(TOTAL * SR), dtype=np.float32)
 
-# ---- 0.00–1.30: ДОЖДЬ + низкий дроон + сердцебиение
-place(mix, rain(TOTAL, 0.030), 0.0)
-place(mix, vinyl_crackle(TOTAL, 0.010), 0.0)
-place(mix, sine(A2, 1.30, 0.34) * np.linspace(0.0, 1.0, int(1.30 * SR), dtype=np.float32), 0.0)
-place(mix, thump(0.30, 0.8), 0.72)
-place(mix, thump(0.26, 0.55), 1.04)
-place(mix, riser(1.30, 200.0, 3800.0, 0.20), 0.0)
+# ---- 0.0–2.5: дождь, ветер, винил; дроон Am; сердцебиение; вздох гармони
+place(mix, rain(TOTAL, 0.020), 0.0)
+place(mix, wind(TOTAL, 0.009), 0.0)
+place(mix, vinyl(TOTAL, 0.0055), 0.0)
+place(mix, sine(A1, 2.6, 0.10) * np.linspace(0.0, 1.0, int(2.6 * SR), dtype=np.float32), 0.0)
+place(mix, heartbeat(0.30, 0.42), 1.15)
+place(mix, heartbeat(0.26, 0.30), 1.78)
+place(mix, riser(2.3, 320.0, 2100.0, 0.075), 0.2)
+# «вздох» — одинокая нота E4 издалека, как первое воспоминание о мелодии
+place(mix, harmonium(E4, 1.5, 0.085, rate=4.2, depth=0.40), 0.95)
 
-# ---- 1.30: «powered by fall.os» — мягкий удар + Am пад + заунывные голоса
-place(mix, sweep_sine(58.0, 27.0, 1.5, 0.9) * np.exp(-t_arr(1.5) * 2.4), 1.30)
-place(mix, pad(CH["Am"], 7.4, 0.40), 1.30)
-place(mix, accordion([A3, E4, A4], 2.3, 0.22, 1600.0, 4.6), 1.32)
+# ---- 2.5: SLAM падающего CHICHKENCUM — felt piano Am в полную силу + taiko
+place(mix, soft_slam(1.7, 0.85), 2.50)
+place(mix, taiko(1.1, 0.55), 2.50)
+place(mix, chord_notes(Am, 2.6, 0.55, felt_piano), 2.50)
 
-# ---- 2.50: SLAM «CHICHKENCUM 2.1»
-place(mix, boom_slam(1.9, 1.0), 2.50)
-place(mix, accordion(CH["Am6"], 0.9, 0.34, 1900.0, 6.4), 2.50)
-place(mix, taiko(0.8, 0.7), 2.50)
-
-# ---- 2.5–6.6: ГРУВ (Am – F – Dm – E7): полупритушенный шансон-шаффл
-beat = 0.517          # 116 BPM
-bars = [("Am", A2), ("F", F2 * 2), ("Dm", D2 * 2), ("E7", E2 * 2)]
-t0 = 2.50
-for bar_i, (name, bass_f) in enumerate(bars):
-    bt = t0 + bar_i * 4 * beat
-    for b in (0, 2):
-        place(mix, kick(0.45, 128.0, 42.0, 0.66), bt + b * beat)
-    for b in (1, 3):
-        place(mix, brush(0.09, 0.16), bt + b * beat)      # щётки на 2 и 4
-    for b in range(4):
-        place(mix, brush(0.05, 0.06), bt + (b + 0.5) * beat)
-    for e in range(8):
-        f = bass_f if e not in (3, 7) else bass_f * (4.0 / 3.0 if name == "E7" else 1.5)
-        place(mix, pluck(f, 0.42, 0.36), bt + e * beat / 2)
-    if bar_i in (0, 2):
-        place(mix, accordion(CH[name], 0.34, 0.26, 1750.0, 6.2), bt + 1.5 * beat)
-        place(mix, accordion(CH[name], 0.30, 0.22, 1600.0, 6.2), bt + 3.5 * beat)
-    else:
-        place(mix, accordion(CH[name], 0.30, 0.30, 2100.0, 6.6), bt + 1.5 * beat)
-        place(mix, accordion(CH[name], 0.26, 0.24, 1900.0, 6.6), bt + 3.5 * beat)
-
-# Заунывная партия 1 (бары 1–4)
-LEAD1 = [
-    (2.50 + 0.0 * beat, A4, 1.2), (2.50 + 1.5 * beat, C5, 0.8),
-    (2.50 + 2.5 * beat, B4n, 0.6), (2.50 + 3.2 * beat, A4, 0.8),
-    (2.50 + 4.0 * beat, G4, 0.9), (2.50 + 5.0 * beat, E4, 1.1),
-    (2.50 + 6.5 * beat, F4, 0.9), (2.50 + 7.6 * beat, E4, 0.9),
+# ---- Вступление гармониума с мелодией -------------------------------
+# Мелодия: форма A (тт.3–6) + A' (тт.7–9), всё A minor, без одной фальшивой ноты.
+MELODY = [
+    # (beat_offset_from_2_5, freq, dur_in_beats)
+    (0.0,  A4, 1.0), (1.0,  C5, 1.0), (2.0,  E5, 1.0),          # b3: Am
+    (3.0,  D5, 2.0), (5.0,  C5, 1.0),                          # b4: Dm
+    (6.0,  B4, 2.0), (8.0,  Gsharp4, 1.0),                     # b5: E7
+    (9.0,  A4, 3.0),                                           # b6: Am
+    (12.0, F5, 1.0), (13.0, E5, 1.0), (14.0, D5, 1.0),         # b7: F
+    (15.0, C5, 1.0), (16.0, B4, 1.0), (17.0, Gsharp4, 1.0),    # b8: E7
+    (18.0, A4, 3.0),                                           # b9: Am
 ]
-for dt_, f, beats in LEAD1:
-    place(mix, lead(f, beats * beat + 0.06, 0.21), dt_)
+for beat_off, f, beats in MELODY:
+    dly, amp_mul = humanize()
+    t = 2.5 + beat_off * BEAT
+    dur = beats * BEAT + 0.12
+    place(mix, harmonium(f, dur, 0.155 * amp_mul, rate=5.2, depth=0.22), max(0.0, t + dly))
 
-# ---- 6.6–8.3: ДОЖДЕВОЙ СЛОМ — только пад, дождь и далёкое сердцебиение
-t_br = 6.60
-place(mix, pad(CH["Am"], 2.6, 0.32), t_br + 0.1)
-place(mix, taiko(1.3, 0.55), t_br + 1.0 * beat)
-place(mix, taiko(1.3, 0.42), t_br + 3.0 * beat)
-place(mix, riser(1.7, 260.0, 4300.0, 0.24), t_br + 0.2)
-place(mix, accordion([A3, E4, A4], 2.2, 0.16, 1200.0, 3.4), t_br + 0.3)
-
-# ---- 8.3–13.1: КУЛЬМИНАЦИЯ — партия 2, тайко, полные стэбы
-t_cl = 8.30
-for bar_i, (name, bass_f) in enumerate(bars):
-    bt = t_cl + bar_i * 4 * beat
-    for b in range(4):
-        place(mix, kick(0.4, 132.0, 43.0, 0.72), bt + b * beat)
-    for b in (1, 3):
-        place(mix, taiko(0.7, 0.5), bt + b * beat)
-        place(mix, brush(0.08, 0.14), bt + b * beat)
-    for e in range(8):
-        f = bass_f if e not in (3, 7) else bass_f * 1.5
-        place(mix, pluck(f, 0.38, 0.38), bt + e * beat / 2)
-    for off in (0.75, 1.5, 2.75, 3.5):
-        place(mix, accordion(CH[name], 0.30, 0.30, 2300.0, 6.8), bt + off * beat)
-
-LEAD2 = [
-    (8.30 + 0.0 * beat, A4, 1.0), (8.30 + 1.0 * beat, C5, 0.7), (8.30 + 1.75 * beat, D5, 0.7),
-    (8.30 + 2.5 * beat, E5, 1.3), (8.30 + 4.0 * beat, D5, 0.8), (8.30 + 4.8 * beat, C5, 0.8),
-    (8.30 + 5.6 * beat, B4n, 1.4), (8.30 + 7.2 * beat, A4, 0.8),
-    (8.30 + 8.0 * beat, E4, 1.0), (8.30 + 9.2 * beat, F4, 0.7), (8.30 + 10.0 * beat, E4, 0.7),
-    (8.30 + 10.8 * beat, D4, 1.0), (8.30 + 12.0 * beat, E4, 1.4),
+# Бас (щипковые корни) и felt piano подкладка по тактам
+BARS = [
+    (2.50,  A2, Am),   # b3
+    (4.375, D2, Dm),   # b4
+    (6.25,  E2, E7),   # b5
+    (8.125, A2, Am),   # b6
+    (10.00, F2, F),    # b7
+    (11.875, E2, E7),  # b8
+    (13.75, A2, Am),   # b9
 ]
-for dt_, f, beats in LEAD2:
-    place(mix, lead(f, beats * beat + 0.08, 0.27), dt_)
+for bt, bass_f, ch in BARS:
+    dly, amp_mul = humanize(0.010, 0.08)
+    place(mix, bass_pluck(bass_f, 2.2, 0.34 * amp_mul), bt + dly)
+    place(mix, chord_notes(ch, 2.1, 0.26, felt_piano), bt + 0.015)
+    # лёгкие доли 2 и 3 — пустые, дышим
+    place(mix, chord_notes(ch, 0.9, 0.10, felt_piano), bt + 2 * BEAT)
 
-# ---- 13.1: ФИНАЛ — tutti Am, гармонь гаснет, дождь доигрывает
-place(mix, boom_slam(2.3, 0.9), 13.1)
-place(mix, accordion(CH["Am"] + [E5], 2.6, 0.30, 2400.0, 5.2), 13.1)
-place(mix, pad(CH["Am"], 2.6, 0.30), 13.1)
+# ---- Перкуссия: щётки и мягкий кик со второй фразы -------------------
+for bar_i, (bt, _, _) in enumerate(BARS):
+    if bar_i < 2:
+        continue                      # первые два такта — тишина, только дождь и фортепиано
+    accent = bar_i >= 4               # кульминация (b7–b9)
+    place(mix, kick(0.40, 110.0, 45.0, 0.40 if not accent else 0.52), bt)
+    place(mix, brush(0.09, 0.085 if not accent else 0.11), bt + BEAT)
+    place(mix, brush(0.09, 0.085 if not accent else 0.11), bt + 2 * BEAT)
+    if accent:
+        place(mix, brush(0.045, 0.055), bt + 1.5 * BEAT)
+        place(mix, brush(0.045, 0.055), bt + 2.5 * BEAT)
+    if bar_i in (3, 6):               # b6 и b9: taiko-акцент на сильную долю
+        place(mix, taiko(1.25, 0.48), bt)
 
-# === шина: реверб + мягкий клип ===
-ir_len = int(2.3 * SR)
-ir_l = rng.standard_normal(ir_len).astype(np.float32) * np.exp(-np.linspace(0, 5.6, ir_len)).astype(np.float32)
-ir_r = rng.standard_normal(ir_len).astype(np.float32) * np.exp(-np.linspace(0, 6.1, ir_len)).astype(np.float32)
+# ---- 13.75: финал — tutti Am, гармонь гаснет, дождь доигрывает --------
+place(mix, soft_slam(2.3, 0.52), 13.75)
+place(mix, chord_notes(Am + [E5], 2.9, 0.40, felt_piano), 13.75)
+place(mix, harmonium(A4, 3.1, 0.15, rate=4.6, depth=0.34), 13.75)
+
+# === шина: конволюционный реверб + мягкий лимитер ===
+ir_len = int(2.6 * SR)
+ir_l = rng.standard_normal(ir_len).astype(np.float32) * np.exp(-np.linspace(0, 5.2, ir_len)).astype(np.float32)
+ir_r = rng.standard_normal(ir_len).astype(np.float32) * np.exp(-np.linspace(0, 5.9, ir_len)).astype(np.float32)
+ir_l = bandpass(ir_l, 140.0, 6800.0); ir_r = bandpass(ir_r, 140.0, 6800.0)
 ir_l /= np.max(np.abs(ir_l)); ir_r /= np.max(np.abs(ir_r))
 nfft = 1 << int(np.ceil(np.log2(len(mix) + ir_len)))
 big = np.fft.rfft(mix, nfft)
 wet_l = np.fft.irfft(big * np.fft.rfft(ir_l, nfft))[:len(mix)].astype(np.float32)
 wet_r = np.fft.irfft(big * np.fft.rfft(ir_r, nfft))[:len(mix)].astype(np.float32)
-left = mix + 0.20 * wet_l
-right = mix * 0.98 + 0.20 * wet_r
-left *= 0.90; right *= 0.90
-stereo = np.stack([left, right], axis=1)
-stereo = np.tanh(stereo * 1.02)
+mix_dc = mix - float(np.mean(mix))
+left = mix_dc + 0.17 * wet_l
+right = mix_dc * 0.97 + 0.17 * wet_r
+# «институтский» компрессор-тангенс: мягкое удовольствие без клиппинга
+stereo = np.tanh(np.stack([left, right], axis=1) * 1.22).astype(np.float32)
 peak = float(np.max(np.abs(stereo)))
-stereo = (stereo / peak * 0.94).astype(np.float32)
+stereo = stereo / peak * 0.89
 
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 sf.write(OUT, stereo, SR, format="WAV", subtype="PCM_16")

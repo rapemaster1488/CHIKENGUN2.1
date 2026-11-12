@@ -11,12 +11,19 @@
 // 7. Добавлена система стрельбы с рейкастами
 // ============================================================================
 
+#ifdef _WIN32
+#  ifndef WIN32_LEAN_AND_MEAN
+#    define WIN32_LEAN_AND_MEAN
+#  endif
+#  ifndef NOMINMAX
+#    define NOMINMAX
+#  endif
+#endif
+
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
 #include <cmath>
-#include <unistd.h> // readlink для поиска CoreData рядом с бинарником
-#include <sys/stat.h> // stat()/S_ISDIR для проверки папок ресурсов
 #include <cstring>    // strlen для программной техники
 
 // ВАЖНО: Urho3D/Math/Vector3.h подключается ДО всего остального, иначе
@@ -79,7 +86,11 @@
 
 #include <Urho3D/Input/Input.h>
 #include <Urho3D/Input/InputEvents.h>
-#include <Urho3D/Input/InputConstants.h>
+#if defined(__has_include)
+#  if __has_include(<Urho3D/Input/InputConstants.h>)
+#    include <Urho3D/Input/InputConstants.h>
+#  endif
+#endif
 
 #include <Urho3D/UI/UI.h>
 #include <Urho3D/UI/UIElement.h>
@@ -96,6 +107,7 @@
 #include "CyberSystems.h"
 #include "BanyaSim.h"
 #include "CasinoSim.h"
+#include "ArcadeGames.h"
 
 #include <Urho3D/IO/Log.h>
 #include <Urho3D/IO/File.h>
@@ -114,6 +126,27 @@
 #include <Urho3D/UI/Button.h>
 
 using namespace Urho3D;
+
+// Совместимость Urho3D 1.7.1 / 1.8 (GetInt, без IsAdded) и 1.9+ / master (GetI32, IsAdded)
+namespace {
+template <typename V, typename = void>
+struct UrhoVariantIntGetter {
+    static int Get(const V& v) { return v.GetInt(); }
+};
+template <typename V>
+struct UrhoVariantIntGetter<V, std::void_t<decltype(std::declval<const V&>().GetI32())>> {
+    static int Get(const V& v) { return static_cast<int>(v.GetI32()); }
+};
+inline int VarToInt(const Variant& v) { return UrhoVariantIntGetter<Variant>::Get(v); }
+
+inline bool RenderPathHasTag(const RenderPath* rp, const String& tag) {
+    if (!rp) return false;
+    for (unsigned i = 0; i < (unsigned)rp->commands_.Size(); ++i) {
+        if (rp->commands_[i].tag_ == tag) return true;
+    }
+    return false;
+}
+} // namespace
 
 // ============================================================================
 // Константы и настройки игры
@@ -401,7 +434,7 @@ private:
         compacted.Reserve(colliders_.Size());
         Vector<int> remap;
         remap.Resize(colliders_.Size());
-        for (unsigned i = 0; i < colliders_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)colliders_.Size(); ++i) {
             if (colliders_[i].tag == Collision::REMOVED) { remap[i] = -1; continue; }
             remap[i] = (int)compacted.Size();
             compacted.Push(colliders_[i]);
@@ -410,10 +443,10 @@ private:
             if (idx >= 0 && idx < (int)remap.Size()) idx = remap[(unsigned)idx];
             else idx = -1;
         };
-        for (unsigned i = 0; i < targets_.Size(); ++i) fix(targets_[i].colliderIdx_);
-        for (unsigned i = 0; i < enemies_.Size(); ++i) fix(enemies_[i].colliderIdx_);
-        for (unsigned i = 0; i < movingTargetsLite_.Size(); ++i) fix(movingTargetsLite_[i].colliderIdx_);
-        for (unsigned i = 0; i < barrels_.Size(); ++i) fix(barrels_[i].colliderIdx_);
+        for (unsigned i = 0; i < (unsigned)targets_.Size(); ++i) fix(targets_[i].colliderIdx_);
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) fix(enemies_[i].colliderIdx_);
+        for (unsigned i = 0; i < (unsigned)movingTargetsLite_.Size(); ++i) fix(movingTargetsLite_[i].colliderIdx_);
+        for (unsigned i = 0; i < (unsigned)barrels_.Size(); ++i) fix(barrels_[i].colliderIdx_);
         colliders_ = compacted;
         colliderGarbage_ = 0;
     }
@@ -450,7 +483,7 @@ private:
             }
         }
 
-        for (unsigned i = 0; i < colliders_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)colliders_.Size(); ++i) {
             const Lite::Collider& c = colliders_[i];
             if (c.tag == Collision::REMOVED || !(tagMask & Collision::Mask(static_cast<Collision::Tag>(c.tag)))) continue; // удалён
             float t = c.sphere ? Lite::RaySphere(origin, dir, c.center, c.half.x_)
@@ -474,7 +507,7 @@ private:
     }
     // Свободна ли точка для спавна (пересечение с AABB/сферами статики)
     bool IsPointFree(const Vector3& p, float radius) const {
-        for (unsigned i = 0; i < colliders_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)colliders_.Size(); ++i) {
             const Lite::Collider& c = colliders_[i];
             if (c.tag != Collision::STATIC) continue; // только статика: стены, колонны, ящики, платформы
             float dx = p.x_ - c.center.x_, dy = p.y_ - c.center.y_, dz = p.z_ - c.center.z_;
@@ -590,6 +623,7 @@ private:
     bool gameOver_ = false;
     SharedPtr<UIElement> gameOverPanel_;
     SharedPtr<Text> gameOverStatsText_;
+    String lastGameOverStats_;
 
     // === Game feel: hitmarker, низкое HP, трейсеры, снаряды врагов ===
     float hitMarkerTimer_ = 0.0f;       // >0 — показывать крестик попадания
@@ -616,7 +650,7 @@ private:
 
     // ===== Главное меню / 4K настройки / арена с волнами =====
     bool inMenu_ = true;            // игра стартует в главном меню (после 4K загрузочного экрана)
-    int menuSel_ = 0;               // 0 тир, 1 арена, 2 баня, 3 рулетка, 4 настройки, 5 выход
+    int menuSel_ = 0;               // 0 тир, 1 арена, 2 баня, 3 рулетка, 4 миниигры, 5 настройки, 6 выход
     bool inSettings_ = false;
     int settingsSel_ = 0;
     static constexpr int SETTINGS_ROW_COUNT = 14;
@@ -637,14 +671,6 @@ private:
     float uiScale_ = 1.0f;          // авто-масштаб интерфейса под 1080p / 1440p / 4K UHD (3840x2160 -> 2.0x)
     int S(float px) const { return Max(1, (int)(px * uiScale_ + 0.5f)); }
     int SF(int pt) const  { return Max(9, (int)(pt * uiScale_ + 0.5f)); }
-    static float EaseOutCubic(float t) {
-        float f = 1.0f - Clamp(t, 0.0f, 1.0f);
-        return 1.0f - f * f * f;
-    }
-    static float EaseOutExpo(float t) {
-        t = Clamp(t, 0.0f, 1.0f);
-        return t >= 1.0f ? 1.0f : 1.0f - powf(2.0f, -10.0f * t);
-    }
     // Текстуры, к которым применяется настройка фильтрации
     Vector<Texture*> anisoTextures_;
     float sfxVolume_ = 0.8f;
@@ -667,14 +693,6 @@ private:
     IntVector2 goBasePos_;   bool goBasePosSet_ = false;   // база для пульсации GAME OVER
     IntVector2 menuTitleBase_, menuPlateBase_, menuBarBase_;
     bool menuBasesSet_ = false;                              // базы параллакса меню
-    float menuEnterT_ = 0.0f;                                // вход меню: каскад строк + свет
-    Vector<IntVector2> menuItemBases_, menuRowBases_;        // базы строк меню для входа
-    SharedPtr<BorderImage> menuGlow_, menuSheen_;            // ореол за плашкой + блик-свип
-    // Веб-дизайн (index.html): глитч-заголовок, ореол, сканлайны, полоса
-    SharedPtr<Text> menuTitleGlitchA_, menuTitleGlitchB_;
-    SharedPtr<BorderImage> menuTitleGlow_;
-    Vector<SharedPtr<BorderImage>> menuScanlines_;
-    SharedPtr<BorderImage> menuScanBand_;
     Vector<UIElement*> menuRows_;                            // подложки строк меню (MenuRow0..3)
     SharedPtr<UIElement> settingsPanel_;
     Vector<SharedPtr<Text>> settingsItems_;
@@ -700,13 +718,22 @@ private:
         float recoilKick_ = 0.0f;       // визуальный «откат» стрелка
         float cryoSlowTimer_ = 0.0f;    // короткое замедление от CRYO LANCE
         float cryoSlowMul_ = 1.0f;
-        // === Куриная анимация (ходьба, клевки, взмахи) ===
+        // === Куриная анимация (ходьба, клевки, взмахи, выпад клювом) ===
         WeakPtr<Node> headNode_, wingLNode_, wingRNode_, legLNode_, legRNode_, tailNode_;
         float animPhase_ = 0.0f;
         float cluckTimer_ = 5.0f;        // случайное кудахтанье в простое
+        float lungeTimer_ = 0.0f;        // выпад клювом вперёд при ударе
         bool  enraged_ = false;          // фаза ярости Мега-Индюка (<50% HP)
     };
     Vector<EnemyData> enemies_;
+    struct EnemyCorpse {
+        SharedPtr<Node> node_;
+        float age_ = 0.0f;
+        float maxAge_ = 3.5f;
+        float fallSide_ = 1.0f;
+        float startY_ = 0.06f;
+    };
+    Vector<EnemyCorpse> corpses_;
     // enemyNodes_ убран: он держал SharedPtr на уже удалённых роботов (утечка узла на каждое убийство).
     // Живыми нодами владеет сцена, EnemyData хранит WeakPtr.
     // === Lite-мишени и Lite-осколки (без Bullet) ===
@@ -917,6 +944,8 @@ private:
     SharedPtr<UIElement>   banyaPanel_, banyaSceneBox_, banyaRiddleBox_, banyaEndBox_, banyaStatsBox_;
     SharedPtr<BorderImage> banyaHeatWash_, banyaAirWash_, banyaColdWash_, banyaEndTint_;
     SharedPtr<BorderImage> banyaStoveFire_, banyaStonesGlow_, banyaVenikVis_, banyaRoosterBody_, banyaRoosterComb_, banyaRoosterCrown_;
+    SharedPtr<BorderImage> banyaThermoFill_;
+    Vector<SharedPtr<BorderImage>> banyaSnowMotes_;
     SharedPtr<Text>        banyaRoosterEyesText_;
     SharedPtr<Text>        banyaTempText_, banyaMoodText_, banyaClockText_, banyaCaptionText_, banyaBadgeText_;
     SharedPtr<BorderImage> banyaBarSteam_, banyaBarFire_, banyaBarAir_, banyaBarLife_, banyaBarTime_;
@@ -931,8 +960,10 @@ private:
     SharedPtr<Text>        banyaStatsRunText_, banyaStatsAllText_;
     SharedPtr<BorderImage> banyaStatsCloseBtn_;
 
-    // === Нативная «Золотая рулетка» (только виртуальные фишки, без реальных денег) ===
+    // === 2.5 НАТИВНОЕ КАЗИНО [J] («Золотая Рулетка» + «Кибер-Слоты 777») И PIXEL ARCADE [K] (6 игр) ===
     bool casinoOpen_ = false;
+    bool casinoFromMenu_ = true;
+    bool casinoSlotsMode_ = false;
     Casino::Bet casinoBet_{};
     int casinoBalance_ = 1000;
     int casinoLastResult_ = -1;
@@ -940,10 +971,20 @@ private:
     int casinoWins_ = 0;
     int casinoLosses_ = 0;
     float casinoSpinTimer_ = 0.0f;
+    int slotReels_[3] = { Casino::SYM_SEVEN, Casino::SYM_ROOSTER, Casino::SYM_CROWN };
+    int slotPendingReels_[3] = { 0, 0, 0 };
+    Vector<int> casinoHistory_;
     SharedPtr<UIElement> casinoPanel_;
-    SharedPtr<BorderImage> casinoWheelCard_, casinoSpinButton_, casinoBetButton_, casinoChipButton_, casinoNumberButton_, casinoTopupButton_, casinoCloseButton_;
-    SharedPtr<Text> casinoTitleText_, casinoBalanceText_, casinoWheelText_, casinoBetText_, casinoResultText_, casinoStatsText_, casinoHelpText_;
+    SharedPtr<BorderImage> casinoWheelCard_, casinoSpinButton_, casinoBetButton_, casinoChipButton_, casinoNumberButton_, casinoTopupButton_, casinoCloseButton_, casinoModeButton_;
+    SharedPtr<Text> casinoTitleText_, casinoBalanceText_, casinoWheelText_, casinoBetText_, casinoResultText_, casinoStatsText_, casinoHelpText_, casinoHistoryText_;
 
+    Arcade::PixelArcadeSim arcadeSim_;
+    bool                   arcadeOpen_ = false;
+    bool                   arcadeFromMenu_ = false;
+    SharedPtr<UIElement>   arcadePanel_, arcadeCanvas_;
+    SharedPtr<Text>        arcadeTitleText_, arcadeScoreText_, arcadeHintText_, arcadeOverlayText_;
+    Vector<SharedPtr<BorderImage>> arcadeRectPool_;
+    Vector<SharedPtr<BorderImage>> arcadeGameTabs_;
     SharedPtr<Material> decalMat_;     // пулевые отверстия
     SharedPtr<Material> shockMat_;     // ударная волна взрыва
     SharedPtr<Material> shellMat_;     // латунные гильзы
@@ -1013,6 +1054,8 @@ private:
     Material* hdCrate_ = nullptr;
     Material* hdFeather_ = nullptr;
     Material* hdHazard_ = nullptr;
+    Material* hdBanyaLog_ = nullptr;
+    Material* hdBanyaRooster_ = nullptr;
     SharedPtr<Material> pbrBaseMat_;
     SharedPtr<Material> glowBaseMat_;
     SharedPtr<Material> critTracerMat_;
@@ -1081,8 +1124,6 @@ private:
     float loadingFadeAlpha_ = 1.0f;
     float loadProgress_ = 0.0f;
     float loadTargetProgress_ = 0.0f;
-    float loadProgressSmooth_ = 0.02f;   // плавный прогресс-бар (lerp к цели)
-    float loadEnterT_ = 0.0f;            // вход загрузки: панель проявляется 1.3 c
     float bootStageTimer_ = 0.0f;
     int loadStepIndex_ = 0;
     int loadingTipIdx_ = 0;
@@ -1099,19 +1140,11 @@ private:
     SharedPtr<BorderImage> loadingBarTrack_;
     SharedPtr<BorderImage> loadingBarFill_;
     SharedPtr<BorderImage> loadingBarShimmer_;
-    // Веб-дизайн бута (index.html): глитч-заголовок, ореолы, сканлайны,
-    // бегущая полоса, падающие перья, бегущая строка лоры
-    SharedPtr<Text> loadingTitleGlitchA_, loadingTitleGlitchB_;
-    SharedPtr<BorderImage> loadingTitleGlowGold_, loadingTitleGlowCyan_;
-    SharedPtr<Text> loadingTagline_, loadingMarquee_;
-    Vector<SharedPtr<BorderImage>> loadingScanlines_, loadingFeathers_;
-    Vector<float> loadingFeatherPhase_, loadingFeatherX_, loadingFeatherSpeed_;
-    SharedPtr<BorderImage> loadingScanBand_;
     Vector<SharedPtr<BorderImage>> loadingEmblemParts_;
     Vector<SharedPtr<Text>> loadingCheckRows_;
     Vector<String> loadSteps_;
 
-    // === 2.5.5 SPLASH INTRO: koch.studios → powered by fall.os → CHICHKENCUM 2.1 ===
+    // === 2.5.6 SPLASH INTRO: koch.studios -> powered by fall.os -> CHICHKENCUM 2.1 ===
     bool splashActive_ = false;
     int splashStage_ = 0;
     float splashTimer_ = 0.0f;
@@ -1123,9 +1156,12 @@ private:
     SoundSource* kochThemeSrc_ = nullptr;   // компонент временной сцены — владеется нодой
     SoundSource* splashSfxSrc_ = nullptr;
     SharedPtr<BorderImage> splashGlow_;
-    SharedPtr<BorderImage> splashHalo_;   // второй, мягкий ореол (больше + медленнее)
     SharedPtr<BorderImage> splashSheen_;
-    String splashFullText_;              // полный текст стадии (посимвольное открытие)
+    String splashFullText_;                 // полный текст стадии (посимвольное открытие)
+    SharedPtr<Text> splashMeasure_;         // скрытый измеритель ширины строки
+    Vector<SharedPtr<Text>> splashGlyphs_;  // посимвольно: ни одного скачка
+    Vector<Vector2> splashGlyphBase_;       // абсолютные базовые позиции глифов
+    Vector<int> splashGlyphIndex_;          // исходные индексы глифов (волна задержки)
 
     // Быстрый загрузочный оверлей десантирования при входе в режим (АРЕНА / ТИР)
     bool deployActive_ = false;
@@ -1156,7 +1192,7 @@ public:
 
     void QueuePendingRemove(Node* node, float ttl) {
         if (!node) return;
-        if (pendingRemoves_.Size() >= MAX_PENDING_REMOVES) {
+        if ((unsigned)pendingRemoves_.Size() >= MAX_PENDING_REMOVES) {
             if (pendingRemoves_[0].node_) pendingRemoves_[0].node_->Remove();
             pendingRemoves_.Erase(0);
         }
@@ -1168,7 +1204,7 @@ public:
 
     void AddTracer(Node* node, float ttl) {
         if (!node) return;
-        if (tracers_.Size() >= MAX_TRACERS) {
+        if ((unsigned)tracers_.Size() >= MAX_TRACERS) {
             if (tracers_[0].node_) tracers_[0].node_->Remove();
             tracers_.Erase(0);
         }
@@ -1180,7 +1216,7 @@ public:
 
     void AddShockwave(const ShockwaveData& wave) {
         if (!wave.node_) return;
-        if (shockwaves_.Size() >= MAX_SHOCKWAVES) {
+        if ((unsigned)shockwaves_.Size() >= MAX_SHOCKWAVES) {
             if (shockwaves_[0].node_) shockwaves_[0].node_->Remove();
             shockwaves_.Erase(0);
         }
@@ -1189,7 +1225,7 @@ public:
 
     void AddDebris(const DebrisData& debris) {
         if (!debris.node_) return;
-        if (debrisLite_.Size() >= MAX_DEBRIS) {
+        if ((unsigned)debrisLite_.Size() >= MAX_DEBRIS) {
             if (debrisLite_[0].node_) debrisLite_[0].node_->Remove();
             debrisLite_.Erase(0);
         }
@@ -1200,29 +1236,33 @@ public:
     // частом переключении «тир/арена»: TTL-очередь сама по себе ограничена,
     // но не должна держать старые SharedPtr до их естественного истечения.
     void ClearTransientEffects() {
-        for (unsigned i = 0; i < pendingRemoves_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)pendingRemoves_.Size(); ++i)
             if (pendingRemoves_[i].node_) pendingRemoves_[i].node_->Remove();
         pendingRemoves_.Clear();
 
-        for (unsigned i = 0; i < tracers_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)tracers_.Size(); ++i)
             if (tracers_[i].node_) tracers_[i].node_->Remove();
         tracers_.Clear();
 
-        for (unsigned i = 0; i < shockwaves_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)shockwaves_.Size(); ++i)
             if (shockwaves_[i].node_) shockwaves_[i].node_->Remove();
         shockwaves_.Clear();
 
-        for (unsigned i = 0; i < debrisLite_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)debrisLite_.Size(); ++i)
             if (debrisLite_[i].node_) debrisLite_[i].node_->Remove();
         debrisLite_.Clear();
 
-        for (unsigned i = 0; i < decals_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)decals_.Size(); ++i)
             if (decals_[i]) decals_[i]->Remove();
         decals_.Clear();
 
-        for (unsigned i = 0; i < floatingDmgs_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)floatingDmgs_.Size(); ++i)
             if (floatingDmgs_[i].label_) floatingDmgs_[i].label_->Remove();
         floatingDmgs_.Clear();
+
+        for (unsigned i = 0; i < (unsigned)corpses_.Size(); ++i)
+            if (corpses_[i].node_) corpses_[i].node_->Remove();
+        corpses_.Clear();
     }
 
     // После обновления сцены удаляем записи, чьи узлы были сняты другими
@@ -1254,8 +1294,23 @@ public:
     void Setup() override {
         LoadSettingsFile();
 
-        if (!engineParameters_.Contains(EP_RESOURCE_PREFIX_PATHS))
-            engineParameters_[EP_RESOURCE_PREFIX_PATHS] = ".;..;bin;../bin";
+        if (!engineParameters_.Contains(EP_RESOURCE_PREFIX_PATHS)) {
+            String prefixes = ".;..;bin;../bin";
+            if (auto* fs = GetSubsystem<FileSystem>()) {
+                String progDir = fs->GetProgramDir();
+                while (progDir.Length() > 1 && (progDir.Back() == '/' || progDir.Back() == '\\'))
+                    progDir.Resize(progDir.Length() - 1);
+                if (!progDir.Empty()) {
+                    prefixes = progDir + ";" + progDir + "/..;" + progDir + "/../share/chikengun;" +
+                               progDir + "/../Resources;" + prefixes;
+                }
+            }
+            if (const char* envPrefix = std::getenv("CHIKENGUN_RESOURCE_PREFIX_PATHS")) {
+                if (envPrefix[0] != '\0')
+                    prefixes = String(envPrefix) + ";" + prefixes;
+            }
+            engineParameters_[EP_RESOURCE_PREFIX_PATHS] = prefixes;
+        }
 
         engineParameters_[EP_WINDOW_TITLE] = "CHIKENGUN 2.5 — ПЕРО СУДЬБЫ (4K ULTRA)";
         engineParameters_[EP_HIGH_DPI] = true;
@@ -1322,58 +1377,69 @@ public:
         // затем добавляем CoreData как отдельный префикс.
         {
             ResourceCache* cache = GetSubsystem<ResourceCache>();
-            // Директория исполняемого файла
+            FileSystem* fs = GetSubsystem<FileSystem>();
+            // Директория исполняемого файла (кроссплатформенно через Urho3D FileSystem:
+            // Win32 GetModuleFileName / macOS _NSGetExecutablePath / Linux /proc/self/exe)
             String exeDir;
-            {
-                char link[4096];
-                ssize_t n = readlink("/proc/self/exe", link, sizeof(link) - 1);
-                if (n > 0) {
-                    link[n] = '\0';
-                    String exePath(link);
-                    exeDir = exePath.Substring(0, exePath.FindLast('/'));
-                }
+            if (fs) {
+                exeDir = fs->GetProgramDir();
+                while (exeDir.Length() > 1 && (exeDir.Back() == '/' || exeDir.Back() == '\\'))
+                    exeDir.Resize(exeDir.Length() - 1);
             }
-            auto dirOk = [](const String& p) -> bool {
-                struct stat st;
-                return !p.Empty() && stat(p.CString(), &st) == 0 && S_ISDIR(st.st_mode);
+            auto dirOk = [fs](const String& p) -> bool {
+                return fs && !p.Empty() && fs->DirExists(p);
             };
 
-            // 1) Корректный абсолютный путь к Data/
+            // 1) Корректный абсолютный путь к Data/ (проверяем наличие Materials и Fonts,
+            // чтобы частичный build/Data с одними Textures от CMake не затенял корневую Data/).
+            auto dataDirOk = [&dirOk](const String& p) -> bool {
+                return dirOk(p) && dirOk(p + "/Materials") && dirOk(p + "/Fonts");
+            };
             String goodData;
-            if (dirOk(exeDir + "/Data"))               goodData = exeDir + "/Data";        // build/Data
-            else if (dirOk(exeDir + "/../Data"))       goodData = exeDir + "/../Data";     // ../Data от build/
-            else if (dirOk("./Data"))                  goodData = "./Data";               // запуск из корня
-            else if (dirOk("../Data"))                 goodData = "../Data";              // запуск из build/
+            if (const char* envData = std::getenv("CHIKENGUN_DATA_DIR")) {
+                if (dataDirOk(String(envData))) goodData = String(envData);
+            }
+            if (goodData.Empty() && !exeDir.Empty()) {
+                if (dataDirOk(exeDir + "/Data"))                        goodData = exeDir + "/Data";
+                else if (dataDirOk(exeDir + "/../Data"))                goodData = exeDir + "/../Data";
+                else if (dataDirOk(exeDir + "/../share/chikengun/Data")) goodData = exeDir + "/../share/chikengun/Data";
+                else if (dataDirOk(exeDir + "/../Resources/Data"))      goodData = exeDir + "/../Resources/Data";
+            }
+            if (goodData.Empty() && dataDirOk("./Data"))                  goodData = "./Data";
+            else if (goodData.Empty() && dataDirOk("../Data"))            goodData = "../Data";
 
             // 2) Ставим правильный Data ПЕРВЫМ префиксом.
             //    Методы Get/SetResourcePrefixPaths в этой сборке private —
             //    но AddResourceDir(path, priority=0) вставляет путь перед
-            //    стандартным PRIORITY_LAST-записями Application, т.е. выше битого Data/.
+            //    стандартными PRIORITY_LAST-записями Application, т.е. выше битого Data/.
             if (!goodData.Empty()) {
+                cache->RemoveResourceDir(goodData);
                 cache->AddResourceDir(goodData, 0);
                 URHO3D_LOGINFO("Папка ресурсов добавлена (priority 0): " + goodData);
-
-            // УДАЛЕНО: на старте игра рекурсивно удаляла через system("find ... -delete")
-            // все .pfx не только у себя, но и в установленном Urho3D (включая bin/Data движка).
-            // Это необратимо ломало чужую установку движка ради подавления строчки в логе;
-            // пустые/битые .pfx теперь просто игнорируются (см. CreateParticleEffects).
             } else {
-                URHO3D_LOGWARNING("Папка Data/ не найдена ни рядом с бинарником, ни в cwd! Скопируй: cp -r ~/urho3d/bin/Data ./Data");
+                URHO3D_LOGWARNING("Папка Data/ не найдена ни рядом с бинарником, ни в cwd!");
+            }
+            if (!exeDir.Empty() && dirOk(exeDir + "/Data/Textures") && exeDir + "/Data" != goodData) {
+                cache->RemoveResourceDir(exeDir + "/Data");
+                cache->AddResourceDir(exeDir + "/Data", 0);
             }
 
-            // 3) CoreData: ищем рядом с Data и добавляем отдельным префиксом
+            // 3) CoreData: ищем через env, рядом с exe, в Nix/FHS share, macOS bundle и parent-каталогах
             Vector<String> coreCandidates;
-            if (!goodData.Empty())   coreCandidates.Push(goodData + "/CoreData");
+            if (const char* envCore = std::getenv("CHIKENGUN_COREDATA_DIR")) {
+                if (envCore[0] != '\0') coreCandidates.Push(String(envCore));
+            }
             if (!exeDir.Empty()) {
                 coreCandidates.Push(exeDir + "/CoreData");
                 coreCandidates.Push(exeDir + "/../CoreData");
-                coreCandidates.Push(exeDir + "/../../bin/CoreData");
+                coreCandidates.Push(exeDir + "/../share/chikengun/CoreData");
+                coreCandidates.Push(exeDir + "/../Resources/CoreData");
             }
-            coreCandidates.Push("./Data/CoreData");
-            coreCandidates.Push("../Data/CoreData");
+            if (!goodData.Empty())   coreCandidates.Push(goodData + "/CoreData");
             coreCandidates.Push("./CoreData");
+            coreCandidates.Push("../CoreData");
             bool coreAdded = false;
-            for (unsigned i = 0; i < coreCandidates.Size(); ++i) {
+            for (unsigned i = 0; i < (unsigned)coreCandidates.Size(); ++i) {
                 if (dirOk(coreCandidates[i])) {
                     cache->AddResourceDir(coreCandidates[i]);
                     URHO3D_LOGINFO("CoreData найден и добавлен: " + coreCandidates[i]);
@@ -1382,40 +1448,7 @@ public:
                 }
             }
             if (!coreAdded)
-                URHO3D_LOGWARNING("CoreData не найден! Положи папку: mkdir -p Data && cp -r ~/urho3d/bin/CoreData Data/CoreData (из корня проекта)");
-
-            // 4) Дополнительно регистрируем bin/Data без вызова внешних shell-команд (system),
-            //    чтобы ресурсы находились при запуске из корня, build/ или bin/.
-            const char* extraDataDirs[] = { "./bin/Data", "../bin/Data" };
-            for (const char* ed : extraDataDirs) {
-                if (dirOk(ed)) {
-                    cache->AddResourceDir(ed);
-                    break;
-                }
-            }
-            if (!exeDir.Empty() && dirOk(exeDir + "/../bin/Data"))
-                cache->AddResourceDir(exeDir + "/../bin/Data");
-
-            // Текстуры HD подключаются отдельным текстурным путём, если лежат в
-            // bin/Data/TexturesHD (генерируются tools/gen_textures.py).
-            {
-                Vector<String> texHdCandidates;
-                if (!goodData.Empty())   texHdCandidates.Push(goodData + "/TexturesHD");
-                if (!exeDir.Empty())     texHdCandidates.Push(exeDir + "/../bin/Data/TexturesHD");
-                texHdCandidates.Push("./bin/Data/TexturesHD");
-                texHdCandidates.Push("../bin/Data/TexturesHD");
-                auto fileOk = [](const String& p) -> bool {
-                    struct stat st; return !p.Empty() && stat(p.CString(), &st) == 0;
-                };
-                for (unsigned i = 0; i < texHdCandidates.Size(); ++i) {
-                    if (fileOk(texHdCandidates[i] + "/StoneHDDiffuse.png")) {
-                        // AddTextureDir не существует — кладём папку в общий реестр ресурсов
-                        cache->AddResourceDir(texHdCandidates[i], 1);
-                        URHO3D_LOGINFO("TexturesHD подключён: " + texHdCandidates[i]);
-                        break;
-                    }
-                }
-            }
+                URHO3D_LOGWARNING("CoreData не найден! Убедитесь, что каталог CoreData/ находится в корне проекта или рядом с бинарником.");
         }
 
         // Пользовательские настройки графики/звука (settings.ini) + 4K движок
@@ -1435,12 +1468,9 @@ public:
         loadStepIndex_ = 0;
         loadProgress_ = 0.02f;
         loadTargetProgress_ = 0.12f;
-        loadProgressSmooth_ = 0.02f;
-        loadEnterT_ = 0.0f;
         bootStageTimer_ = 0.0f;
 
-        // 2.5.5: эпичная интро-заставка koch.studios → powered by fall.os → CHICHKENCUM 2.1
-        // (рисует поверх загрузочного экрана, музыка перетекает в фазу загрузки)
+        // 2.5.6: эпичная интро-заставка koch.studios -> powered by fall.os -> CHICHKENCUM 2.1
         CreateSplashIntro();
     }
 
@@ -1465,20 +1495,22 @@ private:
         // ВАЖНО: отключаем аппаратный GL_FRAMEBUFFER_SRGB на бэкбафере!
         // Раньше SetSRGB(true) высветлял все тёмные плашки UI в «молоко» и давал белый экран в HDR.
         // Теперь тональная компрессия ACES Filmic и цветокоррекция выполняются шейдером Cinema4K.glsl!
+        static const int kAniso[3] = { 1, 4, 16 };
+        static const unsigned kShadowSizes[3] = { 1024, 2048, 4096 };
         graphics->SetSRGB(false);
-        graphics->SetDefaultTextureAnisotropy((gfxAnisoIdx_ >= 3) ? 16 : (gfxAnisoIdx_ == 2 ? 8 : 2));
+        graphics->SetDefaultTextureAnisotropy((unsigned)kAniso[Clamp(gfxAnisoIdx_, 0, 2)]);
         graphics->SetDefaultTextureFilterMode((gfxAnisoIdx_ >= 2) ? FILTER_ANISOTROPIC
                                             : (gfxAnisoIdx_ == 1 ? FILTER_TRILINEAR : FILTER_BILINEAR));
 
         renderer->SetTextureQuality(QUALITY_MAX);
-        renderer->SetMaterialQuality((gfxQualityIdx_ >= 2) ? QUALITY_MAX
+        renderer->SetMaterialQuality((gfxQualityIdx_ >= 2) ? QUALITY_HIGH
                                    : (gfxQualityIdx_ == 1 ? QUALITY_MEDIUM : QUALITY_LOW));
-        renderer->SetSpecularLighting(true);
+        renderer->SetSpecularLighting(gfxQualityIdx_ >= 1);
         renderer->SetDynamicInstancing(true);
-        renderer->SetDrawShadows(gfxShadowIdx_ > 0);
-        renderer->SetShadowMapSize(gfxShadowIdx_ >= 3 ? 8192 : (gfxShadowIdx_ == 2 ? 4096 : 2048));
-        renderer->SetShadowQuality(SHADOWQUALITY_PCF_24BIT);
-        renderer->SetShadowSoftness(1.25f);
+        renderer->SetDrawShadows(gfxQualityIdx_ > 0);
+        renderer->SetShadowMapSize(kShadowSizes[Clamp(gfxShadowIdx_, 0, 2)]);
+        renderer->SetShadowQuality(gfxQualityIdx_ >= 2 ? SHADOWQUALITY_PCF_24BIT : SHADOWQUALITY_PCF_16BIT);
+        renderer->SetShadowSoftness(gfxQualityIdx_ >= 3 ? 1.15f : 1.0f);
         renderer->SetHDRRendering(gfxHdr_ || gfxGlowIdx_ >= 1);
     }
 
@@ -1493,6 +1525,7 @@ private:
             font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.sdf");
         }
     }
 
@@ -1549,9 +1582,13 @@ private:
         if (!bossRoarSound_) bossRoarSound_ = cache->GetResource<Sound>("Sounds/RoosterBoss.wav");
         waveStartSound_ = cache->GetResource<Sound>("Sounds/Wave_Start.wav");
         if (!waveStartSound_) waveStartSound_ = cache->GetResource<Sound>("Sounds/WaveStart.wav");
+    }
 
+    void StartMusicPlayback() {
+        auto* cache = GetSubsystem<ResourceCache>();
+        if (!cache || !cameraNode_ || musicSource_ || kochThemeSrc_) return;
         Sound* music = cache->GetResource<Sound>("Music/Game_Theme_Loop.ogg");
-        if (music && cameraNode_ && !musicSource_ && !kochThemeSrc_) {   // интро-тема ещё играет — основная петля вступит после неё
+        if (music) {
             music->SetLooped(true);
             musicSource_ = cameraNode_->CreateComponent<SoundSource>();
             if (musicSource_) {
@@ -1577,7 +1614,6 @@ private:
         LoadAudioAssets();
         return true;
     }
-
     // Хранилище и O(1)-кэш дедупликации процедурно клонированных материалов (фикс утечки при долгой игре)
     Vector<SharedPtr<Material>> tintedMatStore_;
     HashMap<unsigned, SharedPtr<Material>> matCache_;
@@ -1605,10 +1641,10 @@ private:
         }
     }
 
-    SharedPtr<Material> MakeTinted(const SharedPtr<Texture>& diff, const SharedPtr<Texture>& norm, const Color& c) {
+    SharedPtr<Material> MakeTinted(Texture* diff, Texture* norm, const Color& c) {
         Color nc = NormByteColor(c);
         uint64_t h = 1469598103934665603ULL;
-        const void* dp = diff.Get(); const void* np = norm.Get();
+        const void* dp = diff; const void* np = norm;
         h = Lite::HashMixBytes(h, &dp, sizeof(dp));
         h = Lite::HashMixBytes(h, &np, sizeof(np));
         h = Lite::HashFloatQ(h, nc.r_); h = Lite::HashFloatQ(h, nc.g_);
@@ -1706,8 +1742,8 @@ private:
             m->SetShaderParameter("MatDiffColor", Variant(col));
             m->SetShaderParameter("Roughness", Variant(extraRough));
             m->SetShaderParameter("Metallic", Variant(0.0f));
-            m->SetShaderParameter("UOffset", Variant(Vector4(3.0f, 0, 0, 0)));
-            m->SetShaderParameter("VOffset", Variant(Vector4(0, 3.0f, 0, 0)));
+            m->SetShaderParameter("UOffset", Variant(Vector4(2.0f, 0, 0, 0)));
+            m->SetShaderParameter("VOffset", Variant(Vector4(0, 2.0f, 0, 0)));
             tintedMatStore_.Push(m);
             return m;
         }
@@ -1772,49 +1808,26 @@ private:
             fallbackMat_ = fb.Get();
         }
 
-        // --- 4K PBR материалы поверхности арены ---
-        // Material.xml can still be returned even when one of its image
-        // resources failed to decode.  Do not keep such a half-loaded material:
-        // older Urho3D builds may dereference its missing texture during the
-        // first render pass instead of failing gracefully.
-        auto textureSetOk = [cache](const char* diffuse, const char* normal, const char* roughMetal) {
-            const char* names[] = { diffuse, normal, roughMetal };
-            for (const char* name : names) {
-                if (!cache->GetResource<Texture2D>(String(name))) return false;
-            }
-            return true;
-        };
-        auto loadPbrMaterial = [&](const char* materialName, const char* diffuse,
-                                   const char* normal, const char* roughMetal) -> Material* {
-            Material* material = cache->GetResource<Material>(String(materialName));
-            if (!material || !textureSetOk(diffuse, normal, roughMetal)) {
-                URHO3D_LOGWARNING(String("PBR material disabled (missing/invalid texture): ") + materialName);
+        // --- 4K PBR материалы поверхности арены (проверка PNG перед активацией) ---
+        auto loadPbrMaterial = [cache](const char* materialName, const char* diffuse,
+                                       const char* normal, const char* roughMetal) -> Material* {
+            if (!cache->GetResource<Texture2D>(String(diffuse)) ||
+                !cache->GetResource<Texture2D>(String(normal)) ||
+                !cache->GetResource<Texture2D>(String(roughMetal))) {
+                URHO3D_LOGWARNING("Отсутствует или повреждена текстура PBR для " + String(materialName) + " — используем fallback-материал");
                 return nullptr;
             }
-            return material;
+            return cache->GetResource<Material>(String(materialName));
         };
-
-        hdStone_ = loadPbrMaterial("Materials/Game/StoneHD.xml",
-                                   "Textures/StoneHDDiffuse.png", "Textures/StoneHDNormal.png",
-                                   "Textures/StoneHDRoughMetal.png");
-        hdFloor_ = loadPbrMaterial("Materials/Game/FloorTile.xml",
-                                   "Textures/FloorTileDiffuse.png", "Textures/FloorTileNormal.png",
-                                   "Textures/FloorTileRoughMetal.png");
-        hdPanel_ = loadPbrMaterial("Materials/Game/MetalPanel.xml",
-                                   "Textures/MetalPanelDiffuse.png", "Textures/MetalPanelNormal.png",
-                                   "Textures/MetalPanelRoughMetal.png");
-        hdMetal_ = loadPbrMaterial("Materials/Game/BrushedMetal.xml",
-                                   "Textures/BrushedMetalDiffuse.png", "Textures/BrushedMetalNormal.png",
-                                   "Textures/BrushedMetalRoughMetal.png");
-        hdCrate_ = loadPbrMaterial("Materials/Game/CrateWood.xml",
-                                   "Textures/CrateWoodDiffuse.png", "Textures/CrateWoodNormal.png",
-                                   "Textures/CrateWoodRoughMetal.png");
-        hdFeather_ = loadPbrMaterial("Materials/Game/FeatherPBR.xml",
-                                     "Textures/FeatherPBRDiffuse.png", "Textures/FeatherPBRNormal.png",
-                                     "Textures/FeatherPBRRoughMetal.png");
-        hdHazard_ = loadPbrMaterial("Materials/Game/HazardMetal.xml",
-                                    "Textures/HazardMetalDiffuse.png", "Textures/HazardMetalNormal.png",
-                                    "Textures/HazardMetalRoughMetal.png");
+        hdStone_   = loadPbrMaterial("Materials/Game/StoneHD.xml",      "Textures/StoneHDDiffuse.png",      "Textures/StoneHDNormal.png",      "Textures/StoneHDRoughMetal.png");
+        hdFloor_   = loadPbrMaterial("Materials/Game/FloorTile.xml",    "Textures/FloorTileDiffuse.png",    "Textures/FloorTileNormal.png",    "Textures/FloorTileRoughMetal.png");
+        hdPanel_   = loadPbrMaterial("Materials/Game/MetalPanel.xml",   "Textures/MetalPanelDiffuse.png",   "Textures/MetalPanelNormal.png",   "Textures/MetalPanelRoughMetal.png");
+        hdMetal_   = loadPbrMaterial("Materials/Game/BrushedMetal.xml", "Textures/BrushedMetalDiffuse.png", "Textures/BrushedMetalNormal.png", "Textures/BrushedMetalRoughMetal.png");
+        hdCrate_   = loadPbrMaterial("Materials/Game/CrateWood.xml",    "Textures/CrateWoodDiffuse.png",    "Textures/CrateWoodNormal.png",    "Textures/CrateWoodRoughMetal.png");
+        hdFeather_ = loadPbrMaterial("Materials/Game/FeatherPBR.xml",   "Textures/FeatherPBRDiffuse.png",   "Textures/FeatherPBRNormal.png",   "Textures/FeatherPBRRoughMetal.png");
+        hdHazard_  = loadPbrMaterial("Materials/Game/HazardMetal.xml",  "Textures/HazardMetalDiffuse.png",  "Textures/HazardMetalNormal.png",  "Textures/HazardMetalRoughMetal.png");
+        hdBanyaLog_ = loadPbrMaterial("Materials/Game/BanyaLog.xml",    "Textures/BanyaLogDiffuse.png",     "Textures/BanyaLogNormal.png",     "Textures/BanyaLogRoughMetal.png");
+        hdBanyaRooster_ = loadPbrMaterial("Materials/Game/BanyaRooster.xml", "Textures/BanyaRoosterDiffuse.png", "Textures/BanyaRoosterNormal.png", "Textures/BanyaRoosterRoughMetal.png");
         skyTexture_ = cache->GetResource<Texture2D>("Textures/SkyDay.png");
         EnsureSkyCubemap();
 
@@ -1827,6 +1840,8 @@ private:
                 "Textures/CrateWoodDiffuse.png",    "Textures/CrateWoodNormal.png",    "Textures/CrateWoodRoughMetal.png",
                 "Textures/FeatherPBRDiffuse.png",   "Textures/FeatherPBRNormal.png",   "Textures/FeatherPBRRoughMetal.png",
                 "Textures/HazardMetalDiffuse.png",  "Textures/HazardMetalNormal.png",  "Textures/HazardMetalRoughMetal.png",
+                "Textures/BanyaLogDiffuse.png",     "Textures/BanyaLogNormal.png",     "Textures/BanyaLogRoughMetal.png",
+                "Textures/BanyaRoosterDiffuse.png", "Textures/BanyaRoosterNormal.png", "Textures/BanyaRoosterRoughMetal.png",
                 "Textures/SkyDay.png"
             };
             anisoTextures_.Clear();
@@ -1847,12 +1862,14 @@ private:
                 m->SetShaderParameter("UOffset", Variant(Vector4(tiles, 0, 0, 0)));
                 m->SetShaderParameter("VOffset", Variant(Vector4(0, tiles, 0, 0)));
             };
-            tileMat(hdStone_, 10.0f);   // 4K бетон/базальт
-            tileMat(hdFloor_, 1.25f);   // у пола уже UV 48x48 в CustomGeometry -> плитка ~35 см в 4K!
-            tileMat(hdPanel_, 6.0f);    // 4K титановые бронепанели
-            tileMat(hdMetal_, 4.0f);    // 4K шлифованная сталь
+            tileMat(hdStone_, 1.5f);    // 4K архитектурный бетон/базальт 2x2 без мыльного перетайлинга
+            tileMat(hdFloor_, 0.90f);   // у пола UV 48x48 в CustomGeometry -> 2x2 сланцевые плиты ~3 м!
+            tileMat(hdPanel_, 1.5f);    // 4K титановые бронепанели с читаемыми жалюзи и лючками
+            tileMat(hdMetal_, 2.0f);    // 4K шлифованная оружейная сталь
             tileMat(hdCrate_, 1.0f);    // 4K дубовые ящики со стальной оковкой
             tileMat(hdHazard_, 1.0f);   // 4K взрывоопасные бочки
+            tileMat(hdBanyaLog_, 1.5f);     // 4K липовый сруб баньки
+            tileMat(hdBanyaRooster_, 1.5f); // 4K оперение Кочета Смотрящего
         }
 
         // Мишени тира: насыщенный PBR с лёгким HDR-само-свечением, чтобы читались на любой дистанции
@@ -1883,7 +1900,17 @@ private:
     void RefreshWeaponMaterials() {
         weaponTintMats_.Clear();
         weaponAccentMat_ = nullptr;
-        weaponDarkMat_ = MakePBR(Color(30, 33, 40), 0.34f, 0.78f); // вороненая оружейная сталь
+        if (hdMetal_) {
+            SharedPtr<Material> dm = hdMetal_->Clone();
+            dm->SetShaderParameter("MatDiffColor", Variant(Color(0.24f, 0.27f, 0.33f, 1.0f)));
+            dm->SetShaderParameter("Roughness", Variant(0.08f));
+            dm->SetShaderParameter("Metallic", Variant(-0.08f));
+            dm->SetShaderParameter("UOffset", Variant(Vector4(2.0f, 0, 0, 0)));
+            dm->SetShaderParameter("VOffset", Variant(Vector4(0, 2.0f, 0, 0)));
+            weaponDarkMat_ = dm;
+        } else {
+            weaponDarkMat_ = MakePBR(Color(30, 33, 40), 0.34f, 0.78f); // вороненая оружейная сталь
+        }
         const SkinDef& skin = SKIN_DEFS[Clamp(currentSkin_, 0, SKIN_COUNT - 1)];
         Color skinCol = NormByteColor(skin.color);
         Color accCol  = NormByteColor(skin.accent);
@@ -1897,11 +1924,21 @@ private:
                     Lerp(base.g_, skinCol.g_, 0.72f),
                     Lerp(base.b_, skinCol.b_, 0.72f), 1.0f);
             Color emi = skin.emissive ? Color(c.r_ * 0.22f, c.g_ * 0.22f, c.b_ * 0.22f) : Color::BLACK;
-            SharedPtr<Material> m = MakePBR(c, skin.roughness, skin.metallic, emi);
-            // Накладываем 4K карту микрошлифовки оружейного металла (normal) при наличии
-            auto* cache = GetSubsystem<ResourceCache>();
-            if (Texture2D* bn = cache->GetResource<Texture2D>("Textures/BrushedMetalNormal.png")) {
-                m->SetTexture(TU_NORMAL, bn);
+            SharedPtr<Material> m;
+            if (hdMetal_) {
+                // Клонируем PBR-материал шлифованной стали: реальный Diff + Normal + RoughMetal в руках!
+                m = hdMetal_->Clone();
+                m->SetShaderParameter("MatDiffColor", Variant(Color(
+                    Clamp(c.r_ * 1.25f, 0.05f, 1.0f),
+                    Clamp(c.g_ * 1.25f, 0.05f, 1.0f),
+                    Clamp(c.b_ * 1.25f, 0.05f, 1.0f), 1.0f)));
+                m->SetShaderParameter("MatEmissiveColor", Variant(emi));
+                m->SetShaderParameter("Roughness", Variant(Clamp(skin.roughness - 0.26f, -0.22f, 0.65f)));
+                m->SetShaderParameter("Metallic", Variant(Clamp(skin.metallic - 0.90f, -0.88f, 0.08f)));
+                m->SetShaderParameter("UOffset", Variant(Vector4(2.0f, 0, 0, 0)));
+                m->SetShaderParameter("VOffset", Variant(Vector4(0, 2.0f, 0, 0)));
+            } else {
+                m = MakePBR(c, skin.roughness, skin.metallic, emi);
             }
             weaponTintMats_.Push(m);
         }
@@ -1914,25 +1951,21 @@ private:
     void CreateParticleEffects() {
         auto* cache = GetSubsystem<ResourceCache>();
 
-        // Ищем НАСТОЯЩИЙ валидный pfx: сначала Spark.pfx из Data проекта,
-        // затем стандартные эффекты движка (Urho3D bin/Data/Particle/*).
-        // Пустые/битые файлы дают "unknown resource type" и опасны для эмиттера.
         static const char* kSparkCandidates[] = {
-            "Particle/Spark.pfx", "Particle/SparkBig.pfx",
-            "Particle/Fireworks.pfx", "Particle/ExplosionBig.pfx",
-            "Particle/Torch.pfx", "Particle/Flame.pfx"
+            "Particle/Burst.xml", "Particle/Fire.xml", "Particle/SnowExplosionBig.xml",
+            "Particle/Spark.pfx", "Particle/SparkBig.pfx", "Particle/ExplosionBig.pfx"
         };
         for (const char* p : kSparkCandidates) {
             ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
-            // Валидность проверяем по числу техник (GetTechnique у ParticleEffect отсутствует)
-            if (e && !e->GetName().Empty()) { sparkEffect_ = e; break; }
+            if (e && !e->GetName().Empty() && e->GetMaterial() != nullptr) { sparkEffect_ = e; break; }
         }
         static const char* kSmokeCandidates[] = {
-            "Particle/Smoke.pfx", "Particle/Mist.pfx", "Particle/Dust.pfx"
+            "Particle/Dust.xml", "Particle/SmokeStack.xml", "Particle/SnowExplosionFade.xml",
+            "Particle/Smoke.pfx", "Particle/Dust.pfx", "Particle/Mist.pfx"
         };
         for (const char* p : kSmokeCandidates) {
             ParticleEffect* e = cache->GetResource<ParticleEffect>(String(p));
-            if (e && !e->GetName().Empty()) { smokeEffect_ = e; break; }
+            if (e && !e->GetName().Empty() && e->GetMaterial() != nullptr) { smokeEffect_ = e; break; }
         }
 
         // Если ни один .pfx не загрузился (Data неполный / битые файлы), строим
@@ -2129,7 +2162,7 @@ private:
         Vector3 camPos = cameraNode_->GetPosition();
         Vector3 feet(camPos.x_, camPos.y_ - eyeHeight_, camPos.z_);
 
-        for (unsigned i = 0; i < jumpPads_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)jumpPads_.Size(); ++i) {
             JumpPadData& jp = jumpPads_[i];
             if (jp.ringNode_) {
                 float h = 0.36f + 0.18f * (0.5f + 0.5f * sinf(timeAcc_ * 4.5f + jp.phase_));
@@ -2215,7 +2248,7 @@ private:
 
         // Мощный взрыв по площади (радиус 9.5 м, урон до 185 + цепная реакция соседних бочек!)
         const float rad = 9.5f;
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             if (!enemies_[i].alive_ || !enemies_[i].node_) continue;
             float d = (enemies_[i].node_->GetPosition() - center).Length();
             if (d < rad) {
@@ -2224,7 +2257,7 @@ private:
                 DamageEnemy(enemies_[i], dmg);
             }
         }
-        for (unsigned i = 0; i < targets_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)targets_.Size(); ++i) {
             if (!targets_[i].isActive_ || !targets_[i].node_) continue;
             float d = (targets_[i].node_->GetPosition() - center).Length();
             if (d < rad) {
@@ -2237,7 +2270,7 @@ private:
             if (pd < rad * 0.75f) DamagePlayer(55.0f * (1.0f - pd / (rad * 0.75f)));
         }
         // Цепная реакция по соседним бочкам
-        for (unsigned i = 0; i < barrels_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)barrels_.Size(); ++i) {
             if (barrels_[i].exploded_) continue;
             float d = (barrels_[i].home_ - center).Length();
             if (d < rad * 0.85f) {
@@ -2248,7 +2281,7 @@ private:
     }
 
     void UpdateExplosiveBarrels(float dt) {
-        for (unsigned i = 0; i < barrels_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)barrels_.Size(); ++i) {
             ExplosiveBarrel& eb = barrels_[i];
             if (eb.exploded_) {
                 eb.respawn_ -= dt;
@@ -2510,7 +2543,18 @@ private:
         
         StaticModel* model = wallNode->CreateComponent<StaticModel>();
         model->SetModel(boxModel_);
-        model->SetMaterial(stoneMaterial_);
+        Material* wallMat = stoneMaterial_;
+        if (stoneMaterial_ && Max(scale.x_, scale.z_) > 20.0f) {
+            // Пропорциональный тайлинг для 256-метровых стен без горизонтального растягивания плит
+            SharedPtr<Material> wm = stoneMaterial_->Clone();
+            float len = Max(scale.x_, scale.z_);
+            float uTiles = Max(1.0f, floorf(len / Max(4.0f, scale.y_) + 0.5f));
+            wm->SetShaderParameter("UOffset", Variant(Vector4(uTiles, 0, 0, 0)));
+            wm->SetShaderParameter("VOffset", Variant(Vector4(0, 1.0f, 0, 0)));
+            tintedMatStore_.Push(wm);
+            wallMat = wm.Get();
+        }
+        model->SetMaterial(wallMat);
         
         // Физика: Lite-коллайдер (половина scale = half-extents)
         AddBoxCollider(position, scale * 0.5f);
@@ -2526,35 +2570,56 @@ private:
 
         SharedPtr<Material> neonCyan = MakeTinted(nullptr, nullptr, Color(40, 220, 255));
         SharedPtr<Material> neonPink = MakeTinted(nullptr, nullptr, Color(255, 70, 140));
+        SharedPtr<Material> neonGold = MakeHDRGlow(Color(2.2f, 1.65f, 0.25f, 1.0f));
 
-        // Универсальный «блок»: визуал + коллайдер
+        // Универсальный «блок»: визуал (с авто-подгонкой пропорций UV без растяжения!) + коллайдер
         auto block = [this](const Vector3& pos, const Vector3& size, Material* mat, bool collide = true) {
             Node* n = scene_->CreateChild("Block");
             n->SetPosition(pos);
             n->SetScale(size);
             StaticModel* sm = n->CreateComponent<StaticModel>();
             sm->SetModel(boxModel_);
-            sm->SetMaterial(mat ? mat : fallbackMat_);
+            Material* useMat = mat ? mat : fallbackMat_;
+            if (mat && (mat == stoneMaterial_ || mat == metalMaterial_ || mat == hdPanel_)) {
+                float horiz = Max(size.x_, size.z_);
+                if (horiz > size.y_ * 2.2f || size.y_ > horiz * 2.2f) {
+                    float unit = Max(1.6f, Min(horiz, size.y_));
+                    float uT = Clamp(floorf(horiz / unit + 0.5f), 1.0f, 24.0f);
+                    float vT = Clamp(floorf(size.y_ / unit + 0.5f), 1.0f, 12.0f);
+                    SharedPtr<Material> bm = mat->Clone();
+                    bm->SetShaderParameter("UOffset", Variant(Vector4(uT, 0, 0, 0)));
+                    bm->SetShaderParameter("VOffset", Variant(Vector4(0, vT, 0, 0)));
+                    tintedMatStore_.Push(bm);
+                    useMat = bm.Get();
+                }
+            }
+            sm->SetMaterial(useMat);
             sm->SetCastShadows(true);
             if (collide) AddBoxCollider(pos, size * 0.5f);
             return n;
         };
 
-        // ------------------------- центральная площадь -------------------------
+        // ------------------------- центральная площадь 2.5 «ПЕРО СУДЬБЫ» ----
         // Намеренно БЕЗ высокой платформы: враги не умеют запрыгивать (у них фиксированная
         // высота и выталкивание), поэтому подиум стал бы «безопасной точкой», откуда
         // игрок безнаказанно расстреливает арену. Вместо него — открытая площадь
-        // с голограммой и четырьмя колоннами-укрытиями.
+        // с ритуальным двойным кольцом (циан + золото), 4 световыми полосами и колоннами.
         Node* plaza = scene_->CreateChild("Plaza");
         for (int ring = 0; ring < 2; ++ring) {
             Node* disc = plaza->CreateChild("Ring");
-            disc->SetPosition(Vector3(0, 0.03f + (float)ring * 0.002f, 0));
-            disc->SetScale(Vector3(9.0f - (float)ring * 3.0f, 0.03f, 9.0f - (float)ring * 3.0f));
+            disc->SetPosition(Vector3(0, 0.03f + (float)ring * 0.004f, 0));
+            disc->SetScale(Vector3(9.6f - (float)ring * 3.2f, 0.03f, 9.6f - (float)ring * 3.2f));
             StaticModel* dm = disc->CreateComponent<StaticModel>();
             dm->SetModel(cylModel_ ? cylModel_ : boxModel_);
-            dm->SetMaterial(ring == 0 ? neonCyan.Get() : neonPink.Get());
+            dm->SetMaterial(ring == 0 ? neonCyan.Get() : neonGold.Get());
             dm->SetCastShadows(false);
         }
+        // Четыре неоновые взлётные полосы от центра по сторонам света
+        block(Vector3( 8.5f, 0.03f, 0.0f), Vector3(7.0f, 0.02f, 0.35f), neonCyan.Get(), false);
+        block(Vector3(-8.5f, 0.03f, 0.0f), Vector3(7.0f, 0.02f, 0.35f), neonCyan.Get(), false);
+        block(Vector3(0.0f, 0.03f,  8.5f), Vector3(0.35f, 0.02f, 7.0f), neonGold.Get(), false);
+        block(Vector3(0.0f, 0.03f, -8.5f), Vector3(0.35f, 0.02f, 7.0f), neonGold.Get(), false);
+
         // Колонны-укрытия: 4 штуки по диагоналям, с неоновым поясом
         for (int i = 0; i < 4; ++i) {
             float ang = 45.0f + (float)i * 90.0f;
@@ -2564,6 +2629,17 @@ private:
             block(cp + Vector3(0, 2.4f, 0), Vector3(1.9f, 0.14f, 1.9f),
                   (i % 2) ? neonPink.Get() : neonCyan.Get(), false);
             block(cp + Vector3(0, -2.4f, 0), Vector3(1.9f, 0.14f, 1.9f), neonCyan.Get(), false);
+        }
+
+        // Четыре жёлтых hazard-ежа на ближних диагоналях (перенос из 2.5 «Перо Судьбы»)
+        const Vector3 hazards[] = {
+            Vector3( 15.0f, 0.7f,  15.0f), Vector3(-15.0f, 0.7f,  15.0f),
+            Vector3( 15.0f, 0.7f, -15.0f), Vector3(-15.0f, 0.7f, -15.0f)
+        };
+        for (const auto& hpos : hazards) {
+            Material* hMat = hdHazard_ ? hdHazard_ : metalMaterial_;
+            block(hpos, Vector3(1.4f, 1.4f, 1.4f), hMat, true);
+            block(hpos + Vector3(0.0f, 0.78f, 0.0f), Vector3(1.52f, 0.14f, 1.52f), neonGold.Get(), false);
         }
 
         // ------------------------- кольцо укрытий -----------------------------
@@ -2656,12 +2732,14 @@ private:
                 (i % 2) ? neonCyan.Get() : neonPink.Get());
         }
 
-        // --- Трубы по стенам: три уровня, два цвета ---
+        // --- Трубы по стенам: три уровня, два цвета + жёлтые вентили 2.5 ---
+        SharedPtr<Material> neonGold = MakeHDRGlow(Color(2.1f, 1.65f, 0.25f, 1.0f));
         const float wallX[] = { -half + 2.0f, half - 2.0f };
         for (float wx : wallX) {
             for (int lvl = 0; lvl < 3; ++lvl) {
+                float py = 2.0f + (float)lvl * 1.2f;
                 Node* pipe = scene_->CreateChild("Pipe");
-                pipe->SetPosition(Vector3(wx, 2.0f + (float)lvl * 1.2f, 0));
+                pipe->SetPosition(Vector3(wx, py, 0));
                 pipe->SetScale(Vector3(0.35f, half - 4.0f, 0.35f));
                 // цилиндр по умолчанию вертикальный: кладём на бок
                 pipe->SetRotation(Quaternion(90.0f, Vector3(1, 0, 0)));
@@ -2670,6 +2748,26 @@ private:
                 pm->SetMaterial((lvl % 2) ? metalMaterial_ : (hdPanel_ ? hdPanel_ : metalMaterial_));
                 pm->SetCastShadows(false);
             }
+            for (int vz = -24; vz <= 24; vz += 24) {
+                box(nullptr, Vector3(wx + (wx > 0 ? -0.35f : 0.35f), 3.2f, (float)vz),
+                    Vector3(0.35f, 0.65f, 0.65f), hdHazard_ ? hdHazard_ : neonGold.Get());
+            }
+        }
+
+        // --- Две неоновые арки-ворота на северном/южном подходах (z = ±40) ---
+        for (int s = -1; s <= 1; s += 2) {
+            float gz = (float)s * 40.0f;
+            Material* archCol = (s < 0) ? neonCyan.Get() : neonPink.Get();
+            Node* pL = box(nullptr, Vector3(-5.2f, 3.0f, gz), Vector3(0.95f, 6.0f, 0.95f), hdPanel_ ? hdPanel_ : metalMaterial_);
+            Node* pR = box(nullptr, Vector3( 5.2f, 3.0f, gz), Vector3(0.95f, 6.0f, 0.95f), hdPanel_ ? hdPanel_ : metalMaterial_);
+            (void)pL; (void)pR;
+            AddBoxCollider(Vector3(-5.2f, 3.0f, gz), Vector3(0.5f, 3.0f, 0.5f));
+            AddBoxCollider(Vector3( 5.2f, 3.0f, gz), Vector3(0.5f, 3.0f, 0.5f));
+            box(nullptr, Vector3(0.0f, 6.2f, gz), Vector3(11.6f, 0.72f, 1.05f), hdPanel_ ? hdPanel_ : metalMaterial_);
+            box(nullptr, Vector3(0.0f, 5.75f, gz), Vector3(10.6f, 0.16f, 1.18f), archCol);
+            // Антенные маяки сверху
+            box(nullptr, Vector3(-5.2f, 6.9f, gz), Vector3(0.24f, 1.1f, 0.24f), neonGold.Get());
+            box(nullptr, Vector3( 5.2f, 6.9f, gz), Vector3(0.24f, 1.1f, 0.24f), neonGold.Get());
         }
 
         // --- Голограмма над центром: ядро + 3 вращающихся кольца ---
@@ -2736,19 +2834,40 @@ private:
         {
             SharedPtr<Material> warmGlow = MakeHDRGlow(Color(2.5f, 1.45f, 0.38f, 1.0f));
             SharedPtr<Material> frostWin = MakeHDRGlow(Color(0.85f, 1.45f, 1.95f, 1.0f));
-            Material* woodMat = hdCrate_ ? hdCrate_ : fallbackMat_;
-            Material* pipeMat = hdMetal_ ? hdMetal_ : metalMaterial_;
+            Material* woodMat    = hdBanyaLog_ ? hdBanyaLog_ : (hdCrate_ ? hdCrate_ : fallbackMat_);
+            Material* porchMat   = hdCrate_ ? hdCrate_ : woodMat;
+            Material* pipeMat    = hdMetal_ ? hdMetal_ : metalMaterial_;
+            Material* roosterMat = hdBanyaRooster_ ? hdBanyaRooster_ : (hdFeather_ ? hdFeather_ : woodMat);
+            SharedPtr<Material> towelMat  = MakePBR(Color(246, 240, 224), 0.85f, 0.0f);
+            SharedPtr<Material> combMat   = MakePBR(Color(225, 48, 36), 0.42f, 0.0f);
+            SharedPtr<Material> beakMat   = MakePBR(Color(250, 178, 38), 0.35f, 0.0f);
             Vector3 bp(-28.0f, 0.0f, -34.0f);
             Node* banya = scene_->CreateChild("BanyaCabin");
             banya->SetPosition(bp);
-            // Бревенчатый сруб + двускатная крыша + крыльцо + печная труба
+            // Бревенчатый сруб (BanyaLog 4K PBR) + двускатная крыша + крыльцо + печная труба
             box(banya, Vector3(0.0f, 1.75f, 0.0f),  Vector3(6.8f, 3.5f, 5.8f), woodMat);
             box(banya, Vector3(0.0f, 3.85f, 0.0f),  Vector3(7.4f, 0.65f, 6.4f), woodMat);
             box(banya, Vector3(0.0f, 4.35f, 0.0f),  Vector3(5.2f, 0.55f, 6.2f), woodMat);
-            box(banya, Vector3(0.0f, 0.12f, 3.55f), Vector3(3.4f, 0.24f, 1.5f), woodMat);
+            box(banya, Vector3(0.0f, 0.12f, 3.55f), Vector3(3.4f, 0.24f, 1.5f), porchMat);
             // Светящийся тёплый дверной проём (+Z к центру арены) и запотевшее окошко
             box(banya, Vector3(0.0f, 1.25f, 2.93f), Vector3(1.45f, 2.35f, 0.12f), warmGlow.Get());
             box(banya, Vector3(2.05f, 1.95f, 2.93f), Vector3(1.15f, 0.95f, 0.12f), frostWin.Get());
+            // Лавочка и 3D-Кочет Смотрящего на крыльце в банном оперении (BanyaRooster 4K PBR)
+            box(banya, Vector3(2.25f, 0.42f, 3.45f), Vector3(1.65f, 0.22f, 0.78f), porchMat);
+            auto part = [&](const Vector3& pos, const Vector3& scale, Model* m, Material* mat) {
+                Node* pn = banya->CreateChild("BanyaRoosterPart");
+                pn->SetPosition(pos);
+                pn->SetScale(scale);
+                StaticModel* sm = pn->CreateComponent<StaticModel>();
+                sm->SetModel(m ? m : boxModel_);
+                sm->SetMaterial(mat ? mat : fallbackMat_);
+                sm->SetCastShadows(true);
+            };
+            part(Vector3(2.25f, 1.05f, 3.45f), Vector3(0.88f, 0.80f, 0.94f), sphereModel_, roosterMat);
+            part(Vector3(2.25f, 0.84f, 3.45f), Vector3(0.90f, 0.36f, 0.92f), cylModel_,    towelMat.Get());
+            part(Vector3(2.25f, 1.60f, 3.74f), Vector3(0.50f, 0.48f, 0.50f), sphereModel_, roosterMat);
+            part(Vector3(2.25f, 1.94f, 3.76f), Vector3(0.14f, 0.22f, 0.30f), boxModel_,    combMat.Get());
+            part(Vector3(2.25f, 1.56f, 4.06f), Vector3(0.12f, 0.10f, 0.22f), boxModel_,    beakMat.Get());
             // Стальная труба печи-каменки
             Node* chim = banya->CreateChild("BanyaChimney");
             chim->SetPosition(Vector3(-2.1f, 5.2f, -1.2f));
@@ -2772,7 +2891,7 @@ private:
 
     // Вращение/покачивание декора + пульсация неонового света
     void UpdateAnimatedDecor(float dt) {
-        for (unsigned i = 0; i < animatedDeco_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)animatedDeco_.Size(); ++i) {
             AnimatedDeco& d = animatedDeco_[i];
             Node* n = d.node_.Get();
             if (!n) continue;
@@ -2934,7 +3053,7 @@ private:
             moonLight_->SetBrightness(0.40f * pbr);
         }
         if (spotLight_) spotLight_->SetBrightness(1.45f * pbr);
-        for (unsigned i = 0; i < floodLights_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)floodLights_.Size(); ++i)
             if (floodLights_[i]) floodLights_[i]->SetBrightness(0.95f * pbr);
         if (sceneZone_) {
             float iblAlpha = (gfxQualityIdx_ >= 2) ? 0.68f : 1.0f;
@@ -3083,7 +3202,7 @@ private:
         renderPath_->SetEnabled("SSAO4K", useSsao);
         renderPath_->SetEnabled("BloomHDR", useBloom);
         renderPath_->SetEnabled("Cinema4K", useCinema);
-        renderPath_->SetEnabled("Tonemap", !renderPath_->IsAdded("Cinema4K") && gfxHdr_);
+        renderPath_->SetEnabled("Tonemap", !RenderPathHasTag(renderPath_, "Cinema4K") && gfxHdr_);
         renderPath_->SetEnabled("FXAA3", useFxaa);
 
         renderPath_->SetShaderParameter("SSAORadius", Variant(0.85f));
@@ -3130,10 +3249,6 @@ private:
         SharedPtr<Viewport> vp(new Viewport(context_, scene_, camera));
         renderer->SetViewport(0, vp);
         ConfigureRenderPipeline(vp);
-
-        // The update loop starts as soon as the loading overlay is hidden.
-        // Create the first-person weapon before that happens; otherwise
-        // UpdateWeaponBob/ApplyRecoilToWeapon dereference a null weaponNode_.
         CreateWeapon();
     }
     
@@ -3143,7 +3258,7 @@ private:
         weaponNode_->SetPosition(Vector3(0.3f, -0.25f, 0.5f));
         weaponNode_->SetRotation(Quaternion(0, 0, 0));
         
-        // Модель оружия (используем коробку как временную модель)
+        // Модель оружия
         weaponModelNode_ = weaponNode_->CreateChild("WeaponModel");
         BuildWeaponModel(currentWeapon_);
 
@@ -3160,13 +3275,13 @@ private:
             AddPart(wingHandR_, Vector3(-0.35f, 0.10f, z), Vector3(0.30f, 0.16f, 0.16f), wingMat, sph);
         }
         
-        // Дуло оружия (для визуализации выстрела)
+        // Дуло оружия (спереди по +Z)
         Node* muzzleNode = weaponNode_->CreateChild("Muzzle");
-        muzzleNode->SetPosition(Vector3(0, 0.05f, -0.25f));
+        muzzleNode->SetPosition(Vector3(0, 0.05f, 0.55f));
         
         // Свет от выстрела
         Node* muzzleLightNode = weaponNode_->CreateChild("MuzzleLight");
-        muzzleLightNode->SetPosition(Vector3(0, 0.05f, -0.25f));
+        muzzleLightNode->SetPosition(Vector3(0, 0.05f, 0.55f));
         
         Light* muzzleLight = muzzleLightNode->CreateComponent<Light>();
         muzzleLight->SetLightType(LIGHT_POINT);
@@ -3528,11 +3643,11 @@ private:
             AddPart(weaponModelNode_, Vector3(0, -0.08f, 0.24f), Vector3(0.05f, 0.09f, 0.08f), dark);
             break;
         }
+        }
         if (weaponPulseNode_) weaponPulseBaseScale_ = weaponPulseNode_->GetScale();
         if (weaponSlideNode_) {
             weaponSlideBasePosition_ = weaponSlideNode_->GetPosition();
             weaponSlideBaseRotation_ = weaponSlideNode_->GetRotation();
-        }
         }
     }
 
@@ -3564,6 +3679,7 @@ private:
         weapon_.reserveAmmo_ = reserveAmmo_[type];
         BuildWeaponModel(type);
         UpdateAmmoDisplay();
+        UpdateCrosshairColor();
         if (weaponNameText_) weaponNameText_->SetText(String(def.name) + " | " + String(SKIN_DEFS[currentSkin_].name));
     }
 
@@ -3656,7 +3772,7 @@ private:
             else c = kill ? Color(1.0f, 0.25f, 0.2f, a) : Color(1.0f, 1.0f, 1.0f, a * 0.92f);
             if (hitMarkerTimer_ <= 0.0f) hitWasHeadshot_ = false;
         }
-        for (unsigned i = 0; i < hitMarkerBars_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)hitMarkerBars_.Size(); ++i)
             hitMarkerBars_[i]->SetColor(c);
     }
 
@@ -3668,7 +3784,7 @@ private:
             float pulseFreq = 3.0f + (0.3f - ratio) * 20.0f;
             a = (0.25f + 0.2f * sinf(timeAcc_ * pulseFreq)) * (1.0f - ratio / 0.3f);
         }
-        for (unsigned i = 0; i < vignetteEdges_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)vignetteEdges_.Size(); ++i)
             vignetteEdges_[i]->SetColor(Color(1.0f, 0.05f, 0.05f, a));
     }
 
@@ -3770,6 +3886,20 @@ private:
         crosshairRight_->SetSize(len, th);
         crosshairRight_->SetPosition(cx + S(5.0f), cy - th / 2);
         crosshairRight_->SetColor(Color(0.25f, 1.0f, 0.72f, 0.85f));
+        UpdateCrosshairColor();
+    }
+
+    void UpdateCrosshairColor() {
+        Color wc = NormByteColor(WEAPON_DEFS[Clamp(currentWeapon_, 0, WEAPON_COUNT - 1)].tint);
+        // Делаем оттенок перекрестия ярким и читаемым на любой стене
+        Color hi(Clamp(wc.r_ * 0.65f + 0.38f, 0.25f, 1.0f),
+                 Clamp(wc.g_ * 0.65f + 0.38f, 0.25f, 1.0f),
+                 Clamp(wc.b_ * 0.65f + 0.38f, 0.25f, 1.0f), 0.92f);
+        if (crosshairCenter_) crosshairCenter_->SetColor(Color(hi.r_, hi.g_, hi.b_, 0.98f));
+        if (crosshairTop_)    crosshairTop_->SetColor(hi);
+        if (crosshairBottom_) crosshairBottom_->SetColor(hi);
+        if (crosshairLeft_)   crosshairLeft_->SetColor(hi);
+        if (crosshairRight_)  crosshairRight_->SetColor(hi);
     }
 
     void CreateRadar() {
@@ -3835,7 +3965,7 @@ private:
 
         unsigned used = 0;
         auto placeBlip = [&](const Vector3& wp, const Color& col, int sz) {
-            if (used >= radarBlips_.Size()) return;
+            if (used >= (unsigned)radarBlips_.Size()) return;
             Vector3 d = wp - camPos;
             float rx =  d.x_ * cs - d.z_ * sn;
             float rz =  d.x_ * sn + d.z_ * cs;
@@ -3850,7 +3980,7 @@ private:
             b->SetVisible(true);
         };
 
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             if (!enemies_[i].alive_ || !enemies_[i].node_) continue;
             EnemyType et = enemies_[i].type_;
             Color ec = (et == E_BOSS)     ? Color(1.0f, 0.85f, 0.15f, 1.0f)
@@ -3859,11 +3989,11 @@ private:
                                           : Color(1.0f, 0.22f, 0.22f, 0.95f);
             placeBlip(enemies_[i].node_->GetPosition(), ec, (et == E_BOSS) ? S(9.0f) : S(5.5f));
         }
-        for (unsigned i = 0; i < turrets_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)turrets_.Size(); ++i) {
             if (turrets_[i].ttl_ > 0.0f)
                 placeBlip(turrets_[i].pos_, Color(0.15f, 1.0f, 0.72f, 1.0f), S(6.5f));
         }
-        for (unsigned i = 0; i < pickups_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)pickups_.Size(); ++i) {
             if (pickups_[i].respawn_ > 0.0f) continue;
             Color pc = (pickups_[i].type_ == 0) ? Color(0.25f, 1.0f, 0.45f, 0.85f)
                      : (pickups_[i].type_ == 2) ? Color(0.25f, 0.85f, 1.0f, 0.85f)
@@ -3871,7 +4001,7 @@ private:
                                                 : Color(1.0f, 0.85f, 0.25f, 0.80f);
             placeBlip(pickups_[i].home_, pc, S(4.5f));
         }
-        for (unsigned i = used; i < radarBlips_.Size(); ++i)
+        for (unsigned i = used; i < (unsigned)radarBlips_.Size(); ++i)
             radarBlips_[i]->SetVisible(false);
     }
 
@@ -3912,13 +4042,13 @@ private:
         credits_ += 50;
         SaveSettingsFile();
         UpdateScoreDisplay();
-        PushKillFeed("🏆 ДОСТИЖЕНИЕ: " + title);
+        PushKillFeed("◆ ДОСТИЖЕНИЕ: " + title);
         if (soundSource_ && achievementSound_) {
             soundSource_->SetGain(SfxGain(0.92f));
             soundSource_->Play(achievementSound_);
         }
         if (achievToastBg_ && achievToastText_) {
-            achievToastText_->SetText("🏆 ДОСТИЖЕНИЕ ОТКРЫТО (" + String(CountUnlockedAchievements()) + "/" +
+            achievToastText_->SetText("◆ ДОСТИЖЕНИЕ ОТКРЫТО (" + String(CountUnlockedAchievements()) + "/" +
                                       String(Cyber::TOTAL_ACHIEVEMENTS) + ")\n" + title + "  [+250 ОЧК / +50 КР]");
             achievToastBg_->SetVisible(true);
             achievToastTimer_ = 4.2f;
@@ -3986,7 +4116,7 @@ private:
         }
         Text* t = root->CreateChild<Text>();
         t->SetFont(font_, crit ? SF(26) : SF(19));
-        t->SetText(crit ? ("★ " + String(dmg) + " КРИТ!") : ("-" + String(dmg)));
+        t->SetText(crit ? ("◆ " + String(dmg) + " КРИТ!") : ("-" + String(dmg)));
         t->SetColor(crit ? Color(1.0f, 0.88f, 0.18f, 1.0f) : Color(1.0f, 0.96f, 0.92f, 0.95f));
         StyleCrispText(t, crit);
 
@@ -4174,7 +4304,7 @@ private:
 
         helpText_ = root->CreateChild<Text>();
         helpText_->SetFont(font_, SF(13));
-        helpText_->SetText("[ALT/X] Рывок  •  [V] Удар крылом  •  [L] Лазер  •  [G] Осмотр  •  [TAB] Арсенал  •  [F2] Фото 4K  •  [F3] GPU  •  [F1] Справка");
+        helpText_->SetText("[ALT] Рывок  •  [Z] Крюк  •  [X] Орбита  •  [G] Граната  •  [T] Турель  •  [B] Перки  •  [P] Баня  •  [F1] Справка");
         helpText_->SetPosition(S(24), S(182));
         helpText_->SetColor(Color(0.75f, 0.88f, 0.98f, 0.82f));
         StyleCrispText(helpText_);
@@ -4200,7 +4330,7 @@ private:
     void RefreshKillFeedText() {
         if (!killFeedText_) return;
         String txt;
-        for (unsigned i = 0; i < killFeed_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)killFeed_.Size(); ++i)
             txt += killFeed_[i].text_ + "\n";
         killFeedText_->SetText(txt);
     }
@@ -4219,14 +4349,14 @@ private:
     void UpdateKillFeed(float dt) {
         if (killFeed_.Empty()) return;
         bool changed = false;
-        for (unsigned i = 0; i < killFeed_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)killFeed_.Size(); ++i) {
             killFeed_[i].ttl_ -= dt;
             if (killFeed_[i].ttl_ <= 0.0f) changed = true;
         }
         if (changed) {
             Vector<FeedEntry> keep;
             float minTtl = 99.0f;
-            for (unsigned i = 0; i < killFeed_.Size(); ++i) {
+            for (unsigned i = 0; i < (unsigned)killFeed_.Size(); ++i) {
                 if (killFeed_[i].ttl_ > 0.0f) { keep.Push(killFeed_[i]); minTtl = Min(minTtl, killFeed_[i].ttl_); }
             }
             killFeed_ = keep;
@@ -4262,10 +4392,10 @@ private:
     void UpdateBossBar() {
         if (!bossBarBg_ || !bossBarFill_) return;
         EnemyData* boss = nullptr;
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             if (enemies_[i].alive_ && enemies_[i].type_ == E_BOSS) { boss = &enemies_[i]; break; }
         }
-        bool show = (boss != nullptr) && !inMenu_ && !gameOver_ && !photoMode_;
+        bool show = (boss != nullptr) && !inMenu_ && !gameOver_ && !paused_ && !banyaOpen_ && !casinoOpen_ && !arcadeOpen_ && !helpOpen_ && !perkShopOpen_ && !photoMode_;
         bossBarBg_->SetVisible(show);
         bossBarFill_->SetVisible(show);
         if (bossBarText_) bossBarText_->SetVisible(show);
@@ -4279,20 +4409,31 @@ private:
     }
 
     void UpdateAmmoDisplay() {
+        float reloadDur = Max(0.05f, WEAPON_DEFS[currentWeapon_].reloadTime);
+        float reloadProg = weapon_.isReloading_
+            ? Clamp(1.0f - weapon_.reloadTimer_ / reloadDur, 0.0f, 1.0f)
+            : 0.0f;
         if (ammoText_) {
             String ammoStr = "ПАТРОНЫ: " + String(weapon_.currentAmmo_) + " / " + String(weapon_.reserveAmmo_);
-            if (weapon_.isReloading_) ammoStr += "  [ПЕРЕЗАРЯДКА]";
+            if (weapon_.isReloading_)
+                ammoStr += "  [ПЕРЕЗАРЯДКА " + String((int)lroundf(reloadProg * 100.0f)) + "%]";
             ammoText_->SetText(ammoStr);
-            ammoText_->SetColor(weapon_.currentAmmo_ <= 5 ? Color(1.0f, 0.22f, 0.20f, 1.0f)
-                                                          : Color(1.0f, 0.90f, 0.25f, 1.0f));
+            ammoText_->SetColor(weapon_.isReloading_ ? Color(0.32f, 0.96f, 0.90f, 1.0f)
+                                : weapon_.currentAmmo_ <= 5 ? Color(1.0f, 0.22f, 0.20f, 1.0f)
+                                                            : Color(1.0f, 0.90f, 0.25f, 1.0f));
         }
         if (hudAmmoBarFill_) {
-            float ratio = WEAPON_DEFS[currentWeapon_].magSize > 0
-                        ? Clamp((float)weapon_.currentAmmo_ / (float)WEAPON_DEFS[currentWeapon_].magSize, 0.0f, 1.0f)
-                        : 0.0f;
-            hudAmmoBarFill_->SetSize((int)(S(HUD_BAR_W) * ratio), S(10.0f));
-            hudAmmoBarFill_->SetColor(ratio < 0.25f ? Color(1.0f, 0.25f, 0.2f, 1.0f)
-                                                    : Color(1.0f, 0.85f, 0.25f, 1.0f));
+            if (weapon_.isReloading_) {
+                hudAmmoBarFill_->SetSize((int)(S(HUD_BAR_W) * reloadProg), S(10.0f));
+                hudAmmoBarFill_->SetColor(Color(0.24f, 0.96f, 0.86f, 1.0f));
+            } else {
+                float ratio = WEAPON_DEFS[currentWeapon_].magSize > 0
+                            ? Clamp((float)weapon_.currentAmmo_ / (float)WEAPON_DEFS[currentWeapon_].magSize, 0.0f, 1.0f)
+                            : 0.0f;
+                hudAmmoBarFill_->SetSize((int)(S(HUD_BAR_W) * ratio), S(10.0f));
+                hudAmmoBarFill_->SetColor(ratio < 0.25f ? Color(1.0f, 0.25f, 0.2f, 1.0f)
+                                                        : Color(1.0f, 0.85f, 0.25f, 1.0f));
+            }
         }
     }
     
@@ -4333,30 +4474,33 @@ private:
         }
         if (statusBuffText_) {
             String b;
-            if (banyaBuffTier_ >= 2)      b += "👑 СМОТРЯЩИЙ (+50HP/+15%УР)  ";
-            else if (banyaBuffTier_ == 1) b += "♨ БАННЫЙ ЗАКАЛ (+25HP)  ";
+            if (banyaBuffTier_ >= 2)      b += "◆ СМОТРЯЩИЙ (+50HP/+15%УР)  ";
+            else if (banyaBuffTier_ == 1) b += "• БАННЫЙ ЗАКАЛ (+25HP)  ";
             if (overdriveTimer_ > 0.0f)
-                b += "⚡ ОВЕРДРАЙВ 2X (" + String(overdriveTimer_, 1) + "с)  ";
+                b += "◆ ОВЕРДРАЙВ 2X (" + String(overdriveTimer_, 1) + "с)  ";
             b += (grappleCooldown_ <= 0.0f) ? "[Z] КРЮК  " : ("[Z] " + String(grappleCooldown_, 1) + "с  ");
             if (orbitalCharge_ >= 99.9f)
-                b += "☢ [X] ЯЙЦЕГЕДДОН: ГОТОВ!  ";
+                b += "[!] [X] ЯЙЦЕГЕДДОН: ГОТОВ!  ";
             else
                 b += "[X] ОРБИТА " + String((int)orbitalCharge_) + "%  ";
             b += (grenadeCooldown_ <= 0.0f) ? "[G] ГРАНАТА  " : ("[G] " + String(grenadeCooldown_, 1) + "с  ");
-            b += (turretCooldown_ <= 0.0f)  ? "[T] ТУРЕЛЬ (100₵)  " : ("[T] " + String((int)turretCooldown_) + "с  ");
-            b += "[B] ПЕРКИ (" + String(credits_) + "₵)  [P] БАНЯ";
+            b += (turretCooldown_ <= 0.0f)  ? "[T] ТУРЕЛЬ (100¤)  " : ("[T] " + String((int)turretCooldown_) + "с  ");
+            b += "[B] ПЕРКИ (" + String(credits_) + "¤)  [P] БАНЯ";
             statusBuffText_->SetText(b);
         }
     }
     
     void UpdateScoreDisplay() {
         if (scoreText_) {
-            String s = "СЧЁТ: " + String(player_.score_) + "  |  ₵" + String(credits_) + "  |  УБИЙСТВ: " + String(player_.kills_);
-            if (player_.headshots_ > 0) s += " (★" + String(player_.headshots_) + ")";
+            String s = "СЧЁТ: " + String(player_.score_) + "  |  " + String(credits_) + "¤  |  УБИЙСТВ: " + String(player_.kills_);
+            if (player_.headshots_ > 0) s += " (◆" + String(player_.headshots_) + ")";
             if (comboCount_ > 1) s += "  |  КОМБО x" + String(comboCount_);
-            s += "\nРЕКОРД: " + String(highScore_) + "  |  🏆 " + String(CountUnlockedAchievements()) + "/" + String(Cyber::TOTAL_ACHIEVEMENTS);
+            s += "\nРЕКОРД: " + String(highScore_) + "  |  ◆ " + String(CountUnlockedAchievements()) + "/" + String(Cyber::TOTAL_ACHIEVEMENTS);
             if (gameMode_ == MODE_ARENA) {
-                s += "  |  ВОЛНА " + String(waveNum_);
+                int aliveEnemies = 0;
+                for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i)
+                    if (enemies_[i].alive_) ++aliveEnemies;
+                s += "  |  ВОЛНА " + String(waveNum_) + "  •  ОСТАЛОСЬ: " + String(aliveEnemies);
                 if (activeMutator_ != Cyber::MUT_STANDARD)
                     s += " [" + String(Cyber::GetMutatorInfo(activeMutator_).name) + "]";
             }
@@ -4451,11 +4595,12 @@ private:
                 "\n"
                 "ТАКТИКА, БАНЬКА СМОТРЯЩЕГО [P] И ПЕРКИ\n"
                 "  • [P] «КОЧЕТ В БАНЬКЕ»: продержись 3 минуты и разгадай загадки смотрящего (14 концовок, 57 загадок)!\n"
-                "    Выход с зачётом даёт кредиты (₵) и бафф «Банный закал» (+25 HP/Брони) или «Ковш Смотрящего» (+50 HP, +15% урона)!\n"
+                "    Выход с зачётом даёт кредиты (¤) и бафф «Банный закал» (+25 HP/Брони) или «Ковш Смотрящего» (+50 HP, +15% урона)!\n"
+                "  • [J] «КАЗИНО» (Золотая рулетка + Кибер-слоты 777) и [K] «PIXEL ARCADE» (6 миниигр) работают внутри клиента.\n"
                 "  • [8] RAILGUN прошивает всех! [9] PLASMA рикошетит. [0] ARC CANNON цепляет стаю.\n"
                 "  • CRYO LANCE вращает охлаждающие кольца, ION SAW крутит энергетический диск.\n"
                 "  • Встань на ДЖАМП-ПЛАТФОРМУ или зацепись крюком [Z] для аэро-фрагов с высоты!\n"
-                "  • Копи кредиты (₵) за убийства и парение в баньке — качай перки в лаборатории [B]!");
+                "  • Копи кредиты (¤) за убийства и парение в баньке — качай перки в лаборатории [B]!");
 
             Text* hint = helpPanel_->CreateChild<Text>();
             hint->SetFont(font_, SF(18));
@@ -4486,10 +4631,10 @@ private:
     void UpdatePerkShopDisplay() {
         if (!perkShopBody_) return;
         auto fmtRow = [&](int keyNum, const char* name, int lvl, const char* desc) -> String {
-            String costStr = (lvl >= 5) ? "[МАКС. УР. 5/5]" : ("Цена: " + String(GetPerkCost(lvl)) + "₵  (Ур. " + String(lvl) + "/5)");
+            String costStr = (lvl >= 5) ? "[МАКС. УР. 5/5]" : ("Цена: " + String(GetPerkCost(lvl)) + "¤  (Ур. " + String(lvl) + "/5)");
             return "  [" + String(keyNum) + "]  " + String(name) + "   —   " + costStr + "\n        " + String(desc) + "\n\n";
         };
-        String txt = "ДОСТУПНО КИБЕР-КРЕДИТОВ:  " + String(credits_) + " ₵\n\n";
+        String txt = "ДОСТУПНО КИБЕР-КРЕДИТОВ:  " + String(credits_) + " ¤\n\n";
         txt += fmtRow(1, "ТИТАНОВОЕ ОПЕРЕНИЕ", perkHpLvl_,  "+25 к макс. HP и мгновенное лечение +40 HP");
         txt += fmtRow(2, "УСКОРЕННЫЙ ЗАТВОР",  perkRofLvl_, "+12% скорострельности и скорости перезарядки");
         txt += fmtRow(3, "КАЛИБР ВОЛЬФРАМ",    perkDmgLvl_, "+14% урона всему оружию, гранатам и авто-турелям");
@@ -4634,7 +4779,7 @@ private:
         StyleCrispText(stats);
         stats->SetText("ВРЕМЯ: " + FormatTime(arenaTime_) + "\n" +
                        "СЧЁТ: " + String(player_.score_) + "   |   УБИЙСТВ: " + String(player_.kills_) +
-                       " (★" + String(player_.headshots_) + ")   |   ТОЧНОСТЬ: " + String((int)player_.GetAccuracy()) + "%\n" +
+                       " (◆" + String(player_.headshots_) + ")   |   ТОЧНОСТЬ: " + String((int)player_.GetAccuracy()) + "%\n" +
                        "РЕЖИМ: " + String(gameMode_ == MODE_ARENA ? "АРЕНА" : "ТИР") +
                        (gameMode_ == MODE_ARENA ? ("   |   ВОЛНА: " + String(waveNum_)) : String()));
 
@@ -4707,10 +4852,6 @@ private:
         menuPlate_ = nullptr; menuAccentBar_ = nullptr;
         menuParticles_.Clear(); menuParticlePhase_.Clear(); menuParticleX_.Clear(); menuParticleSpeed_.Clear();
         menuRows_.Clear(); menuBasesSet_ = false;
-        menuItemBases_.Clear(); menuRowBases_.Clear();
-        menuGlow_ = nullptr; menuSheen_ = nullptr; menuEnterT_ = 0.0f;
-        menuTitleGlitchA_ = nullptr; menuTitleGlitchB_ = nullptr;
-        menuTitleGlow_ = nullptr; menuScanlines_.Clear(); menuScanBand_ = nullptr;
         settingsPanel_ = nullptr; settingsItems_.Clear();
         armoryPanel_ = nullptr; armoryWeaponRows_.Clear(); armorySkinRows_.Clear();
         pausePanel_ = nullptr;
@@ -4720,22 +4861,29 @@ private:
         perkShopPanel_ = nullptr; perkShopBody_ = nullptr;
         casinoPanel_ = nullptr; casinoWheelCard_ = nullptr; casinoSpinButton_ = nullptr;
         casinoBetButton_ = nullptr; casinoChipButton_ = nullptr; casinoNumberButton_ = nullptr;
-        casinoTopupButton_ = nullptr; casinoCloseButton_ = nullptr;
+        casinoTopupButton_ = nullptr; casinoCloseButton_ = nullptr; casinoModeButton_ = nullptr;
         casinoTitleText_ = nullptr; casinoBalanceText_ = nullptr; casinoWheelText_ = nullptr;
-        casinoBetText_ = nullptr; casinoResultText_ = nullptr; casinoStatsText_ = nullptr; casinoHelpText_ = nullptr;
+        casinoBetText_ = nullptr; casinoResultText_ = nullptr; casinoStatsText_ = nullptr;
+        casinoHelpText_ = nullptr; casinoHistoryText_ = nullptr;
         ResetBanyaUIPointers();
+        ResetMiniAppUIPointers();
 
         CreateUI();
         CreateMainMenu();
 
-        SetGameHudVisible(!inMenu_ && !gameOver_ && !paused_ && !perkShopOpen_ && !banyaOpen_ && !photoMode_);
-        if (mainMenuPanel_) mainMenuPanel_->SetVisible(inMenu_ && !banyaOpen_ && !casinoOpen_);
+        SetGameHudVisible(!inMenu_ && !gameOver_ && !paused_ && !perkShopOpen_ && !banyaOpen_ && !casinoOpen_ && !arcadeOpen_ && !photoMode_);
+        if (mainMenuPanel_) mainMenuPanel_->SetVisible(inMenu_ && !banyaOpen_ && !casinoOpen_ && !arcadeOpen_);
         if (inSettings_) { CreateSettingsPanel(); if (settingsPanel_) settingsPanel_->SetVisible(true); }
         if (armoryOpen_) { CreateArmoryMenu(); if (armoryPanel_) armoryPanel_->SetVisible(true); }
         if (perkShopOpen_) { CreatePerkShop(); if (perkShopPanel_) perkShopPanel_->SetVisible(true); }
         if (banyaOpen_) { CreateBanyaPanel(); if (banyaPanel_) banyaPanel_->SetVisible(true); SyncBanyaVisuals(0.0f); }
         if (casinoOpen_) { CreateCasinoPanel(); if (casinoPanel_) casinoPanel_->SetVisible(true); UpdateCasinoVisuals(); }
-        if (gameOverPanel_) gameOverPanel_->SetVisible(gameOver_);
+        if (arcadeOpen_) { CreateArcadePanel(); if (arcadePanel_) arcadePanel_->SetVisible(true); SyncArcadeUI(); }
+        if (gameOverPanel_) {
+            if (gameOverStatsText_ && !lastGameOverStats_.Empty())
+                gameOverStatsText_->SetText(lastGameOverStats_);
+            gameOverPanel_->SetVisible(gameOver_);
+        }
         if (paused_) { CreatePausePanel(); if (pausePanel_) pausePanel_->SetVisible(true); }
         UpdateMainMenuSelection();
 
@@ -4774,6 +4922,7 @@ private:
     
     void HandleUpdate(StringHash eventType, VariantMap& eventData) {
         using namespace Update;
+        (void)eventType;
         
         float dt = eventData[P_TIMESTEP].GetFloat();
         if (dt > 0.1f) dt = 0.1f;
@@ -4812,6 +4961,10 @@ private:
             UpdateCasino(dt);
             return;
         }
+        if (arcadeOpen_) {
+            UpdateArcadeOverlay(dt);
+            return;
+        }
 
         if (paused_ || helpOpen_ || perkShopOpen_) return;
 
@@ -4824,7 +4977,7 @@ private:
         AnimateMainMenu(dt);
         AnimateGameOver(dt);
         Vector<PendingRemove> alive;
-        for (unsigned i = 0; i < pendingRemoves_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)pendingRemoves_.Size(); ++i) {
             PendingRemove pr = pendingRemoves_[i];
             pr.ttl_ -= dt;
             if (pr.ttl_ <= 0.0f) { if (pr.node_) pr.node_->Remove(); }
@@ -4875,11 +5028,12 @@ private:
             float rofMul = (1.0f + 0.12f * (float)perkRofLvl_) * (overdriveTimer_ > 0.0f ? 1.6f : 1.0f);
             weapon_.reloadTimer_ -= dt * rofMul;
             if (weapon_.reloadTimer_ <= 0) CompleteReload();
+            else UpdateAmmoDisplay();
         }
         
         if (weapon_.fireTimer_ > 0) weapon_.fireTimer_ -= dt;
 
-        if (!inMenu_ && !gameOver_ && !paused_ && !helpOpen_ && !armoryOpen_ && !perkShopOpen_ && !photoMode_ &&
+        if (!inMenu_ && !gameOver_ && !paused_ && !casinoOpen_ && !arcadeOpen_ && !helpOpen_ && !armoryOpen_ && !perkShopOpen_ && !photoMode_ &&
             !isMouseVisible_ && input->GetMouseButtonDown(MOUSEB_LEFT)) {
             int wt = currentWeapon_;
             if (wt != W_SHOTGUN && wt != W_SNIPER && wt != W_LAUNCHER && wt != W_RAILGUN && wt != W_ARC) {
@@ -4936,7 +5090,7 @@ private:
             float dBanya = Vector3(ppos.x_ - banyaDoorPos_.x_, 0.0f, ppos.z_ - banyaDoorPos_.z_).Length();
             if (dBanya < 5.4f && banyaPromptCooldown_ <= 0.0f) {
                 banyaPromptCooldown_ = 6.5f;
-                ShowMessage("♨ БАНЬКА СМОТРЯЩЕГО — нажмите [P], чтобы попариться (бафф + ₵)!");
+                ShowMessage("◆ БАНЬКА СМОТРЯЩЕГО — нажмите [P], чтобы попариться (бафф + ¤)!");
             }
         }
 
@@ -4949,10 +5103,11 @@ private:
         }
 
         if (!inMenu_) {
+            UpdateCorpses(dt);
             if (gameMode_ == MODE_ARENA) {
                 UpdateEnemies(dt);
                 int aliveCount = 0;
-                for (unsigned i = 0; i < enemies_.Size(); ++i) if (enemies_[i].alive_) aliveCount++;
+                for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) if (enemies_[i].alive_) aliveCount++;
                 if (aliveCount == 0) {
                     waveRespawnTimer_ += dt;
                     if (waveRespawnTimer_ > 3.0f) { waveRespawnTimer_ = 0.0f; SpawnWave(); }
@@ -4965,7 +5120,7 @@ private:
                     }
                 }
                 int activeCount = 0;
-                for (unsigned i = 0; i < targets_.Size(); ++i) if (targets_[i].isActive_) activeCount++;
+                for (unsigned i = 0; i < (unsigned)targets_.Size(); ++i) if (targets_[i].isActive_) activeCount++;
                 if (activeCount < 3) {
                     rangeRespawnTimer_ += dt;
                     if (rangeRespawnTimer_ > 8.0f) {
@@ -5027,7 +5182,7 @@ private:
         (void)eventType;
         if (loadingScreenActive_) return;
         
-        int key = eventData[P_KEY].GetI32();
+        int key = VarToInt(eventData[P_KEY]);
 
         // Глобальные горячие клавиши 4K Ultra & Cyber Overload
         if (key == KEY_F3) {
@@ -5061,21 +5216,45 @@ private:
             return;
         }
 
-        // ===== Нативная «Золотая рулетка» (только виртуальные фишки) =====
+        // ===== Нативная «Золотая рулетка» [J] (только виртуальные фишки) =====
         if (casinoOpen_) {
             HandleCasinoKey(key);
             return;
         }
 
-        // ===== Симулятор парной «КОЧЕТ В БАНЬКЕ» =====
+        // ===== Симулятор парной «КОЧЕТ В БАНЬКЕ» [P] =====
         if (banyaOpen_) {
             HandleBanyaKey(key);
+            return;
+        }
+        // ===== Pixel Arcade [K] =====
+        if (arcadeOpen_) {
+            HandleArcadeKey(key);
+            return;
+        }
+
+        // ===== Справка [F1] =====
+        if (helpOpen_) {
+            if (key == KEY_F1 || key == KEY_ESCAPE) { PlayUISound(); ToggleHelp(); }
+            return;
+        }
+
+        // ===== Арсенал [TAB] =====
+        if (armoryOpen_) {
+            if (key == KEY_TAB || key == KEY_ESCAPE) { ToggleArmory(); return; }
+            if (key >= (int)KEY_1 && key <= (int)KEY_9) {
+                int idx = key - KEY_1;
+                if (idx < WEAPON_COUNT) { EquipWeapon(idx, false); UpdateArmoryHighlight(); ShowMessage(String("Оружие: ") + WEAPON_DEFS[idx].name); }
+                return;
+            }
+            if (key == KEY_Q) { CycleSkin(1); return; }
+            if (key == KEY_E) { CycleSkin(-1); return; }
             return;
         }
 
         // ===== Магазин перков [B] =====
         if (perkShopOpen_) {
-            if (key >= KEY_1 && key <= KEY_4) { BuyPerk(key - KEY_1); return; }
+            if (key >= (int)KEY_1 && key <= (int)KEY_4) { BuyPerk(key - (int)KEY_1); return; }
             if (key == KEY_B || key == KEY_ESCAPE) { TogglePerkShop(); return; }
             return;
         }
@@ -5084,11 +5263,13 @@ private:
         if (gameOver_) {
             if (key == KEY_RETURN || key == KEY_SPACE) { PlayUISound(); RestartArena(); }
             else if (key == KEY_P) { PlayUISound(); ShowGameOver(false); OpenBanyaSimulator(true); }
+            else if (key == KEY_J) { PlayUISound(); ShowGameOver(false); OpenCasino(true); }
+            else if (key == KEY_K) { PlayUISound(); ShowGameOver(false); OpenArcade(true); }
             else if (key == KEY_ESCAPE) { PlayUISound(); ShowGameOver(false); ShowMainMenu(true); }
             return;
         }
 
-        // ===== Главное меню (5 пунктов: вкл. «КОЧЕТ В БАНЬКЕ») и 14-строчные 4K настройки =====
+        // ===== Главное меню (7 пунктов: вкл. Баньку, Рулетку, Миниигры) и 14-строчные 4K настройки =====
         if (inMenu_) {
             if (inSettings_) {
                 const int kRows = 14;
@@ -5101,14 +5282,17 @@ private:
                 return;
             }
             if (key == KEY_P) { PlayUISound(); OpenBanyaSimulator(true); return; }
-            if (key == KEY_UP || key == KEY_W) { menuSel_ = (menuSel_ + 5) % 6; PlayUISound(); UpdateMainMenuSelection(); }
-            else if (key == KEY_DOWN || key == KEY_S) { menuSel_ = (menuSel_ + 1) % 6; PlayUISound(); UpdateMainMenuSelection(); }
+            if (key == KEY_J) { PlayUISound(); OpenCasino(true); return; }
+            if (key == KEY_K) { PlayUISound(); OpenArcade(true); return; }
+            if (key == KEY_UP || key == KEY_W) { menuSel_ = (menuSel_ + 6) % 7; PlayUISound(); UpdateMainMenuSelection(); }
+            else if (key == KEY_DOWN || key == KEY_S) { menuSel_ = (menuSel_ + 1) % 7; PlayUISound(); UpdateMainMenuSelection(); }
             else if (key == KEY_RETURN || key == KEY_SPACE) {
                 if (menuSel_ == 0) StartGameMode(MODE_RANGE);
                 else if (menuSel_ == 1) StartGameMode(MODE_ARENA);
                 else if (menuSel_ == 2) OpenBanyaSimulator(true);
-                else if (menuSel_ == 3) OpenCasino();
-                else if (menuSel_ == 4) ShowSettings(true);
+                else if (menuSel_ == 3) OpenCasino(true);
+                else if (menuSel_ == 4) OpenArcade(true);
+                else if (menuSel_ == 5) ShowSettings(true);
                 else engine_->Exit();
             }
             else if (key == KEY_ESCAPE) engine_->Exit();
@@ -5119,15 +5303,25 @@ private:
         if (paused_) {
             if (key == KEY_F1) { PlayUISound(); ToggleHelp(); return; }
             if (key == KEY_P)  { TogglePause(); OpenBanyaSimulator(false); return; }
+            if (key == KEY_J)  { TogglePause(); OpenCasino(false); return; }
+            if (key == KEY_K)  { TogglePause(); OpenArcade(false); return; }
             if (key == KEY_ESCAPE || key == KEY_RETURN) TogglePause();
             else if (key == KEY_M) { TogglePause(); ShowMainMenu(true); }
             else if (key == KEY_Q) engine_->Exit();
             return;
         }
 
-        // P — вход в парную «КОЧЕТ В БАНЬКЕ» прямо из боя
+        // P — банька, J — рулетка, K — миниигры прямо из боя
         if (key == KEY_P) {
             OpenBanyaSimulator(false);
+            return;
+        }
+        if (key == KEY_J) {
+            OpenCasino(false);
+            return;
+        }
+        if (key == KEY_K) {
+            OpenArcade(false);
             return;
         }
 
@@ -5234,7 +5428,7 @@ private:
             return;
         }
 
-        if (key >= KEY_1 && key <= KEY_9) {
+        if (key >= (int)KEY_1 && key <= (int)KEY_9) {
             int idx = key - KEY_1;
             if (idx < WEAPON_COUNT) { EquipWeapon(idx, false); ShowMessage(String("Оружие: ") + WEAPON_DEFS[idx].name); }
             return;
@@ -5244,8 +5438,8 @@ private:
             ShowMessage(String("Оружие: ") + WEAPON_DEFS[9].name);
             return;
         }
-        if (key == KEY_LEFTBRACKET) { CycleWeapon(-1); return; }
-        if (key == KEY_RIGHTBRACKET) { CycleWeapon(1); return; }
+        if (key == SDLK_LEFTBRACKET) { CycleWeapon(-1); return; }
+        if (key == SDLK_RIGHTBRACKET) { CycleWeapon(1); return; }
 
         if (key == KEY_Q) { CycleSkin(1); return; }
         if (key == KEY_E) { CycleSkin(-1); return; }
@@ -5254,7 +5448,7 @@ private:
     void HandleKeyUp(StringHash eventType, VariantMap& eventData) {
         using namespace KeyUp;
         (void)eventType;
-        int key = eventData[P_KEY].GetI32();
+        int key = VarToInt(eventData[P_KEY]);
         if (key == KEY_LSHIFT || key == KEY_RSHIFT) {
             isSprinting_ = false;
         }
@@ -5264,7 +5458,7 @@ private:
         using namespace MouseButtonDown;
         (void)eventType;
         if (loadingScreenActive_) return;
-        int button = eventData[P_BUTTON].GetI32();
+        int button = VarToInt(eventData[P_BUTTON]);
         
         if (casinoOpen_) {
             if (button == MOUSEB_LEFT) HandleCasinoClick();
@@ -5275,13 +5469,17 @@ private:
             if (button == MOUSEB_LEFT) HandleBanyaClick();
             return;
         }
+        if (arcadeOpen_) {
+            if (button == MOUSEB_LEFT) HandleArcadeClick();
+            return;
+        }
 
         if (armoryOpen_) {
             HandleArmoryClick(button == MOUSEB_LEFT);
             return;
         }
 
-        if (button == MOUSEB_LEFT && !inMenu_ && !gameOver_ && !paused_ && !helpOpen_ && !perkShopOpen_ && !photoMode_ && !isMouseVisible_) {
+        if (button == MOUSEB_LEFT && !inMenu_ && !gameOver_ && !paused_ && !casinoOpen_ && !arcadeOpen_ && !helpOpen_ && !perkShopOpen_ && !photoMode_ && !isMouseVisible_) {
             inspectTimer_ = 0.0f;
             TryFire();
         }
@@ -5295,7 +5493,7 @@ private:
     void HandleMouseButtonUp(StringHash eventType, VariantMap& eventData) {
         using namespace MouseButtonUp;
         (void)eventType;
-        int button = eventData[P_BUTTON].GetI32();
+        int button = VarToInt(eventData[P_BUTTON]);
         if (button == MOUSEB_RIGHT) isAiming_ = false;
     }
 
@@ -5354,7 +5552,7 @@ private:
         tg.pos_ = start;
         tg.vel_ = dir * 19.5f + Vector3(0.0f, 4.4f, 0.0f);
         tg.fuse_ = 1.40f;
-        if (thrownGrenades_.Size() >= MAX_THROWN_GRENADES) {
+        if ((unsigned)thrownGrenades_.Size() >= MAX_THROWN_GRENADES) {
             if (thrownGrenades_[0].node_) thrownGrenades_[0].node_->Remove();
             thrownGrenades_.Erase(0);
         }
@@ -5428,7 +5626,7 @@ private:
         }
         int cost = (gameMode_ == MODE_ARENA) ? 100 : 0;
         if (credits_ < cost) {
-            ShowMessage("Нужно 100₵ кибер-кредитов для установки авто-турели!");
+            ShowMessage("Нужно 100¤ кибер-кредитов для установки авто-турели!");
             PlayEmptyClickSound();
             return;
         }
@@ -5469,7 +5667,7 @@ private:
         td.pos_ = pos;
         td.ttl_ = 24.0f;
         td.fireTimer_ = 0.20f;
-        if (turrets_.Size() >= MAX_TURRETS) {
+        if ((unsigned)turrets_.Size() >= MAX_TURRETS) {
             if (turrets_[0].node_) turrets_[0].node_->Remove();
             turrets_.Erase(0);
         }
@@ -5498,7 +5696,7 @@ private:
             // Поиск ближайшей живой курицы в радиусе 36 м с прямой видимостью
             int bestEnemy = -1;
             float bestDist = 36.0f;
-            for (unsigned ei = 0; ei < enemies_.Size(); ++ei) {
+            for (unsigned ei = 0; ei < (unsigned)enemies_.Size(); ++ei) {
                 if (!enemies_[ei].alive_ || !enemies_[ei].node_) continue;
                 Vector3 ep = enemies_[ei].node_->GetPosition() + Vector3(0, 0.9f, 0);
                 float d = (ep - muzzleOrig).Length();
@@ -5552,7 +5750,7 @@ private:
         bool hitAny = false;
 
         // Удар крылом по курам в конусе 3.0 м перед игроком + сильный отброс
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             EnemyData& e = enemies_[i];
             if (!e.alive_ || !e.node_) continue;
             Vector3 ep = e.node_->GetPosition() + Vector3(0, 0.9f, 0);
@@ -5672,10 +5870,10 @@ private:
         if (orbitalCharge_ < 99.9f) {
             if (credits_ >= Cyber::ORBITAL_EMERGENCY_CREDITS) {
                 credits_ -= Cyber::ORBITAL_EMERGENCY_CREDITS;
-                PushKillFeed("🛰 СРОЧНЫЙ ВЫЗОВ ОРБИТЫ ЗА " + String(Cyber::ORBITAL_EMERGENCY_CREDITS) + "₵!");
+                PushKillFeed("[ОРБИТА] СРОЧНЫЙ ВЫЗОВ ЗА " + String(Cyber::ORBITAL_EMERGENCY_CREDITS) + "¤!");
             } else {
                 ShowMessage("Орбитальный удар [X]: заряд " + String((int)orbitalCharge_) + "% (или " +
-                            String(Cyber::ORBITAL_EMERGENCY_CREDITS) + "₵ для мгновенного залпа)");
+                            String(Cyber::ORBITAL_EMERGENCY_CREDITS) + "¤ для мгновенного залпа)");
                 PlayEmptyClickSound();
                 return;
             }
@@ -5720,7 +5918,7 @@ private:
         rm->SetModel(cylModel_ ? cylModel_ : sphereModel_);
         rm->SetMaterial(MakeHDRGlow(Color(1.0f, 0.84f, 0.25f, 0.9f), 2.8f).Get());
         rm->SetCastShadows(false);
-        if (orbitalStrikes_.Size() >= MAX_ORBITAL_STRIKES) {
+        if ((unsigned)orbitalStrikes_.Size() >= MAX_ORBITAL_STRIKES) {
             if (orbitalStrikes_[0].beamNode_) orbitalStrikes_[0].beamNode_->Remove();
             if (orbitalStrikes_[0].ringNode_) orbitalStrikes_[0].ringNode_->Remove();
             orbitalStrikes_.Erase(0);
@@ -5736,7 +5934,7 @@ private:
 
         float maxDmg = Cyber::ORBITAL_BASE_DAMAGE * (1.0f + 0.15f * (float)perkDmgLvl_) * (overdriveTimer_ > 0.0f ? 1.5f : 1.0f);
         int strikeKills = 0;
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             EnemyData& e = enemies_[i];
             if (!e.alive_ || !e.node_) continue;
             float d = (e.node_->GetPosition() - strikePos).Length();
@@ -5748,7 +5946,7 @@ private:
                 if (wasAlive && !e.alive_) ++strikeKills;
             }
         }
-        for (unsigned bi = 0; bi < barrels_.Size(); ++bi) {
+        for (unsigned bi = 0; bi < (unsigned)barrels_.Size(); ++bi) {
             if (!barrels_[bi].exploded_ && (barrels_[bi].home_ - strikePos).Length() <= Cyber::ORBITAL_RADIUS)
                 DetonateBarrel(barrels_[bi]);
         }
@@ -5757,7 +5955,7 @@ private:
             slowMoTimer_ = Max(slowMoTimer_, 0.42f);
             UnlockAchievement(11, "ЯЙЦЕГЕДДОН С ОРБИТЫ (3+ кур одним орбитальным залпом)");
         }
-        ShowWaveBanner("☢ ОРБИТАЛЬНЫЙ УДАР «ЯЙЦЕГЕДДОН»!", Color(0.32f, 0.96f, 1.0f));
+        ShowWaveBanner("[!] ОРБИТАЛЬНЫЙ УДАР «ЯЙЦЕГЕДДОН»!", Color(0.32f, 0.96f, 1.0f));
         UpdateDashAndBuffHUD();
         UpdateScoreDisplay();
     }
@@ -5785,9 +5983,17 @@ private:
     }
 
     void UpdateWeatherParticles(float dt) {
-        if (!scene_ || !cameraNode_ || gfxQualityIdx_ <= 0) return;
+        if (!scene_ || !cameraNode_) return;
+        if (gfxQualityIdx_ <= 0) {
+            if (!weatherMotes_.Empty()) {
+                for (unsigned i = 0; i < (unsigned)weatherMotes_.Size(); ++i)
+                    if (weatherMotes_[i].node_) weatherMotes_[i].node_->Remove();
+                weatherMotes_.Clear();
+            }
+            return;
+        }
         if (weatherAtmBuilt_ != atmosphereIdx_ || weatherMotes_.Empty()) {
-            for (unsigned i = 0; i < weatherMotes_.Size(); ++i)
+            for (unsigned i = 0; i < (unsigned)weatherMotes_.Size(); ++i)
                 if (weatherMotes_[i].node_) weatherMotes_[i].node_->Remove();
             weatherMotes_.Clear();
             weatherAtmBuilt_ = atmosphereIdx_;
@@ -5819,7 +6025,7 @@ private:
         }
 
         Vector3 camPos = cameraNode_->GetPosition();
-        for (unsigned i = 0; i < weatherMotes_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)weatherMotes_.Size(); ++i) {
             WeatherMote& m = weatherMotes_[i];
             if (!m.node_) continue;
             m.phase_ += dt * 1.8f;
@@ -6241,12 +6447,12 @@ private:
         while (chained < 3) {
             int bestIndex = -1;
             float bestDist = 7.5f;
-            for (unsigned i = 0; i < enemies_.Size(); ++i) {
+            for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
                 EnemyData& candidate = enemies_[i];
                 if (!candidate.alive_ || !candidate.node_ ||
                     (hitTag == Collision::ENEMY && candidate.node_ == static_cast<Node*>(hitPtr))) continue;
                 bool alreadyChained = false;
-                for (unsigned ci = 0; ci < chainedIndices.Size(); ++ci)
+                for (unsigned ci = 0; ci < (unsigned)chainedIndices.Size(); ++ci)
                     if (chainedIndices[ci] == i) { alreadyChained = true; break; }
                 if (alreadyChained) continue;
                 float candidateDist = (candidate.node_->GetPosition() + Vector3(0, 0.85f, 0) - hitPoint).Length();
@@ -6267,7 +6473,7 @@ private:
         }
         if (chained > 0) {
             AddCameraShake(0.055f + 0.018f * chained);
-            PushKillFeed("⚡ ДУГОВОЙ РАЗРЯД: цепь x" + String(chained));
+            PushKillFeed("[ARC] ДУГОВОЙ РАЗРЯД: цепь x" + String(chained));
         }
         return primaryHit || chained > 0;
     }
@@ -6313,7 +6519,7 @@ private:
         // Проверяем ВСЕ динамические коллайдеры (враги, бочки и мишени), пересекаемые лучом до maxDist!
         struct HitEntry { int tag; void* ptr; Vector3 pt; float dist; };
         Vector<HitEntry> hits;
-        for (unsigned ci = 0; ci < colliders_.Size(); ++ci) {
+        for (unsigned ci = 0; ci < (unsigned)colliders_.Size(); ++ci) {
             const Lite::Collider& c = colliders_[ci];
             if (c.tag == Collision::STATIC || c.tag == Collision::REMOVED || !c.ptr) continue;
             float t = c.sphere ? Lite::RaySphere(startPos, dir, c.center, c.half.x_)
@@ -6324,13 +6530,13 @@ private:
         }
 
         int killsBefore = player_.kills_;
-        for (unsigned hi = 0; hi < hits.Size(); ++hi) {
+        for (unsigned hi = 0; hi < (unsigned)hits.Size(); ++hi) {
             CheckTargetHit(hits[hi].tag, hits[hi].ptr, hits[hi].pt, damage);
         }
         int killsMade = player_.kills_ - killsBefore;
         if (killsMade >= 2) {
             slowMoTimer_ = Max(slowMoTimer_, 0.34f);
-            PushKillFeed("⚡ СКВОЗНОЙ РЕЛЬС x" + String(killsMade) + "!");
+            PushKillFeed("◆ СКВОЗНОЙ РЕЛЬС x" + String(killsMade) + "!");
             UnlockAchievement(5, "СКВОЗНОЙ РЕЛЬС (2+ врага одним выстрелом Railgun)");
         }
         return !hits.Empty();
@@ -6360,7 +6566,7 @@ private:
         pb.damage_ = damage;
         pb.ttl_ = 2.4f;
         pb.bouncesLeft_ = 1;
-        if (playerPlasmaBolts_.Size() >= MAX_PLASMA_BOLTS) {
+        if ((unsigned)playerPlasmaBolts_.Size() >= MAX_PLASMA_BOLTS) {
             if (playerPlasmaBolts_[0].node_) playerPlasmaBolts_[0].node_->Remove();
             playerPlasmaBolts_.Erase(0);
         }
@@ -6399,7 +6605,7 @@ private:
                 if (htag != Collision::STATIC) CheckTargetHit(htag, hptr, hp, b.damage_);
                 // Изумрудный плазменный мини-всплеск по соседям в радиусе 2.8 м
                 CreateShockwave(hp, plasmaOrbMat_.Get(), 0.30f);
-                for (unsigned ei = 0; ei < enemies_.Size(); ++ei) {
+                for (unsigned ei = 0; ei < (unsigned)enemies_.Size(); ++ei) {
                     if (!enemies_[ei].alive_ || !enemies_[ei].node_) continue;
                     float d = (enemies_[ei].node_->GetPosition() + Vector3(0, 0.8f, 0) - hp).Length();
                     if (d < 2.8f) DamageEnemy(enemies_[ei], b.damage_ * 0.42f * (1.0f - d / 2.8f));
@@ -6492,7 +6698,7 @@ private:
         // Взрывоопасные бочки (Collision::BARREL, ptr == Node* бочки)
         if (hitTag == Collision::BARREL && hitPtr) {
             Node* bNode = static_cast<Node*>(hitPtr);
-            for (unsigned bi = 0; bi < barrels_.Size(); ++bi) {
+            for (unsigned bi = 0; bi < (unsigned)barrels_.Size(); ++bi) {
                 ExplosiveBarrel& eb = barrels_[bi];
                 if (!eb.exploded_ && eb.node_ == bNode) {
                     eb.hp_ -= damage;
@@ -6515,7 +6721,7 @@ private:
 
         // Роботы-курицы (Collision::ENEMY) + детектор ХЭДШОТОВ по высоте головы курицы!
         if (hitTag == Collision::ENEMY) {
-            for (unsigned ei = 0; ei < enemies_.Size(); ++ei) {
+            for (unsigned ei = 0; ei < (unsigned)enemies_.Size(); ++ei) {
                 EnemyData& e = enemies_[ei];
                 if (e.alive_ && e.node_ == hitNode) {
                     float sc = Max(0.1f, hitNode->GetScale().y_);
@@ -6535,9 +6741,9 @@ private:
                             soundSource_->SetGain(SfxGain(0.85f));
                             soundSource_->Play(headshotSound_);
                         }
-                        if (killed) PushKillFeed("★ КРИТИЧЕСКИЙ ХЭДШОТ!");
+                        if (killed) PushKillFeed("[CRIT] КРИТИЧЕСКИЙ ХЭДШОТ!");
                     }
-                    DamageEnemy(e, finalDmg);
+                    DamageEnemy(e, finalDmg, headshot);
                     if (currentWeapon_ == W_CRYO && e.alive_) {
                         // Попадание крио-лучом режет скорость, но не стакается
                         // бесконечно: свежий импульс только продлевает эффект.
@@ -6551,7 +6757,7 @@ private:
         }
 
         // Мишени тира (Collision::TARGET или Collision::MOVING_TARGET)
-        for (unsigned ti = 0; ti < targets_.Size(); ++ti) {
+        for (unsigned ti = 0; ti < (unsigned)targets_.Size(); ++ti) {
             TargetData& target = targets_[ti];
             if (target.isActive_ && target.node_ == hitNode) {
                 bool bullseye = (hitPosition - hitNode->GetPosition()).Length() < 0.35f;
@@ -6672,21 +6878,20 @@ private:
     }
 
     void CreateImpactEffect(const Vector3& position, const Vector3& normal) {
-        // Создаем узел для эффекта
-        Node* effectNode = scene_->CreateChild("ImpactEffect");
-        effectNode->SetPosition(position);
         const bool hasSurface = normal.LengthSquared() > 0.001f;
-        effectNode->LookAt(position + (hasSurface ? normal : Vector3::UP));
+        if (haveParticles_ && sparkEffect_) {
+            Node* effectNode = scene_->CreateChild("ImpactEffect");
+            effectNode->SetPosition(position);
+            effectNode->LookAt(position + (hasSurface ? normal : Vector3::UP));
 
-        // Эмиттер искр
-        ParticleEmitter* emitter = effectNode->CreateComponent<ParticleEmitter>();
-        if (sparkEffect_) emitter->SetEffect(sparkEffect_);
+            ParticleEmitter* emitter = effectNode->CreateComponent<ParticleEmitter>();
+            emitter->SetEffect(sparkEffect_);
+
+            QueuePendingRemove(effectNode, 1.0f);
+        }
 
         // Отверстие от пули только на реальной поверхности, не в точке промаха.
         if (hasSurface) CreateBulletDecal(position, normal);
-
-        // Автоудаление через 1 секунду
-        QueuePendingRemove(effectNode, 1.0f);
     }
     
     void CreateExplosionEffect(const Vector3& position) {
@@ -6694,8 +6899,10 @@ private:
         effectNode->SetPosition(position);
         
         // Эмиттер дыма
-        ParticleEmitter* smokeEmitter = effectNode->CreateComponent<ParticleEmitter>();
-        if (smokeEffect_) smokeEmitter->SetEffect(smokeEffect_);
+        if (haveParticles_ && smokeEffect_) {
+            ParticleEmitter* smokeEmitter = effectNode->CreateComponent<ParticleEmitter>();
+            smokeEmitter->SetEffect(smokeEffect_);
+        }
         
         // Точечный свет для вспышки
         Node* lightNode = effectNode->CreateChild("ExplosionLight");
@@ -6861,27 +7068,24 @@ private:
         RefreshUIScale();
         auto* cache = GetSubsystem<ResourceCache>();
         if (!font_) {
-            // Anonymous Pro is shipped with the project.  Prefer it before the
-            // optional DejaVu fallback so a normal install does not emit a
-            // misleading "DejaVuSans.ttf not found" error on every launch.
             font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.sdf");
         }
         auto* ui = GetSubsystem<UI>();
         auto* root = ui->GetRoot();
         int sw = GetSubsystem<Graphics>()->GetWidth();
         int sh = GetSubsystem<Graphics>()->GetHeight();
 
-        loadSteps_ = Vector<String>{
-            "Инициализация 4K HDR пайплайна, ACES Filmic и шейдера CAS",
-            "Загрузка 4K PBR текстур, нормалей и шероховатости/металла",
-            "Синтез кубической карты неба 4K и IBL-отражений арены",
-            "Построение кибер-арены 256×256, джамп-падов и бочек «ОПАСНО»",
-            "Каскадные тени 4K, перья PBR и арсенал (12 стволов)",
-            "Перки [B], кластерные гранаты, волны 2.5 и 3D-аудио пул",
-            "ПЕРО СУДЬБЫ готово. В бой!"
-        };
+        loadSteps_.Clear();
+        loadSteps_.Push("Инициализация 4K HDR пайплайна, ACES Filmic и шейдера CAS");
+        loadSteps_.Push("Загрузка 4K PBR текстур, нормалей и шероховатости/металла");
+        loadSteps_.Push("Синтез кубической карты неба 4K и IBL-отражений арены");
+        loadSteps_.Push("Построение кибер-арены 256×256, джамп-падов и бочек «ОПАСНО»");
+        loadSteps_.Push("Каскадные тени 4K, перья PBR и арсенал (12 стволов)");
+        loadSteps_.Push("Перки [B], кластерные гранаты, волны 2.5 и 3D-аудио пул");
+        loadSteps_.Push("ПЕРО СУДЬБЫ готово. В бой!");
 
         static const char* kTips[6] = {
             "СОВЕТ: Хедшот курицы — 2.0× КРИТИЧЕСКОГО урона (золотой маркер ★).",
@@ -6896,7 +7100,6 @@ private:
         loadingPanel_ = root->CreateChild<UIElement>("LoadingPanel");
         loadingPanel_->SetSize(sw, sh);
         loadingPanel_->SetPriority(1000);
-        loadingPanel_->SetOpacity(0.0f);   // вход загрузки проявит панель за 1.3 c
 
         // 1) 4K фоновый кибер-арт (Textures/LoadingBg4K.png)
         loadingBgImg_ = loadingPanel_->CreateChild<BorderImage>("LoadingArt4K");
@@ -6908,34 +7111,6 @@ private:
             loadingBgImg_->SetColor(Color(0.92f, 0.95f, 1.0f, 1.0f));
         } else {
             loadingBgImg_->SetColor(Color(0.015f, 0.025f, 0.055f, 1.0f));
-        }
-
-        // Сканлайны + бегущая световая полоса + падающие перья (как в веб-буте)
-        for (int i = 0; i < 12; ++i) {
-            BorderImage* ln = loadingPanel_->CreateChild<BorderImage>();
-            ln->SetPosition(0, i * S(90));
-            ln->SetSize(sw, Max(1, S(1)));
-            ln->SetColor(Color(0.18f, 0.95f, 1.0f, 0.05f));
-            loadingScanlines_.Push(SharedPtr<BorderImage>(ln));
-        }
-        loadingScanBand_ = loadingPanel_->CreateChild<BorderImage>();
-        loadingScanBand_->SetPosition(0, -S(70));
-        loadingScanBand_->SetSize(sw, S(70));
-        loadingScanBand_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.10f));
-        loadingScanBand_->SetBlendMode(BLEND_ADD);
-        for (int i = 0; i < 14; ++i) {
-            BorderImage* f = loadingPanel_->CreateChild<BorderImage>();
-            const int fsz = Max(3, S(6 + rand() % 5));
-            f->SetSize(fsz, fsz * 3);
-            const int kind = i % 3;
-            Color fc = (kind == 0) ? Color(1.0f, 0.83f, 0.28f, 0.7f)
-                     : (kind == 1) ? Color(0.18f, 0.95f, 1.0f, 0.7f)
-                                   : Color(1.0f, 0.23f, 0.31f, 0.7f);
-            f->SetColor(fc);
-            loadingFeathers_.Push(SharedPtr<BorderImage>(f));
-            loadingFeatherPhase_.Push(rand() % 1000 / 1000.0f * 6.283f);
-            loadingFeatherX_.Push(float(rand() % Max(1, sw)));
-            loadingFeatherSpeed_.Push((26.0f + rand() % 40) * uiScale_);
         }
 
         // 2) Кинематографические letterbox-полосы сверху и снизу + центральная стеклянная карточка
@@ -6966,40 +7141,10 @@ private:
         cBot->SetSize(cardW, Max(2, S(2.0f)));
         cBot->SetColor(Color(1.0f, 0.78f, 0.22f, 0.75f));
 
-        // Шапка консоли (как в веб-буте): точки + chikengun.exe + PID
-        {
-            const int cardX = sw / 2 - cardW / 2, cardY = sh / 2 - S(235);
-            BorderImage* head = loadingPanel_->CreateChild<BorderImage>();
-            head->SetPosition(cardX, cardY);
-            head->SetSize(cardW, S(30));
-            head->SetColor(Color(0.02f, 0.05f, 0.10f, 0.85f));
-            const Color dotCols[3] = { Color(1.0f, 0.37f, 0.34f, 1.0f), Color(1.0f, 0.74f, 0.18f, 1.0f), Color(0.16f, 0.78f, 0.25f, 1.0f) };
-            for (int i = 0; i < 3; ++i) {
-                BorderImage* dot = loadingPanel_->CreateChild<BorderImage>();
-                dot->SetPosition(cardX + S(14) + i * S(16), cardY + S(10));
-                dot->SetSize(S(10), S(10));
-                dot->SetColor(dotCols[i]);
-            }
-            Text* cTitle = loadingPanel_->CreateChild<Text>();
-            cTitle->SetFont(font_, SF(12));
-            cTitle->SetText("chikengun.exe — ритуал пробуждения");
-            cTitle->SetPosition(cardX + S(64), cardY + S(7));
-            cTitle->SetColor(Color(0.56f, 0.85f, 0.91f, 1.0f));
-            StyleCrispText(cTitle);
-            Text* cPid = loadingPanel_->CreateChild<Text>();
-            cPid->SetFont(font_, SF(12));
-            cPid->SetText("PID 0x0C4B");
-            cPid->SetTextAlignment(HA_RIGHT);
-            cPid->SetPosition(cardX + cardW - S(130), cardY + S(7));
-            cPid->SetWidth(S(116));
-            cPid->SetColor(Color(0.31f, 0.48f, 0.62f, 1.0f));
-            StyleCrispText(cPid);
-        }
-
         // Верхний статус движка
         Text* sysTag = loadingPanel_->CreateChild<Text>();
         sysTag->SetFont(font_, SF(15));
-        sysTag->SetText("URHO3D 4K PBR   •   GGX PBR + NORMAL MAP   •   SUN SHADOWS   •   ACES FILMIC HDR   •   ПЕРО СУДЬБЫ 2.5");
+        sysTag->SetText("URHO3D 4K PBR   •   ACES FILMIC HDR   •   SSAO4K   •   CAS 4K   •   ПЕРО СУДЬБЫ 2.5");
         sysTag->SetTextAlignment(HA_CENTER);
         sysTag->SetPosition(sw / 2 - S(500), S(28));
         sysTag->SetWidth(S(1000));
@@ -7012,49 +7157,6 @@ private:
         embOuter->SetSize(S(104), S(6));
         embOuter->SetColor(Color(1.0f, 0.78f, 0.22f, 0.95f)); // золотое перо
 
-        // Ореолы света за заголовком (золото + циан, как в веб-буте)
-        loadingTitleGlowCyan_ = loadingPanel_->CreateChild<BorderImage>();
-        if (Texture2D* glowTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
-            glowTex->SetFilterMode(FILTER_TRILINEAR);
-            loadingTitleGlowCyan_->SetTexture(glowTex);
-        }
-        loadingTitleGlowCyan_->SetBlendMode(BLEND_ADD);
-        loadingTitleGlowCyan_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.0f));
-        {
-            const int gs = S(700);
-            loadingTitleGlowCyan_->SetSize(gs, gs);
-            loadingTitleGlowCyan_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(198) + S(30) - gs / 2);
-        }
-        loadingTitleGlowGold_ = loadingPanel_->CreateChild<BorderImage>();
-        if (Texture2D* glowTex2 = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
-            glowTex2->SetFilterMode(FILTER_TRILINEAR);
-            loadingTitleGlowGold_->SetTexture(glowTex2);
-        }
-        loadingTitleGlowGold_->SetBlendMode(BLEND_ADD);
-        loadingTitleGlowGold_->SetColor(Color(1.0f, 0.78f, 0.22f, 0.0f));
-        {
-            const int gs = S(520);
-            loadingTitleGlowGold_->SetSize(gs, gs);
-            loadingTitleGlowGold_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(198) + S(30) - gs / 2);
-        }
-        // Глитч-копии заголовка (циан/красный, вспыхивают пачками)
-        loadingTitleGlitchA_ = loadingPanel_->CreateChild<Text>();
-        loadingTitleGlitchA_->SetFont(font_, SF(60));
-        loadingTitleGlitchA_->SetText("CHIKENGUN 2.5");
-        loadingTitleGlitchA_->SetTextAlignment(HA_CENTER);
-        loadingTitleGlitchA_->SetPosition(sw / 2 - S(410), sh / 2 - S(198));
-        loadingTitleGlitchA_->SetWidth(S(820));
-        loadingTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.0f));
-        StyleCrispText(loadingTitleGlitchA_);
-        loadingTitleGlitchB_ = loadingPanel_->CreateChild<Text>();
-        loadingTitleGlitchB_->SetFont(font_, SF(60));
-        loadingTitleGlitchB_->SetText("CHIKENGUN 2.5");
-        loadingTitleGlitchB_->SetTextAlignment(HA_CENTER);
-        loadingTitleGlitchB_->SetPosition(sw / 2 - S(410), sh / 2 - S(198));
-        loadingTitleGlitchB_->SetWidth(S(820));
-        loadingTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.0f));
-        StyleCrispText(loadingTitleGlitchB_);
-
         loadingTitleText_ = loadingPanel_->CreateChild<Text>();
         loadingTitleText_->SetFont(font_, SF(60));
         loadingTitleText_->SetText("CHIKENGUN 2.5");
@@ -7066,21 +7168,12 @@ private:
 
         loadingSubText_ = loadingPanel_->CreateChild<Text>();
         loadingSubText_->SetFont(font_, SF(19));
-        loadingSubText_->SetText("2.5 // ПЕРО СУДЬБЫ");
+        loadingSubText_->SetText("П Е Р О   С У Д Ь Б Ы     |     C Y B E R   A R E N A");
         loadingSubText_->SetTextAlignment(HA_CENTER);
         loadingSubText_->SetPosition(sw / 2 - S(410), sh / 2 - S(124));
         loadingSubText_->SetWidth(S(820));
         loadingSubText_->SetColor(Color(0.42f, 0.88f, 1.0f, 0.95f));
         StyleCrispText(loadingSubText_);
-
-        loadingTagline_ = loadingPanel_->CreateChild<Text>();
-        loadingTagline_->SetFont(font_, SF(12));
-        loadingTagline_->SetText("URHO3D PBR • SUN SHADOWS • ACES HDR");
-        loadingTagline_->SetTextAlignment(HA_CENTER);
-        loadingTagline_->SetPosition(sw / 2 - S(410), sh / 2 - S(102));
-        loadingTagline_->SetWidth(S(820));
-        loadingTagline_->SetColor(Color(0.50f, 0.61f, 0.75f, 1.0f));
-        StyleCrispText(loadingTagline_);
 
         // Чек-лист инициализации подсистем
         loadingSpecText_ = loadingPanel_->CreateChild<Text>();
@@ -7134,21 +7227,12 @@ private:
         loadingTipText_->SetColor(Color(0.75f, 0.86f, 0.96f, 0.92f));
         StyleCrispText(loadingTipText_);
 
-        loadingMarquee_ = loadingPanel_->CreateChild<Text>();
-        loadingMarquee_->SetFont(font_, SF(12));
-        loadingMarquee_->SetText("ПЕРО СУДЬБЫ • ШЕСТЬ ПОРОД УЖЕ ЖДУТ В ТЕНИ АРЕНЫ • [Z] ГРЭППЛ НА КРЫШУ БУНКЕРА • [X] ЯЙЦЕГЕДДОН С ОРБИТЫ • [P] БАНЬКА СМОТРЯЩЕГО • НЕ ВЕРЬТЕ ЗОЛОТЫМ КУРИЦАМ • ПЕРО СУДЬБЫ • ");
-        loadingMarquee_->SetPosition(sw, sh - S(88));
-        loadingMarquee_->SetWidth(S(2400));
-        loadingMarquee_->SetColor(Color(0.44f, 0.58f, 0.71f, 1.0f));
-        StyleCrispText(loadingMarquee_);
-
         UpdateLoadingVisuals(0.04f, 0);
     }
 
     void UpdateLoadingVisuals(float progress, int activeStage) {
         if (!loadingPanel_) return;
-        loadTargetProgress_ = Clamp(progress, 0.0f, 1.0f);
-        loadProgress_ = loadProgressSmooth_;   // бар показывает плавное значение
+        loadProgress_ = Clamp(progress, 0.0f, 1.0f);
         int sw = GetSubsystem<Graphics>()->GetWidth();
         int sh = GetSubsystem<Graphics>()->GetHeight();
         int barW = S(760), barH = S(16);
@@ -7158,8 +7242,8 @@ private:
 
         if (loadingBarFill_) {
             loadingBarFill_->SetSize(fillW, barH);
-            float pulse = 0.85f + 0.15f * sinf(timeAcc_ * 5.0f);
-            loadingBarFill_->SetColor(Color(Lerp(0.18f, 1.0f, loadProgress_) * pulse, Lerp(0.95f, 0.85f, loadProgress_) * pulse, Lerp(1.0f, 0.25f, loadProgress_) * pulse, 1.0f));
+            float pulse = 0.85f + 0.15f * sinf(timeAcc_ * 8.0f);
+            loadingBarFill_->SetColor(Color(0.15f * pulse, 0.95f * pulse, 0.72f + 0.25f * loadProgress_, 1.0f));
         }
         if (loadingBarShimmer_) {
             loadingBarShimmer_->SetPosition(barX + Max(0, fillW - S(16)), barY - S(3));
@@ -7181,13 +7265,12 @@ private:
                 "Тени 4K, перья PBR, арсенал (12 стволов)",
                 "Волны 2.5 «ПЕРО СУДЬБЫ», перки и радар 110 м"
             };
-            static const char* addrs[6] = { "[0x0007]", "[0x02F1]", "[0x03A0]", "[0x0511]", "[0x0666]", "[0x07FF]" };
             String list;
             for (int i = 0; i < 6; ++i) {
                 if (i < activeStage)      list += "  [✓]  ";
-                else if (i == activeStage) list += "  [▶]  ";
+                else if (i == activeStage) list += "  [›]  ";
                 else                      list += "  [·]  ";
-                list += String(addrs[i]) + "  " + String(shortNames[i]) + "\n";
+                list += String(shortNames[i]) + "\n";
             }
             loadingSpecText_->SetText(list);
         }
@@ -7197,76 +7280,10 @@ private:
     // чтобы игрок видел настоящую плавную загрузку без зависания окна!
     void UpdateBootLoading(float dt) {
         bootStageTimer_ += dt;
-        // Вход загрузки: панель медленно проявляется (easeOutExpo, 1.3 c)
-        if (loadEnterT_ < 1.3f) {
-            loadEnterT_ += dt;
-            if (loadingPanel_ && loadingFadeAlpha_ >= 1.0f)
-                loadingPanel_->SetOpacity(EaseOutExpo(Clamp(loadEnterT_ / 1.3f, 0.0f, 1.0f)));
-        }
-        // Плавный прогресс-бар: догоняет цель без рывков
-        loadProgressSmooth_ += (loadTargetProgress_ - loadProgressSmooth_) * Min(1.0f, dt * 4.0f);
-        if (fabsf(loadTargetProgress_ - loadProgressSmooth_) < 0.0005f)
-            loadProgressSmooth_ = loadTargetProgress_;
         if (loadingTitleText_) {
-            float p = 0.86f + 0.14f * sinf(timeAcc_ * 2.2f);
+            float p = 0.86f + 0.14f * sinf(timeAcc_ * 3.5f);
             loadingTitleText_->SetColor(Color(1.0f, 0.86f * p, 0.25f * p, 1.0f));
         }
-        // Веб-атмосфера бута: сканлайны, полоса, перья, глитч, ореолы, бегущая строка
-        {
-            auto* gfx = GetSubsystem<Graphics>();
-            const int sw = gfx->GetWidth(), sh = gfx->GetHeight();
-            for (unsigned i = 0; i < loadingScanlines_.Size(); ++i) {
-                const int y = int(fmodf(timeAcc_ * S(14.0f) + float(i) * S(90.0f), float(sh + S(90))));
-                loadingScanlines_[i]->SetPosition(0, y);
-            }
-            if (loadingScanBand_) {
-                const int by = int(fmodf(timeAcc_ * float(sh) / 4.6f, float(sh + S(140)))) - S(70);
-                loadingScanBand_->SetPosition(0, by);
-            }
-            for (unsigned i = 0; i < loadingFeathers_.Size(); ++i) {
-                BorderImage* f = loadingFeathers_[i].Get();
-                const float speed = loadingFeatherSpeed_[i];
-                const float phase = loadingFeatherPhase_[i];
-                const int py = sh - int(fmodf(timeAcc_ * speed + phase * sh, float(sh + 40))) + 20;
-                const int px = int(loadingFeatherX_[i]) + int(sinf(timeAcc_ * 0.9f + phase * 6.283f) * S(18.0f));
-                f->SetPosition(px, py);
-                const float a = 0.55f * (float(py) / float(Max(1, sh))) + 0.1f;
-                Color c = f->GetColor(C_TOPLEFT); c.a_ = a; f->SetColor(c);
-            }
-            if (loadingTitleGlowGold_) {
-                const float gp = 0.55f + 0.20f * sinf(timeAcc_ * 1.8f);
-                loadingTitleGlowGold_->SetColor(Color(1.0f, 0.78f, 0.22f, gp * 0.55f));
-            }
-            if (loadingTitleGlowCyan_) {
-                const float cp = 0.45f + 0.18f * sinf(timeAcc_ * 1.5f + 1.3f);
-                loadingTitleGlowCyan_->SetColor(Color(0.18f, 0.95f, 1.0f, cp * 0.45f));
-            }
-            // Глитч пачками: цикл 2.7 c, вспышка в конце (как в вебе)
-            const float gcyc = fmodf(timeAcc_, 2.7f);
-            const bool gOn = gcyc > 2.45f;
-            if (loadingTitleGlitchA_) {
-                loadingTitleGlitchA_->SetVisible(gOn);
-                if (gOn) {
-                    loadingTitleGlitchA_->SetPosition(sw / 2 - S(410) - S(3), sh / 2 - S(198) + int(sinf(timeAcc_ * 40.0f) * S(1.0f)));
-                    loadingTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.85f));
-                }
-            }
-            if (loadingTitleGlitchB_) {
-                const bool bOn = gcyc > 2.55f;
-                loadingTitleGlitchB_->SetVisible(bOn);
-                if (bOn) {
-                    loadingTitleGlitchB_->SetPosition(sw / 2 - S(410) + S(3), sh / 2 - S(198));
-                    loadingTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.8f));
-                }
-            }
-            if (loadingMarquee_) {
-                const float mx = float(sw) - fmodf(timeAcc_ * S(110.0f), float(sw + S(2400)));
-                loadingMarquee_->SetPosition(int(mx), sh - S(88));
-            }
-        }
-
-        // Обновить бар/проценты по плавному значению каждый кадр
-        UpdateLoadingVisuals(loadTargetProgress_, Min(loadStepIndex_, 6));
 
         const float kMinStepHold = 0.11f;
         if (loadStepIndex_ < 7) {
@@ -7280,6 +7297,7 @@ private:
                 break;
             case 1:
                 CreateMaterials();
+                CreateParticleEffects();
                 UpdateLoadingVisuals(0.36f, 2);
                 break;
             case 2:
@@ -7293,18 +7311,18 @@ private:
                 break;
             case 4:
                 CreatePlayer();
+                StartMusicPlayback();
                 ApplyGraphicsSettings();
                 UpdateLoadingVisuals(0.90f, 5);
                 break;
             case 5:
-                InitSfx3DPool();
                 CreateUI();
                 CreateMainMenu();
                 SetupInput();
                 ShowMainMenu(true);
                 if (loadingPanel_) loadingPanel_->BringToFront();
                 UpdateLoadingVisuals(1.0f, 6);
-                loadingFadeAlpha_ = 1.15f;
+                loadingFadeAlpha_ = 0.42f;
                 break;
             case 6:
                 break;
@@ -7315,7 +7333,7 @@ private:
 
         if (loadingFadeAlpha_ > 0.0f) {
             loadingFadeAlpha_ -= dt;
-            float a = Clamp(loadingFadeAlpha_ / 1.15f, 0.0f, 1.0f);
+            float a = Clamp(loadingFadeAlpha_ / 0.42f, 0.0f, 1.0f);
             if (kochThemeSrc_) kochThemeSrc_->SetGain(musicVolume_ * a * a);
             if (loadingPanel_) loadingPanel_->SetOpacity(a * a);
             if (loadingFadeAlpha_ <= 0.0f) {
@@ -7332,7 +7350,7 @@ private:
         splashSfxSrc_ = nullptr;
         kochMusicNode_ = nullptr;
         splashScene_ = nullptr;
-        StartAmbientLoop();
+        StartMusicPlayback();
         if (loadingPanel_) {
             loadingPanel_->Remove();
             loadingPanel_ = nullptr;
@@ -7347,19 +7365,13 @@ private:
         loadingBarTrack_ = nullptr;
         loadingBarFill_ = nullptr;
         loadingBarShimmer_ = nullptr;
-        loadingTitleGlitchA_ = nullptr; loadingTitleGlitchB_ = nullptr;
-        loadingTitleGlowGold_ = nullptr; loadingTitleGlowCyan_ = nullptr;
-        loadingTagline_ = nullptr; loadingMarquee_ = nullptr;
-        loadingScanlines_.Clear(); loadingFeathers_.Clear();
-        loadingFeatherPhase_.Clear(); loadingFeatherX_.Clear(); loadingFeatherSpeed_.Clear();
-        loadingScanBand_ = nullptr;
         loadingScreenActive_ = false;
     }
 
     // =========================================================================
-    // 2.5.6 SPLASH INTRO — «koch.studios» → «powered by fall.os» → «CHICHKENCUM 2.1»
-    // Надписи выплывают снизу (easeOutExpo), открываются посимвольно, светятся,
-    // пробегает волна-блик; CHICHKENCUM наезжает размером с тряской.
+    // 2.5.6 SPLASH INTRO — «koch.studios» -> «powered by fall.os» -> «CHICHKENCUM 2.1»
+    // Посимвольный выплывающий рендер без перецентровки (скрытый измеритель +
+    // отдельный Text на каждую букву), неоновый ореол, блик и наезд 96->76 pt.
     // Скип: клик / Space / Enter / Esc.
     // =========================================================================
     int SplashLineY(int stage) const {
@@ -7370,42 +7382,94 @@ private:
         int sh = GetSubsystem<Graphics>()->GetHeight();
         return sh / 2 - S(stage == 2 ? 62 : (stage == 1 ? 40 : 44));
     }
+    static float EaseOutCubic(float t) {
+        float f = 1.0f - Clamp(t, 0.0f, 1.0f);
+        return 1.0f - f * f * f;
+    }
+    static float EaseOutExpo(float t) {
+        t = Clamp(t, 0.0f, 1.0f);
+        return t >= 1.0f ? 1.0f : 1.0f - powf(2.0f, -10.0f * t);
+    }
+
     void SplashEnterStage(int stage) {
         auto* cache = GetSubsystem<ResourceCache>();
         if (!cache || !splashSfxSrc_) return;
-        // koch.studios — мягкий тик; fall.os — поверпап; CHICHKENCUM — петушиный клич
         const char* snd = stage == 0 ? "Sounds/UI_Select.wav"
                         : stage == 1 ? "Sounds/Powerup.wav"
                                      : "Sounds/Chicken_Boss.wav";
-        if (Sound* s = cache->GetResource<Sound>(snd)) {
+        Sound* s = cache->GetResource<Sound>(snd);
+        if (!s && stage == 2) s = cache->GetResource<Sound>("Sounds/RoosterBoss.wav");
+        if (s) {
             splashSfxSrc_->Stop();
             splashSfxSrc_->SetGain(stage == 2 ? 0.9f : 0.7f);
             splashSfxSrc_->Play(s);
         }
     }
 
+    void ClearSplashGlyphs() {
+        for (unsigned i = 0; i < (unsigned)splashGlyphs_.Size(); ++i) {
+            if (splashGlyphs_[i]) splashGlyphs_[i]->Remove();
+        }
+        splashGlyphs_.Clear();
+        splashGlyphBase_.Clear();
+        splashGlyphIndex_.Clear();
+    }
+
+    void BuildSplashGlyphs(int stage, int sw) {
+        ClearSplashGlyphs();
+        if (!splashMeasure_ || !splashPanel_) return;
+        const int fs = stage == 0 ? SF(36) : SF(27);
+        splashMeasure_->SetFont(font_, fs);
+        splashMeasure_->SetText(splashFullText_);
+        const int n = (int)splashFullText_.Length();
+        if (n <= 0) return;
+        const Vector2 lastPos = splashMeasure_->GetCharPosition(n - 1);
+        const Vector2 lastSize = splashMeasure_->GetCharSize(n - 1);
+        const float totalW = lastPos.x_ + lastSize.x_;
+        const float x0 = sw * 0.5f - totalW * 0.5f;
+        const float baseY = (float)SplashTextY(stage);
+        for (int i = 0; i < n; ++i) {
+            const char c = splashFullText_[i];
+            if (c == ' ') continue;
+            SharedPtr<Text> glyph(splashPanel_->CreateChild<Text>());
+            glyph->SetFont(font_, fs);
+            glyph->SetTextAlignment(HA_LEFT);
+            glyph->SetText(splashFullText_.Substring(i, 1));
+            glyph->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            const Vector2 pos = splashMeasure_->GetCharPosition(i);
+            glyph->SetPosition((int)(x0 + pos.x_), (int)baseY);
+            StyleCrispText(glyph, true);
+            splashGlyphs_.Push(glyph);
+            splashGlyphBase_.Push(Vector2(x0 + pos.x_, baseY));
+            splashGlyphIndex_.Push(i);
+        }
+    }
+
     void ConfigureSplashStage(int stage) {
-        if (!splashText_ || !splashLine_) return;
+        if (!splashLine_) return;
         const int sw = GetSubsystem<Graphics>()->GetWidth();
         splashLine_->SetPosition(sw / 2, SplashLineY(stage));
         splashLine_->SetSize(0, Max(2, S(stage == 2 ? 4.0f : 3.0f)));
-        splashText_->SetPosition(sw / 2 - S(720), SplashTextY(stage) + S(48));   // старт ниже — выплывем вверх
         if (stage == 0) {
             splashFullText_ = "k o c h . s t u d i o s";
-            splashText_->SetFont(font_, SF(36));
-            splashText_->SetText("");
-            splashText_->SetColor(Color(0.90f, 0.96f, 1.0f, 0.0f));
+            if (splashText_) splashText_->SetVisible(false);
+            BuildSplashGlyphs(0, sw);
         } else if (stage == 1) {
             splashFullText_ = "powered by fall.os";
-            splashText_->SetFont(font_, SF(27));
-            splashText_->SetText("");
-            splashText_->SetColor(Color(0.70f, 0.76f, 0.88f, 0.0f));
+            if (splashText_) splashText_->SetVisible(false);
+            BuildSplashGlyphs(1, sw);
         } else {
             splashFullText_ = "CHICHKENCUM 2.1";
-            splashText_->SetFont(font_, SF(104));
-            splashText_->SetText(splashFullText_);
-            splashText_->SetPosition(sw / 2 - S(720), SplashTextY(2) + S(12));
-            splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            ClearSplashGlyphs();
+            if (splashText_) {
+                splashText_->SetVisible(true);
+                splashText_->SetFont(font_, SF(96));
+                splashText_->SetTextAlignment(HA_CENTER);
+                splashText_->SetText(splashFullText_);
+                splashText_->SetPosition(0, SplashTextY(2) + S(14));
+                splashText_->SetWidth(sw);
+                splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+            }
         }
     }
 
@@ -7416,6 +7480,7 @@ private:
         if (!ui || !gfx || !cache) return;
         if (!font_) {
             font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
         }
         const int sw = gfx->GetWidth(), sh = gfx->GetHeight();
@@ -7428,21 +7493,7 @@ private:
         bg->SetSize(sw, sh);
         bg->SetColor(Color(0.0f, 0.0f, 0.0f, 1.0f));
 
-        // Мягкий широкий ореол за надписью (под свечением и текстом)
-        splashHalo_ = splashPanel_->CreateChild<BorderImage>();
-        if (Texture2D* haloTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
-            haloTex->SetFilterMode(FILTER_TRILINEAR);
-            splashHalo_->SetTexture(haloTex);
-        }
-        splashHalo_->SetBlendMode(BLEND_ADD);
-        splashHalo_->SetColor(Color(0.18f, 0.82f, 1.0f, 0.0f));
-        {
-            const int h0 = S(1500);
-            splashHalo_->SetSize(h0, h0);
-            splashHalo_->SetPosition(sw / 2 - h0 / 2, sh / 2 - h0 / 2);
-        }
-
-        // Неоновое свечение за надписью (под текстом и линией)
+        // Неоновое свечение за надписью
         splashGlow_ = splashPanel_->CreateChild<BorderImage>();
         if (Texture2D* glowTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
             glowTex->SetFilterMode(FILTER_TRILINEAR);
@@ -7456,19 +7507,31 @@ private:
             splashGlow_->SetPosition(sw / 2 - g0 / 2, sh / 2 - g0 / 2);
         }
 
-        // Пробегающая световая волна (деликатный блик по тексту слева направо)
+        // Пробегающая световая волна
         splashSheen_ = splashPanel_->CreateChild<BorderImage>();
+        if (Texture2D* sheenTex = cache->GetResource<Texture2D>("Textures/SplashSheen.png")) {
+            sheenTex->SetFilterMode(FILTER_TRILINEAR);
+            splashSheen_->SetTexture(sheenTex);
+        }
         splashSheen_->SetBlendMode(BLEND_ADD);
-        splashSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
-        splashSheen_->SetSize(S(150), S(64));
-        splashSheen_->SetPosition(-S(400), sh / 2 - S(32));
+        splashSheen_->SetColor(Color(1.0f, 0.94f, 0.78f, 0.0f));
+        splashSheen_->SetSize(S(190), S(46));
+        splashSheen_->SetPosition(-S(400), sh / 2 - S(24));
+
+        // Скрытый измеритель ширины
+        splashMeasure_ = splashPanel_->CreateChild<Text>();
+        splashMeasure_->SetVisible(false);
+        splashMeasure_->SetFont(font_, SF(36));
+        splashMeasure_->SetTextAlignment(HA_LEFT);
+        splashMeasure_->SetPosition(0, -S(500));
 
         splashText_ = splashPanel_->CreateChild<Text>();
-        splashText_->SetFont(font_, SF(36));
+        splashText_->SetFont(font_, SF(96));
         splashText_->SetTextAlignment(HA_CENTER);
-        splashText_->SetPosition(sw / 2 - S(720), sh / 2 - S(44));
-        splashText_->SetWidth(S(1440));
-        splashText_->SetColor(Color(0.90f, 0.96f, 1.0f, 0.0f));
+        splashText_->SetPosition(0, sh / 2 - S(62));
+        splashText_->SetWidth(sw);
+        splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+        splashText_->SetVisible(false);
         StyleCrispText(splashText_, true);
 
         splashLine_ = splashPanel_->CreateChild<BorderImage>();
@@ -7476,7 +7539,6 @@ private:
         splashLine_->SetSize(0, Max(2, S(3.0f)));
         splashLine_->SetColor(Color(0.20f, 0.92f, 1.0f, 0.0f));
 
-        // Временная сцена для музыки: главная сцена игры создаётся лишь на шаге 3 загрузки
         splashScene_ = SharedPtr<Scene>(new Scene(context_));
         kochMusicNode_ = SharedPtr<Node>(splashScene_->CreateChild("KochTheme"));
         if (kochMusicNode_) {
@@ -7488,7 +7550,7 @@ private:
                     kochThemeSrc_->SetGain(musicVolume_);
                     kochThemeSrc_->Play(theme);
                 } else {
-                    kochThemeSrc_ = nullptr;   // нет файла — немой показ, основная музыка вступит как обычно
+                    kochThemeSrc_ = nullptr;
                 }
             }
         }
@@ -7503,20 +7565,22 @@ private:
     void EndSplashIntro() {
         if (splashPanel_) { splashPanel_->Remove(); splashPanel_ = nullptr; }
         splashText_ = nullptr;
+        splashMeasure_ = nullptr;
+        splashGlyphs_.Clear();
+        splashGlyphBase_.Clear();
+        splashGlyphIndex_.Clear();
         splashLine_ = nullptr;
         splashGlow_ = nullptr;
-        splashHalo_ = nullptr;
         splashSheen_ = nullptr;
         splashFullText_ = String();
         splashActive_ = false;
         splashTimer_ = 0.0f;
         splashStage_ = 0;
-        // Музыка продолжает звучать в фазе загрузки и затухает вместе с экраном (fade в UpdateBootLoading)
     }
 
     void UpdateSplashIntro(float dt) {
         auto* input = GetSubsystem<Input>();
-        if (input) {   // скип заставки
+        if (input) {
             if (input->GetMouseButtonDown(MOUSEB_LEFT) || input->GetMouseButtonDown(MOUSEB_RIGHT) ||
                 input->GetKeyPress(KEY_SPACE) || input->GetKeyPress(KEY_RETURN) ||
                 input->GetKeyPress(KEY_ESCAPE)) {
@@ -7528,107 +7592,90 @@ private:
         const int sw = GetSubsystem<Graphics>()->GetWidth();
         const int sh = GetSubsystem<Graphics>()->GetHeight();
 
-        static const float kDur[3]   = { 1.30f, 1.20f, 2.55f };
-        static const float kIn[3]    = { 0.85f, 0.80f, 0.18f };
-        static const float kOutAt[3] = { 1.02f, 0.94f, 2.18f };
-        static const int   kLineW[3] = { 300, 200, 840 };
+        static const float kDur[3]   = { 1.15f, 1.10f, 2.30f };
+        static const float kOutAt[3] = { 0.88f, 0.84f, 2.00f };
+        static const int   kLineW[3] = { 300, 210, 840 };
 
         const int stage = splashStage_;
         const float t = splashTimer_;
-        const float inT  = Clamp(t / kIn[stage], 0.0f, 1.0f);
         const float outT = Clamp((t - kOutAt[stage]) / (kDur[stage] - kOutAt[stage]), 0.0f, 1.0f);
-        const float alpha = Clamp(EaseOutCubic(inT) * (1.0f - EaseOutCubic(outT)), 0.0f, 1.0f);
+        const float fadeOut = 1.0f - EaseOutCubic(outT);
+        const float globalAlpha = Clamp(fadeOut, 0.0f, 1.0f);
 
-        // «Выплывание»: текст поднимается на easeOutExpo на всю стадию + дыхание в покое
-        const float floatAmp = (float)S(stage == 2 ? 12 : 48);
-        const float floatOff = (1.0f - EaseOutExpo(Clamp(t / kDur[stage], 0.0f, 1.0f))) * floatAmp;
-        const float breathe  = sinf(t * 1.4f + stage * 1.7f) * (float)S(3.0f)
-                             * Clamp((t - 0.7f) / 0.6f, 0.0f, 1.0f);
-        int drawX = sw / 2 - S(720);
-        int drawY = SplashTextY(stage) + (int)floatOff + (int)breathe;
+        const float floatAmp = (float)S(stage == 2 ? 12 : 46);
+        const float floatOff = (1.0f - EaseOutExpo(Clamp(t / 1.00f, 0.0f, 1.0f))) * floatAmp;
+        const float breathe  = sinf(t * 1.7f + stage * 1.7f) * (float)S(2.0f)
+                             * Clamp((t - 0.85f) / 0.5f, 0.0f, 1.0f);
 
-        if (stage == 2) {
-            // CHICHKENCUM: наезд размера 104→76 и затухающая тряска от удара
-            const float punch = 1.0f - EaseOutExpo(Clamp(t / 0.26f, 0.0f, 1.0f));
-            splashText_->SetFont(font_, SF((int)(76.0f + 28.0f * punch)));
-            drawX += (int)(sinf(t * 88.0f) * expf(-t * 9.5f) * (float)S(6.0f));
-        } else {
-            // Посимвольное открытие надписи
-            const float reveal = EaseOutCubic(Clamp(t / 1.05f, 0.0f, 1.0f));
-            const int n = (int)(splashFullText_.Length() * reveal + 0.49f);
-            splashText_->SetText(splashFullText_.Substring(0, n));
-        }
-
-        // Цвет текста. CHICHKENCUM вспыхивает белым и остывает в золото
         Color base = stage == 0 ? Color(0.90f, 0.96f, 1.0f, 1.0f)
-                   : stage == 1 ? Color(0.70f, 0.76f, 0.88f, 1.0f)
+                   : stage == 1 ? Color(0.74f, 0.80f, 0.92f, 1.0f)
                                 : Color(1.0f, 0.78f, 0.16f, 1.0f);
         if (stage == 2) {
-            const float flash = EaseOutCubic(Clamp(t / 0.55f, 0.0f, 1.0f));
+            const float flash = EaseOutCubic(Clamp(t / 0.60f, 0.0f, 1.0f));
             base = Color(1.0f, Lerp(1.0f, 0.78f, flash), Lerp(1.0f, 0.16f, flash), 1.0f);
         }
-        base.a_ = alpha;
-        if (splashText_) {
-            splashText_->SetColor(base);
-            splashText_->SetPosition(drawX, drawY);
+
+        if (stage < 2) {
+            const float fsFloat = (float)S(stage == 0 ? 30 : 24);
+            for (unsigned i = 0; i < (unsigned)splashGlyphs_.Size(); ++i) {
+                SharedPtr<Text>& glyph = splashGlyphs_[i];
+                if (!glyph) continue;
+                const float delay = 0.10f + splashGlyphIndex_[i] * 0.042f;
+                const float lt = Clamp((t - delay) / 0.55f, 0.0f, 1.0f);
+                const float ease = EaseOutCubic(lt);
+                Color gc = base; gc.a_ = ease * globalAlpha;
+                glyph->SetColor(gc);
+                glyph->SetPosition((int)splashGlyphBase_[i].x_,
+                                   (int)(splashGlyphBase_[i].y_ + (1.0f - EaseOutExpo(lt)) * fsFloat + breathe));
+            }
+        } else if (splashText_) {
+            const float punch = 1.0f - EaseOutExpo(Clamp(t / 0.30f, 0.0f, 1.0f));
+            splashText_->SetFont(font_, SF((int)(76.0f + 20.0f * punch)));
+            Color sc = base; sc.a_ = globalAlpha;
+            splashText_->SetColor(sc);
+            splashText_->SetPosition(0, SplashTextY(2) + S(14) + (int)floatOff + (int)breathe);
         }
 
-        // Неоновое свечение за текстом (тинт стадии + пульс)
         if (splashGlow_) {
             static const Color kGlow[3] = {
-                Color(0.18f, 0.82f, 1.0f, 1.0f),
-                Color(1.00f, 0.55f, 0.15f, 1.0f),
-                Color(1.00f, 0.60f, 0.12f, 1.0f)
+                Color(0.16f, 0.80f, 1.00f, 1.0f),
+                Color(0.95f, 0.52f, 0.16f, 1.0f),
+                Color(1.00f, 0.58f, 0.12f, 1.0f)
             };
-            const float pulse = 0.72f + 0.28f * sinf(t * 2.2f + stage * 2.1f);
-            const int gsize = S(stage == 2 ? 1320 : 980);
+            const float glowIn = EaseOutCubic(Clamp(t / 0.7f, 0.0f, 1.0f));
+            const float pulse = 0.78f + 0.22f * sinf(t * 1.9f + stage * 2.3f);
+            const int gsize = S(stage == 2 ? 1150 : 840);
             Color gc = kGlow[stage];
-            gc.a_ = alpha * 0.78f * pulse;
+            gc.a_ = glowIn * globalAlpha * 0.46f * pulse;
             splashGlow_->SetSize(gsize, gsize);
             splashGlow_->SetPosition(sw / 2 - gsize / 2, sh / 2 - gsize / 2 + (int)floatOff + (int)breathe);
             splashGlow_->SetColor(gc);
         }
 
-        // Мягкий широкий ореол: медленный пульс, тот же тинт стадии
-        if (splashHalo_) {
-            static const Color kHalo[3] = {
-                Color(0.18f, 0.82f, 1.0f, 1.0f),
-                Color(1.00f, 0.55f, 0.15f, 1.0f),
-                Color(1.00f, 0.60f, 0.12f, 1.0f)
-            };
-            const float hpulse = 0.70f + 0.30f * sinf(t * 1.1f + stage * 2.1f);
-            const int hsize = S(stage == 2 ? 1800 : 1500);
-            Color hc = kHalo[stage];
-            hc.a_ = alpha * 0.38f * hpulse;
-            splashHalo_->SetSize(hsize, hsize);
-            splashHalo_->SetPosition(sw / 2 - hsize / 2, sh / 2 - hsize / 2 + (int)floatOff + (int)breathe);
-            splashHalo_->SetColor(hc);
-        }
-
-        // Волна-блик проскакивает слева направо в середине каждой стадии
         if (splashSheen_) {
-            const float sweep = t - 0.68f;
-            if (sweep > 0.0f && sweep < 0.85f && alpha > 0.20f) {
-                const float k = sweep / 0.85f;
-                splashSheen_->SetPosition((int)Lerp(-S(240), sw + S(40), k), drawY - S(8));
-                Color sc(1.0f, 1.0f, 1.0f, 0.50f * alpha * sinf(3.14159265f * k));
+            const float sweep = t - 0.55f;
+            if (sweep > 0.0f && sweep < 0.80f) {
+                const float k = sweep / 0.80f;
+                const float easeK = k < 0.5f ? 2.0f * k * k : 1.0f - powf(-2.0f * k + 2.0f, 2.0f) / 2.0f;
+                splashSheen_->SetPosition((int)Lerp(sw * 0.5f - S(460), sw * 0.5f + S(300), easeK),
+                                          SplashTextY(stage) + (int)floatOff - S(2));
+                Color sc(1.0f, 0.93f, 0.78f, 0.52f * globalAlpha * sinf(3.14159265f * k));
                 splashSheen_->SetColor(sc);
             } else {
-                splashSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+                splashSheen_->SetColor(Color(1.0f, 0.93f, 0.78f, 0.0f));
             }
         }
 
-        // Неоновая линия раскрывается от центра (easeOutQuad)
-        float lineT = Clamp(t / 0.85f, 0.0f, 1.0f);
+        float lineT = Clamp((t - 0.14f) / 0.55f, 0.0f, 1.0f);
         lineT = 1.0f - (1.0f - lineT) * (1.0f - lineT);
         const int w = (int)(S(kLineW[stage]) * lineT);
         if (splashLine_) {
             splashLine_->SetPosition(sw / 2 - w / 2, SplashLineY(stage));
             splashLine_->SetSize(Max(0, w), Max(2, S(stage == 2 ? 4.0f : 3.0f)));
-            Color lc = stage == 0 ? Color(0.20f, 0.92f, 1.0f, 1.0f)
-                     : stage == 1 ? Color(1.0f, 0.56f, 0.16f, 1.0f)
-                                  : Color(1.0f, 0.36f, 0.14f, 1.0f);
-            lc.a_ = 0.95f * alpha;
+            Color lc = stage == 0 ? Color(0.20f, 0.92f, 1.00f, 1.0f)
+                     : stage == 1 ? Color(1.00f, 0.58f, 0.18f, 1.0f)
+                                  : Color(1.00f, 0.72f, 0.22f, 1.0f);
+            lc.a_ = 0.92f * EaseOutCubic(Clamp(t / 0.45f, 0.0f, 1.0f)) * globalAlpha;
             splashLine_->SetColor(lc);
         }
 
@@ -7638,20 +7685,6 @@ private:
             if (splashStage_ > 2) { EndSplashIntro(); return; }
             ConfigureSplashStage(splashStage_);
             SplashEnterStage(splashStage_);
-        }
-    }
-
-    void StartAmbientLoop() {
-        if (musicSource_) return;
-        auto* cache = GetSubsystem<ResourceCache>();
-        if (!cache || !cameraNode_) return;
-        Sound* mus = cache->GetResource<Sound>("Music/Game_Theme_Loop.ogg");
-        if (!mus) return;
-        mus->SetLooped(true);
-        if (!musicSource_) musicSource_ = cameraNode_->CreateComponent<SoundSource>();
-        if (musicSource_) {
-            musicSource_->SetGain(musicVolume_);
-            musicSource_->Play(mus);
         }
     }
 
@@ -7665,7 +7698,6 @@ private:
         deployPanel_ = root->CreateChild<UIElement>("DeployOverlay");
         deployPanel_->SetSize(sw, sh);
         deployPanel_->SetPriority(900);
-        deployPanel_->SetOpacity(0.0f);   // вход высадки проявит панель за 0.5 c
 
         BorderImage* dbg = deployPanel_->CreateChild<BorderImage>();
         dbg->SetSize(sw, sh);
@@ -7701,7 +7733,7 @@ private:
         deployBarFill_->SetSize(S(20), S(8));
         deployBarFill_->SetColor(Color(0.20f, 0.95f, 0.72f, 1.0f));
 
-        deployDuration_ = 1.60f;
+        deployDuration_ = 0.70f;
         deployTimer_ = deployDuration_;
     }
 
@@ -7712,15 +7744,7 @@ private:
         if (deployBarFill_) {
             deployBarFill_->SetSize((int)(S(520.0f) * Min(1.0f, elapsed * 1.45f)), S(8));
         }
-        // Вход высадки: медленное проявление (0.5 c) + заголовок поднимается снизу
-        const float fadeIn = EaseOutExpo(Clamp(elapsed / 0.5f, 0.0f, 1.0f));
-        if (deployTitleText_) {
-            auto* gfx = GetSubsystem<Graphics>();
-            const int sw = gfx->GetWidth(), sh = gfx->GetHeight();
-            deployTitleText_->SetPosition(sw / 2 - S(460), sh / 2 - S(70) + int((1.0f - fadeIn) * S(24.0f)));
-        }
-        const float fadeOut = deployTimer_ < 0.50f ? Clamp(deployTimer_ / 0.50f, 0.0f, 1.0f) : 1.0f;
-        const float alpha = Min(fadeIn, fadeOut);
+        float alpha = deployTimer_ < 0.28f ? Clamp(deployTimer_ / 0.28f, 0.0f, 1.0f) : 1.0f;
         deployPanel_->SetOpacity(alpha);
         if (deployTimer_ <= 0.0f) {
             deployPanel_->Remove();
@@ -7758,7 +7782,7 @@ private:
             }
         }
         // Гранатомёт подрывает и взрывные бочки в радиусе!
-        for (unsigned bi = 0; bi < barrels_.Size(); ++bi) {
+        for (unsigned bi = 0; bi < (unsigned)barrels_.Size(); ++bi) {
             if (barrels_[bi].exploded_) continue;
             float dist = (barrels_[bi].home_ - center).Length();
             if (dist <= radius) DetonateBarrel(barrels_[bi]);
@@ -7811,13 +7835,14 @@ private:
             highScore_ = player_.score_;
             SaveSettingsFile();
         }
+        lastGameOverStats_ =
+            String("СЧЁТ: ") + String(player_.score_) + "   |   ВОЛНА: " + String(waveNum_) + "\n" +
+            String("УБИЙСТВ: ") + String(player_.kills_) + "  (ХЭДШОТОВ ◆: " + String(player_.headshots_) + ")   |   ЛУЧШЕЕ КОМБО: x" + String(bestCombo_) + "\n" +
+            String("ТОЧНОСТЬ: ") + String((int)player_.GetAccuracy()) + "%   |   РЕКОРД: " + String(highScore_) + "\n" +
+            String("ВРЕМЯ: ") + FormatTime(arenaTime_) + "   |   ТЕМП: " +
+            String(arenaTime_ > 5.0f ? (int)(player_.kills_ / (arenaTime_ / 60.0f)) : 0) + " уб/мин";
         if (gameOverStatsText_) {
-            gameOverStatsText_->SetText(
-                String("СЧЁТ: ") + String(player_.score_) + "   |   ВОЛНА: " + String(waveNum_) + "\n" +
-                String("УБИЙСТВ: ") + String(player_.kills_) + "  (ХЭДШОТОВ ★: " + String(player_.headshots_) + ")   |   ЛУЧШЕЕ КОМБО: x" + String(bestCombo_) + "\n" +
-                String("ТОЧНОСТЬ: ") + String((int)player_.GetAccuracy()) + "%   |   РЕКОРД: " + String(highScore_) + "\n" +
-                String("ВРЕМЯ: ") + FormatTime(arenaTime_) + "   |   ТЕМП: " +
-                String(arenaTime_ > 5.0f ? (int)(player_.kills_ / (arenaTime_ / 60.0f)) : 0) + " уб/мин");
+            gameOverStatsText_->SetText(lastGameOverStats_);
         }
         ShowGameOver(true);
     }
@@ -7947,11 +7972,11 @@ private:
     }
 
     void UpdateArmoryHighlight() {
-        for (unsigned i = 0; i < armoryWeaponRows_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)armoryWeaponRows_.Size(); ++i) {
             bool sel = ((int)i == currentWeapon_);
             armoryWeaponRows_[i]->SetColor(sel ? Color(1.0f, 0.86f, 0.22f, 1.0f) : Color(0.85f, 0.88f, 0.94f, 1.0f));
         }
-        for (unsigned i = 0; i < armorySkinRows_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)armorySkinRows_.Size(); ++i) {
             bool sel = ((int)i == currentSkin_);
             Color sc = NormByteColor(SKIN_DEFS[i].color);
             if (sel) armorySkinRows_[i]->SetColor(Color(1.0f, 0.86f, 0.22f, 1.0f));
@@ -7968,12 +7993,12 @@ private:
             for (UIElement* e = el; e; e = e->GetParent()) { p.x_ += e->GetPosition().x_; p.y_ += e->GetPosition().y_; }
             return p;
         };
-        for (unsigned i = 0; i < armoryWeaponRows_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)armoryWeaponRows_.Size(); ++i) {
             UIElement* row = armoryWeaponRows_[i];
             IntVector2 rp = screenPos(row);
             if (rp.x_ <= mp.x_ && mp.x_ < rp.x_ + (int)row->GetWidth() && rp.y_ <= mp.y_ && mp.y_ < rp.y_ + (int)row->GetHeight()) { EquipWeapon((int)i, false); UpdateArmoryHighlight(); return; }
         }
-        for (unsigned i = 0; i < armorySkinRows_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)armorySkinRows_.Size(); ++i) {
             UIElement* row = armorySkinRows_[i];
             IntVector2 rp = screenPos(row);
             if (rp.x_ <= mp.x_ && mp.x_ < rp.x_ + (int)row->GetWidth() && rp.y_ <= mp.y_ && mp.y_ < rp.y_ + (int)row->GetHeight()) { CycleSkin((int)i - currentSkin_); return; }
@@ -8210,7 +8235,7 @@ private:
         }
         if (gfx) gfx->SetDefaultTextureAnisotropy((unsigned)aniso);
 
-        for (unsigned i = 0; i < anisoTextures_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)anisoTextures_.Size(); ++i) {
             if (anisoTextures_[i]) {
                 anisoTextures_[i]->SetFilterMode(fm);
                 anisoTextures_[i]->SetAnisotropy((unsigned)aniso);
@@ -8274,7 +8299,6 @@ private:
     void CreateMainMenu() {
         if (mainMenuPanel_) return;
         RefreshUIScale();
-        auto* cache = GetSubsystem<ResourceCache>();
         auto* ui = GetSubsystem<UI>();
         auto* root = ui->GetRoot();
         int sw = GetSubsystem<Graphics>()->GetWidth();
@@ -8282,7 +8306,6 @@ private:
 
         mainMenuPanel_ = root->CreateChild<UIElement>("MainMenuPanel");
         mainMenuPanel_->SetSize(sw, sh);
-        mainMenuPanel_->SetOpacity(0.0f);   // вход меню проявит панель каскадом
 
         BorderImage* bg = mainMenuPanel_->CreateChild<BorderImage>();
         bg->SetSize(sw, sh);
@@ -8302,20 +8325,6 @@ private:
         botShade->SetPosition(0, sh - sh / 6); botShade->SetSize(sw, sh / 6);
         botShade->SetColor(Color(0.0f, 0.0f, 0.01f, 0.46f));
 
-        // Сканлайны + бегущая световая полоса (как в веб-буте)
-        for (int i = 0; i < 10; ++i) {
-            BorderImage* ln = mainMenuPanel_->CreateChild<BorderImage>();
-            ln->SetPosition(0, i * S(90));
-            ln->SetSize(sw, Max(1, S(1)));
-            ln->SetColor(Color(0.18f, 0.95f, 1.0f, 0.04f));
-            menuScanlines_.Push(SharedPtr<BorderImage>(ln));
-        }
-        menuScanBand_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuScanBand_->SetPosition(0, -S(70));
-        menuScanBand_->SetSize(sw, S(70));
-        menuScanBand_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.07f));
-        menuScanBand_->SetBlendMode(BLEND_ADD);
-
         for (int i = 0; i < 28; ++i) {
             BorderImage* p = mainMenuPanel_->CreateChild<BorderImage>();
             int sz = Max(2, S(2.0f + rand() % 3));
@@ -8331,38 +8340,19 @@ private:
             menuParticleSpeed_.Push((18.0f + rand() % 42) * uiScale_);
         }
 
-        int plateW = S(720), plateH = S(620);
-        // Ореол света за плашкой (additive, под плашкой)
-        menuGlow_ = mainMenuPanel_->CreateChild<BorderImage>();
-        if (Texture2D* glowTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
-            glowTex->SetFilterMode(FILTER_TRILINEAR);
-            menuGlow_->SetTexture(glowTex);
-        }
-        menuGlow_->SetBlendMode(BLEND_ADD);
-        menuGlow_->SetColor(Color(1.0f, 0.72f, 0.28f, 0.0f));
-        {
-            const int gs = S(1150);
-            menuGlow_->SetSize(gs, gs);
-            menuGlow_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(316) + plateH / 2 - gs / 2);
-        }
+        int plateW = S(740), plateH = S(620);
         menuPlate_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuPlate_->SetPosition(sw / 2 - plateW / 2, sh / 2 - S(316));
+        menuPlate_->SetPosition(sw / 2 - plateW / 2, sh / 2 - S(308));
         menuPlate_->SetSize(plateW, plateH);
         menuPlate_->SetColor(Color(0.018f, 0.042f, 0.088f, 0.64f));
-        // Блик-свип по плашке при входе (additive, над плашкой, под текстом)
-        menuSheen_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuSheen_->SetBlendMode(BLEND_ADD);
-        menuSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
-        menuSheen_->SetSize(S(130), plateH);
-        menuSheen_->SetPosition(sw / 2 - plateW / 2 - S(180), sh / 2 - S(316));
 
         int bTh = Max(2, S(2.0f));
         struct Edge { int x, y, w, h; };
         Edge edges[4] = {
-            { sw/2 - plateW/2 - bTh, sh/2 - S(316) - bTh, plateW + bTh*2, bTh },
-            { sw/2 - plateW/2 - bTh, sh/2 - S(316) + plateH, plateW + bTh*2, bTh },
-            { sw/2 - plateW/2 - bTh, sh/2 - S(316) - bTh, bTh, plateH + bTh*2 },
-            { sw/2 + plateW/2,       sh/2 - S(316) - bTh, bTh, plateH + bTh*2 }
+            { sw/2 - plateW/2 - bTh, sh/2 - S(308) - bTh, plateW + bTh*2, bTh },
+            { sw/2 - plateW/2 - bTh, sh/2 - S(308) + plateH, plateW + bTh*2, bTh },
+            { sw/2 - plateW/2 - bTh, sh/2 - S(308) - bTh, bTh, plateH + bTh*2 },
+            { sw/2 + plateW/2,       sh/2 - S(308) - bTh, bTh, plateH + bTh*2 }
         };
         for (int i = 0; i < 4; ++i) {
             BorderImage* e = mainMenuPanel_->CreateChild<BorderImage>();
@@ -8371,94 +8361,62 @@ private:
             e->SetColor(Color(0.25f, 0.82f, 1.0f, 0.42f));
         }
 
-        // Ореол за заголовком меню (золото, как в веб-буте)
-        menuTitleGlow_ = mainMenuPanel_->CreateChild<BorderImage>();
-        if (Texture2D* glowTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
-            glowTex->SetFilterMode(FILTER_TRILINEAR);
-            menuTitleGlow_->SetTexture(glowTex);
-        }
-        menuTitleGlow_->SetBlendMode(BLEND_ADD);
-        menuTitleGlow_->SetColor(Color(1.0f, 0.78f, 0.22f, 0.0f));
-        {
-            const int gs = S(560);
-            menuTitleGlow_->SetSize(gs, gs);
-            menuTitleGlow_->SetPosition(sw / 2 - gs / 2, sh / 2 - S(252) + S(32) - gs / 2);
-        }
-        // Глитч-копии заголовка меню (циан/красный, вспыхивают пачками)
-        menuTitleGlitchA_ = mainMenuPanel_->CreateChild<Text>();
-        menuTitleGlitchA_->SetFont(font_, SF(64));
-        menuTitleGlitchA_->SetText("CHIKENGUN 2.5");
-        menuTitleGlitchA_->SetTextAlignment(HA_CENTER);
-        menuTitleGlitchA_->SetPosition(sw / 2 - S(420), sh / 2 - S(252));
-        menuTitleGlitchA_->SetWidth(S(840));
-        menuTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.0f));
-        StyleCrispText(menuTitleGlitchA_);
-        menuTitleGlitchB_ = mainMenuPanel_->CreateChild<Text>();
-        menuTitleGlitchB_->SetFont(font_, SF(64));
-        menuTitleGlitchB_->SetText("CHIKENGUN 2.5");
-        menuTitleGlitchB_->SetTextAlignment(HA_CENTER);
-        menuTitleGlitchB_->SetPosition(sw / 2 - S(420), sh / 2 - S(252));
-        menuTitleGlitchB_->SetWidth(S(840));
-        menuTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.0f));
-        StyleCrispText(menuTitleGlitchB_);
-
         Text* title = mainMenuPanel_->CreateChild<Text>();
         title->SetFont(font_, SF(64));
         title->SetText("CHIKENGUN 2.5");
         title->SetTextAlignment(HA_CENTER);
-        title->SetPosition(sw / 2 - S(420), sh / 2 - S(252));
+        title->SetPosition(sw / 2 - S(420), sh / 2 - S(284));
         title->SetWidth(S(840));
         title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
         StyleCrispText(title, true);
         menuTitle_ = SharedPtr<Text>(title);
 
         menuAccentBar_ = mainMenuPanel_->CreateChild<BorderImage>();
-        menuAccentBar_->SetPosition(sw / 2 - S(200), sh / 2 - S(170));
+        menuAccentBar_->SetPosition(sw / 2 - S(200), sh / 2 - S(206));
         menuAccentBar_->SetSize(S(400), Max(2, S(2.5f)));
         menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.9f));
 
         Text* sub = mainMenuPanel_->CreateChild<Text>();
         sub->SetFont(font_, SF(16));
-        sub->SetText("[ 2.5 ПЕРО СУДЬБЫ ]   •   [ 4K ULTRA PBR ]   •   [ КОЧЕТ В БАНЬКЕ ]");
+        sub->SetText("[ 2.5 ПЕРО СУДЬБЫ ]  •  [ БАНЬКА ]  •  [ КАЗИК ]  •  [ МИНИИГРЫ ]");
         sub->SetTextAlignment(HA_CENTER);
-        sub->SetPosition(sw / 2 - S(440), sh / 2 - S(154));
+        sub->SetPosition(sw / 2 - S(440), sh / 2 - S(190));
         sub->SetWidth(S(880));
         sub->SetColor(Color(0.48f, 0.86f, 1.0f, 0.95f));
         StyleCrispText(sub);
         menuSub_ = SharedPtr<Text>(sub);
 
-        const char* items[6] = {
+        const char* items[7] = {
             "ПОЛИГОН (тир 4K)",
             "КИБЕР-АРЕНА (волны + босс)",
-            "КОЧЕТ В БАНЬКЕ (симулятор парной)",
-            "ЗОЛОТАЯ РУЛЕТКА (фейковые фишки)",
+            "КОЧЕТ В БАНЬКЕ (парная) [P]",
+            "КАЗИНО (рулетка + 777) [J]",
+            "PIXEL ARCADE (6 миниигр) [K]",
             "НАСТРОЙКИ 4K ULTRA",
             "ВЫХОД"
         };
-        for (int i = 0; i < 6; ++i) {
+        for (int i = 0; i < 7; ++i) {
             BorderImage* rowBg = mainMenuPanel_->CreateChild<BorderImage>();
-            rowBg->SetPosition(sw / 2 - S(300), sh / 2 - S(100) + i * S(49));
-            rowBg->SetSize(S(600), S(42));
+            rowBg->SetPosition(sw / 2 - S(300), sh / 2 - S(142) + i * S(44));
+            rowBg->SetSize(S(600), S(38));
             rowBg->SetColor(Color(0.05f, 0.14f, 0.24f, i == menuSel_ ? 0.52f : 0.0f));
             rowBg->SetName(String("MenuRow") + String(i));
             menuRows_.Push(rowBg);
-            menuRowBases_.Push(rowBg->GetPosition());
 
             Text* it = mainMenuPanel_->CreateChild<Text>();
-            it->SetFont(font_, SF(25));
+            it->SetFont(font_, SF(23));
             it->SetText(items[i]);
-            it->SetPosition(sw / 2 - S(290), sh / 2 - S(94) + i * S(49));
+            it->SetPosition(sw / 2 - S(290), sh / 2 - S(137) + i * S(44));
             it->SetWidth(S(580));
             StyleCrispText(it);
             mainMenuItems_.Push(SharedPtr<Text>(it));
-            menuItemBases_.Push(it->GetPosition());
         }
 
         Text* hint = mainMenuPanel_->CreateChild<Text>();
-        hint->SetFont(font_, SF(15));
-        hint->SetText("W/S — выбор   •   ENTER — запуск   •   [P] БАНЬКА   •   РУЛЕТКА — виртуальные фишки   •   F11 — полный экран");
+        hint->SetFont(font_, SF(14));
+        hint->SetText("W/S — выбор  •  ENTER — старт  •  [P] БАНЯ  •  [J] КАЗИК  •  [K] МИНИИГРЫ  •  F11/F3");
         hint->SetTextAlignment(HA_CENTER);
-        hint->SetPosition(sw / 2 - S(440), sh / 2 + S(236));
+        hint->SetPosition(sw / 2 - S(440), sh / 2 + S(210));
         hint->SetWidth(S(880));
         hint->SetColor(Color(0.75f, 0.82f, 0.90f, 0.92f));
         StyleCrispText(hint);
@@ -8468,8 +8426,8 @@ private:
     }
 
     void AnimateMainMenu(float dt) {
+        (void)dt;
         if (!mainMenuPanel_ || !mainMenuPanel_->IsVisible()) return;
-        if (menuEnterT_ < 4.0f) menuEnterT_ += dt;
         auto* gfx = GetSubsystem<Graphics>();
         int sw = gfx->GetWidth(), sh = gfx->GetHeight();
 
@@ -8495,7 +8453,7 @@ private:
         if (menuHint_) {
             menuHint_->SetColor(Color(0.75f, 0.82f, 0.90f, 0.58f + 0.36f * sinf(timeAcc_ * 2.0f)));
         }
-        for (unsigned i = 0; i < menuParticles_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)menuParticles_.Size(); ++i) {
             BorderImage* p = menuParticles_[i].Get();
             float speed = menuParticleSpeed_[i];
             float phase = menuParticlePhase_[i];
@@ -8509,84 +8467,17 @@ private:
         IntVector2 mp = input->GetMousePosition();
         float nx = (float(mp.x_) / Max(1, sw) - 0.5f);
         float ny = (float(mp.y_) / Max(1, sh) - 0.5f);
-        // Вход меню: плашка/заголовок/полоса поднимаются снизу (easeOutExpo, 1.35 c)
-        const int rise = int((1.0f - EaseOutExpo(Clamp(menuEnterT_ / 1.35f, 0.0f, 1.0f))) * S(42.0f));
         if (menuPlate_) {
             menuPlate_->SetPosition(menuPlateBase_.x_ + int(nx * S(10.0f)),
-                                    menuPlateBase_.y_ + int(ny * S(6.0f)) + rise);
+                                    menuPlateBase_.y_ + int(ny * S(6.0f)));
         }
         if (menuTitle_) {
             menuTitle_->SetPosition(menuTitleBase_.x_ - int(nx * S(7.0f)),
-                                    menuTitleBase_.y_ + int(sinf(timeAcc_ * 0.8f) * S(3.0f)) + rise);
+                                    menuTitleBase_.y_ + int(sinf(timeAcc_ * 0.8f) * S(3.0f)));
         }
         if (menuAccentBar_) {
             int w = menuAccentBar_->GetWidth();
-            menuAccentBar_->SetPosition(sw / 2 - w / 2 - int(nx * S(4.0f)), menuBarBase_.y_ + rise);
-        }
-
-        // Вход меню: панель проявляется, строки каскадом, свет вокруг
-        const float panelA = EaseOutExpo(Clamp(menuEnterT_ / 1.2f, 0.0f, 1.0f));
-        mainMenuPanel_->SetOpacity(panelA);
-        for (unsigned i = 0; i < mainMenuItems_.Size() && i < menuItemBases_.Size(); ++i) {
-            const float lt = Clamp((menuEnterT_ - float(i) * 0.13f) / 0.95f, 0.0f, 1.0f);
-            const float e = EaseOutExpo(lt);
-            const int offY = int((1.0f - e) * S(30.0f));
-            mainMenuItems_[i]->SetPosition(menuItemBases_[i].x_, menuItemBases_[i].y_ + offY);
-            mainMenuItems_[i]->SetOpacity(e);
-            if (i < menuRows_.Size() && i < menuRowBases_.Size()) {
-                menuRows_[i]->SetPosition(menuRowBases_[i].x_, menuRowBases_[i].y_ + offY);
-                menuRows_[i]->SetOpacity(e);
-            }
-        }
-        if (menuSub_)  menuSub_->SetOpacity(EaseOutExpo(Clamp((menuEnterT_ - 0.40f) / 1.0f, 0.0f, 1.0f)));
-        if (menuHint_) menuHint_->SetOpacity(EaseOutExpo(Clamp((menuEnterT_ - 0.95f) / 1.0f, 0.0f, 1.0f)));
-        if (menuGlow_) {
-            const float ga = panelA * (0.42f + 0.13f * sinf(timeAcc_ * 1.5f));
-            menuGlow_->SetColor(Color(1.0f, 0.72f, 0.28f, ga));
-        }
-        if (menuSheen_ && menuPlate_) {
-            const float st = menuEnterT_ - 0.75f;
-            if (st > 0.0f && st < 1.15f) {
-                const float k = st / 1.15f;
-                const int px = menuPlate_->GetPosition().x_;
-                const int pw = menuPlate_->GetWidth();
-                const int sx = int(Lerp(float(px - S(160)), float(px + pw + S(40)), k));
-                menuSheen_->SetPosition(sx, menuPlate_->GetPosition().y_);
-                menuSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.38f * panelA * sinf(3.14159265f * k)));
-            } else {
-                menuSheen_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
-            }
-        }
-
-        // Веб-атмосфера меню: сканлайны, полоса, ореол заголовка, глитч
-        for (unsigned i = 0; i < menuScanlines_.Size(); ++i) {
-            const int y = int(fmodf(timeAcc_ * S(8.0f) + float(i) * S(90.0f), float(sh + S(90))));
-            menuScanlines_[i]->SetPosition(0, y);
-        }
-        if (menuScanBand_) {
-            const int by = int(fmodf(timeAcc_ * float(sh) / 6.0f, float(sh + S(140)))) - S(70);
-            menuScanBand_->SetPosition(0, by);
-        }
-        if (menuTitleGlow_) {
-            const float gp = 0.50f + 0.18f * sinf(timeAcc_ * 1.6f);
-            menuTitleGlow_->SetColor(Color(1.0f, 0.78f, 0.22f, gp * 0.5f * panelA));
-        }
-        const float gcyc = fmodf(timeAcc_, 3.1f);
-        const bool gOn = gcyc > 2.85f;
-        if (menuTitleGlitchA_) {
-            menuTitleGlitchA_->SetVisible(gOn);
-            if (gOn) {
-                menuTitleGlitchA_->SetPosition(sw / 2 - S(420) - S(3), sh / 2 - S(252) + int(sinf(timeAcc_ * 40.0f) * S(1.0f)));
-                menuTitleGlitchA_->SetColor(Color(0.18f, 0.95f, 1.0f, 0.85f));
-            }
-        }
-        if (menuTitleGlitchB_) {
-            const bool bOn = gcyc > 2.95f;
-            menuTitleGlitchB_->SetVisible(bOn);
-            if (bOn) {
-                menuTitleGlitchB_->SetPosition(sw / 2 - S(420) + S(3), sh / 2 - S(252));
-                menuTitleGlitchB_->SetColor(Color(1.0f, 0.23f, 0.31f, 0.8f));
-            }
+            menuAccentBar_->SetPosition(sw / 2 - w / 2 - int(nx * S(4.0f)), menuBarBase_.y_);
         }
     }
 
@@ -8594,10 +8485,15 @@ private:
         inMenu_ = show;
         if (show) {
             photoMode_ = false;
+            armoryOpen_ = false;
+            perkShopOpen_ = false;
+            helpOpen_ = false;
+            if (armoryPanel_) armoryPanel_->SetVisible(false);
+            if (perkShopPanel_) perkShopPanel_->SetVisible(false);
+            if (helpPanel_) helpPanel_->SetVisible(false);
             if (weaponNode_) weaponNode_->SetEnabled(true);
             if (!mainMenuPanel_) CreateMainMenu();
             mainMenuPanel_->SetVisible(true);
-            menuEnterT_ = 0.0f;   // вход меню заново: каскад + свет
             SetGameHudVisible(false);
             auto* input = GetSubsystem<Input>();
             if (input) input->SetMouseVisible(false);
@@ -8634,30 +8530,43 @@ private:
         if (hudAmmoBarFill_) hudAmmoBarFill_->SetVisible(vis);
         if (radarBg_) radarBg_->SetVisible(vis);
         if (damageOverlay_) damageOverlay_->SetVisible(vis);
+        if (!vis) {
+            if (bossBarBg_) bossBarBg_->SetVisible(false);
+            if (bossBarFill_) bossBarFill_->SetVisible(false);
+            if (bossBarText_) bossBarText_->SetVisible(false);
+        }
     }
 
     void UpdateMainMenuSelection() {
-        static const char* labels[6] = {
+        static const char* labels[7] = {
             "ПОЛИГОН (тир 4K)",
             "КИБЕР-АРЕНА (волны + босс)",
-            "КОЧЕТ В БАНЬКЕ (симулятор парной)",
-            "ЗОЛОТАЯ РУЛЕТКА (фейковые фишки)",
+            "КОЧЕТ В БАНЬКЕ (парная) [P]",
+            "КАЗИНО (рулетка + 777) [J]",
+            "PIXEL ARCADE (6 миниигр) [K]",
             "НАСТРОЙКИ 4K ULTRA",
             "ВЫХОД"
         };
         auto* gfx = GetSubsystem<Graphics>();
         int sw = gfx->GetWidth();
-        for (unsigned i = 0; i < mainMenuItems_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)mainMenuItems_.Size() && i < 7u; ++i) {
             bool sel = ((int)i == menuSel_);
-            mainMenuItems_[i]->SetText((sel ? "\xe2\x96\xb6  " : "   ") + String(labels[i]) + (sel ? "  \xe2\x97\x80" : ""));
-            Color unselCol = (i == 2 || i == 3) ? Color(0.96f, 0.76f, 0.48f, 1.0f) : Color(0.58f, 0.66f, 0.76f, 1.0f);
+            mainMenuItems_[i]->SetText((sel ? "›  " : "   ") + String(labels[i]) + (sel ? "  ‹" : ""));
+            Color unselCol = (i == 2) ? Color(0.96f, 0.76f, 0.48f, 1.0f)
+                           : (i == 3) ? Color(0.96f, 0.84f, 0.36f, 1.0f)
+                           : (i == 4) ? Color(0.96f, 0.54f, 0.84f, 1.0f)
+                                      : Color(0.58f, 0.66f, 0.76f, 1.0f);
             mainMenuItems_[i]->SetColor(sel ? Color(1.0f, 0.87f, 0.30f, 1.0f) : unselCol);
-            if ((int)menuRows_.Size() > (int)i && i < mainMenuItems_.Size()) {
+            if ((int)menuRows_.Size() > (int)i) {
                 BorderImage* bi = static_cast<BorderImage*>(menuRows_[i]);
                 if (bi) {
-                    bi->SetColor((i == 2 || i == 3)
+                    bi->SetColor((i == 2)
                         ? Color(0.28f, 0.14f, 0.05f, sel ? 0.68f : 0.22f)
-                        : Color(0.06f, 0.16f, 0.28f, sel ? 0.56f : 0.0f));
+                        : (i == 3
+                            ? Color(0.06f, 0.22f, 0.14f, sel ? 0.68f : 0.20f)
+                            : (i == 4
+                                ? Color(0.22f, 0.07f, 0.24f, sel ? 0.68f : 0.20f)
+                                : Color(0.06f, 0.16f, 0.28f, sel ? 0.56f : 0.0f))));
                     IntVector2 base = bi->GetPosition();
                     bi->SetPosition(sw / 2 - S(300) + (sel ? S(5) : 0), base.y_);
                 }
@@ -8776,14 +8685,14 @@ private:
         vals[10] = String((int)fovBase_) + "°";
         vals[11] = sensNames[Clamp(mouseSensIdx_, 0, 2)];
         vals[12] = "SFX " + String((int)(sfxVolume_ * 100.0f + 0.5f)) + "%  /  МУЗ " + String((int)(musicVolume_ * 100.0f + 0.5f)) + "%";
-        vals[13] = "◀ СОХРАНИТЬ И ВЫЙТИ В МЕНЮ";
+        vals[13] = "‹ СОХРАНИТЬ И ВЫЙТИ В МЕНЮ";
 
-        for (unsigned i = 0; i < settingsItems_.Size() && i < 14; ++i) {
+        for (unsigned i = 0; i < (unsigned)settingsItems_.Size() && i < 14; ++i) {
             bool sel = ((int)i == settingsSel_);
             if (i == 13)
-                settingsItems_[i]->SetText((sel ? "▶  " : "   ") + vals[i]);
+                settingsItems_[i]->SetText((sel ? "›  " : "   ") + vals[i]);
             else
-                settingsItems_[i]->SetText((sel ? "▶  " : "   ") + String(names[i]) + ":   " + vals[i]);
+                settingsItems_[i]->SetText((sel ? "›  " : "   ") + String(names[i]) + ":   " + vals[i]);
             settingsItems_[i]->SetColor(sel ? Color(1.0f, 0.88f, 0.24f, 1.0f) : Color(0.84f, 0.88f, 0.94f, 1.0f));
         }
     }
@@ -8840,24 +8749,24 @@ private:
 
     void ClearEnemies() {
         ClearTransientEffects();
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             RemoveColliderLite(enemies_[i].colliderIdx_);
             if (enemies_[i].node_) enemies_[i].node_->Remove();
         }
         enemies_.Clear();
-        for (unsigned i = 0; i < enemyProjectiles_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)enemyProjectiles_.Size(); ++i)
             if (enemyProjectiles_[i].node_) enemyProjectiles_[i].node_->Remove();
         enemyProjectiles_.Clear();
-        for (unsigned i = 0; i < playerPlasmaBolts_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)playerPlasmaBolts_.Size(); ++i)
             if (playerPlasmaBolts_[i].node_) playerPlasmaBolts_[i].node_->Remove();
         playerPlasmaBolts_.Clear();
-        for (unsigned i = 0; i < thrownGrenades_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)thrownGrenades_.Size(); ++i)
             if (thrownGrenades_[i].node_) thrownGrenades_[i].node_->Remove();
         thrownGrenades_.Clear();
-        for (unsigned i = 0; i < turrets_.Size(); ++i)
+        for (unsigned i = 0; i < (unsigned)turrets_.Size(); ++i)
             if (turrets_[i].node_) turrets_[i].node_->Remove();
         turrets_.Clear();
-        for (unsigned i = 0; i < orbitalStrikes_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)orbitalStrikes_.Size(); ++i) {
             if (orbitalStrikes_[i].beamNode_) orbitalStrikes_[i].beamNode_->Remove();
             if (orbitalStrikes_[i].ringNode_) orbitalStrikes_[i].ringNode_->Remove();
         }
@@ -8918,7 +8827,7 @@ private:
         ClearEnemies();
 
         // Мгновенный респавн взрывных бочек при старте раунда
-        for (unsigned bi = 0; bi < barrels_.Size(); ++bi) {
+        for (unsigned bi = 0; bi < (unsigned)barrels_.Size(); ++bi) {
             ExplosiveBarrel& b = barrels_[bi];
             if (b.exploded_) {
                 b.exploded_ = false;
@@ -8958,7 +8867,7 @@ private:
 
     // Полная пересборка мишеней тира (без накопления узлов и коллайдеров)
     void ResetRangeTargets() {
-        for (unsigned i = 0; i < targets_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)targets_.Size(); ++i) {
             RemoveColliderLite(targets_[i].colliderIdx_);
             if (targets_[i].node_) targets_[i].node_->Remove();
         }
@@ -9087,7 +8996,7 @@ private:
         const Cyber::MutatorInfo& mut = Cyber::GetMutatorInfo(activeMutator_);
         if (waveNum_ > 1) {
             credits_ += 45;
-            PushKillFeed("+45₵ БОНУС ЗА ЗАЧИСТКУ ВОЛНЫ!");
+            PushKillFeed("+45¤ БОНУС ЗА ЗАЧИСТКУ ВОЛНЫ!");
         }
         if (waveNum_ >= 5)  UnlockAchievement(4, "ШТУРМОВИК АРЕНЫ (достичь 5-й волны)");
         if (waveNum_ >= 10) UnlockAchievement(9, "ЛЕГЕНДА КУРЯТНИКА (выжить до 10-й волны)");
@@ -9183,7 +9092,7 @@ private:
         pd.vel_ = dir * 26.0f; // скорость заметно ниже пули — игрок успевает увернуться
         pd.ttl_ = 3.0f;
         pd.damage_ = damage;
-        if (enemyProjectiles_.Size() >= MAX_ENEMY_PROJECTILES) {
+        if ((unsigned)enemyProjectiles_.Size() >= MAX_ENEMY_PROJECTILES) {
             if (enemyProjectiles_[0].node_) enemyProjectiles_[0].node_->Remove();
             enemyProjectiles_.Erase(0);
         }
@@ -9320,7 +9229,7 @@ private:
     }
 
     void ResetPickups() {
-        for (unsigned i = 0; i < pickups_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)pickups_.Size(); ++i) {
             PickupData& p = pickups_[i];
             p.respawn_ = 0.0f;
             if (p.node_) {
@@ -9336,7 +9245,7 @@ private:
         Vector3 camPos = cameraNode_->GetPosition();
         const float r2 = GameConstants::PICKUP_RADIUS * GameConstants::PICKUP_RADIUS;
 
-        for (unsigned i = 0; i < pickups_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)pickups_.Size(); ++i) {
             PickupData& p = pickups_[i];
             Node* n = p.node_.Get();
             if (!n) continue;
@@ -9388,8 +9297,8 @@ private:
             } else {
                 overdriveTimer_ = 12.0f;
                 UpdateDashAndBuffHUD();
-                ShowMessage("⚡ КИБЕР-ОВЕРДРАЙВ: 2× УРОН И БЫСТРАЯ ПЕРЕЗАРЯДКА (12 сек)!");
-                PushKillFeed("⚡ КИБЕР-ОВЕРДРАЙВ 2X АКТИВЕН!");
+                ShowMessage("◆ КИБЕР-ОВЕРДРАЙВ: 2× УРОН И БЫСТРАЯ ПЕРЕЗАРЯДКА (12 сек)!");
+                PushKillFeed("◆ КИБЕР-ОВЕРДРАЙВ 2X АКТИВЕН!");
                 if (soundSource_ && overdriveSound_) { soundSource_->SetGain(SfxGain(0.9f)); soundSource_->Play(overdriveSound_); }
                 else PlayUISound();
                 p.respawn_ = 32.0f;
@@ -9401,7 +9310,7 @@ private:
     // Движение «летучих» мишеней тира без Bullet: простая интеграция + отскок от границ
     void UpdateMovingTargetsLite(float dt) {
         const float half = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f - 3.0f;
-        for (unsigned i = 0; i < movingTargetsLite_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)movingTargetsLite_.Size(); ++i) {
             MovingTargetLite& mt = movingTargetsLite_[i];
             // Уничтоженная мишень остаётся жить как отсоединённый узел (SharedPtr держит её),
             // поэтому проверяем ещё и сцену — иначе запись висит вечно.
@@ -9441,7 +9350,7 @@ private:
         for (unsigned i = enemies_.Size(); i-- > 0; ) {
             if (!enemies_[i].alive_) { RemoveColliderLite(enemies_[i].colliderIdx_); enemies_.Erase(i); }
         }
-        for (unsigned i = 0; i < enemies_.Size(); ++i) {
+        for (unsigned i = 0; i < (unsigned)enemies_.Size(); ++i) {
             EnemyData& e = enemies_[i];
             if (!e.alive_) continue;
             Node* n = e.node_.Get();
@@ -9503,8 +9412,8 @@ private:
                     n->SetScale(n->GetScale() * 1.12f);
                     CreateShockwave(p + Vector3(0, 0.5f, 0), nullptr, 0.7f);
                     if (bossRoarSound_) PlaySfx3D(p, bossRoarSound_, 1.0f);
-                    ShowWaveBanner("🔥 МЕГА-ИНДЮК ВПАЛ В ЯРОСТЬ!", Color(1.0f, 0.22f, 0.22f));
-                    PushKillFeed("🔥 БОСС В ЯРОСТИ: СКОРОСТЬ И ТРОЙНОЙ ЗАЛП!");
+                    ShowWaveBanner("[!] МЕГА-ИНДЮК ВПАЛ В ЯРОСТЬ!", Color(1.0f, 0.22f, 0.22f));
+                    PushKillFeed("[!] БОСС В ЯРОСТИ: СКОРОСТЬ И ТРОЙНОЙ ЗАЛП!");
                 }
                 move = toDir * effSpd;
                 if (dist < 2.2f && e.attackTimer_ <= 0.0f) {
@@ -9543,7 +9452,7 @@ private:
                     if (barrelBoomSound_) PlaySfx3D(boomPos, barrelBoomSound_, 0.95f);
                     ApplyExplosionDamage(boomPos, 75.0f);
                     AddCameraShake(0.24f);
-                    PushKillFeed("💥 ПОДРЫВ ЦЫПЛЁНКА-КАМИКАДЗЕ!");
+                    PushKillFeed("[!] ПОДРЫВ ЦЫПЛЁНКА-КАМИКАДЗЕ!");
                     continue;
                 }
                 break;
@@ -9561,7 +9470,7 @@ private:
                 }
                 break;
             }
-            default: { // E_MELEE — идёт к игроку, обходя препятствия рейкастом
+            default: { // E_MELEE — петляет волной при сближении + обход препятствий + выпад клювом
                 Vector3 probePos = p + Vector3(0, 0.6f, 0);
                 bool blocked = false;
                 if (dist > 1.5f) {
@@ -9575,10 +9484,15 @@ private:
                             move = slide.Normalized() * effSpd * (sinf(e.strafePhase_) > 0 ? 1.0f : -1.0f);
                     }
                 }
-                if (!blocked) move = toDir * effSpd;
-                if (dist < 1.4f && e.attackTimer_ <= 0.0f) {
+                if (!blocked) {
+                    Vector3 strafe(-toDir.z_, 0.0f, toDir.x_);
+                    float weave = (dist > 2.4f) ? 0.36f * sinf(e.strafePhase_ * 0.9f) : 0.0f;
+                    move = (toDir + strafe * weave) * effSpd;
+                }
+                if (dist < 1.45f && e.attackTimer_ <= 0.0f) {
                     e.attackTimer_ = 1.0f;
                     e.recoilKick_ = 0.2f;
+                    e.lungeTimer_ = 0.26f;
                     DamagePlayer(10.0f);
                     AddCameraShake(0.12f);
                 }
@@ -9587,7 +9501,7 @@ private:
             }
 
             // Расталкивание роботов, чтобы они не слипались в одну точку
-            for (unsigned j = 0; j < enemies_.Size(); ++j) {
+            for (unsigned j = 0; j < (unsigned)enemies_.Size(); ++j) {
                 if (j == i || !enemies_[j].alive_) continue;
                 Node* other = enemies_[j].node_.Get();
                 if (!other) continue;
@@ -9626,19 +9540,22 @@ private:
                 PlayCluck(p, 0.30f);
             }
 
-            // === Куриная анимация: походка, клевки головой, взмахи крыльями ===
+            // === Куриная анимация: походка, выпад клювом, взмахи крыльями ===
+            if (e.lungeTimer_ > 0.0f) e.lungeTimer_ = Max(0.0f, e.lungeTimer_ - dt);
             {
                 float speedNow = Vector3(move.x_, 0.0f, move.z_).Length();
                 e.animPhase_ += dt * (3.2f + speedNow * 3.4f);
                 float walk = sinf(e.animPhase_);
+                float lungeAmt = e.lungeTimer_ > 0.0f ? sinf((e.lungeTimer_ / 0.26f) * 3.1415926f) : 0.0f;
                 if (Node* head = e.headNode_.Get()) {
-                    head->SetPosition(Vector3(0.0f, CH_HEAD_Y + 0.05f * walk, CH_HEAD_Z + 0.05f * fabsf(walk)));
-                    head->SetRotation(Quaternion(7.0f * walk, Vector3(1, 0, 0)));
+                    head->SetPosition(Vector3(0.0f, CH_HEAD_Y + 0.05f * walk - 0.08f * lungeAmt,
+                                              CH_HEAD_Z + 0.05f * fabsf(walk) + 0.32f * lungeAmt));
+                    head->SetRotation(Quaternion(7.0f * walk + 26.0f * lungeAmt, Vector3(1, 0, 0)));
                 }
                 if (Node* l = e.legLNode_.Get()) l->SetRotation(Quaternion( 30.0f * walk, Vector3(1, 0, 0)));
                 if (Node* r = e.legRNode_.Get()) r->SetRotation(Quaternion(-30.0f * walk, Vector3(1, 0, 0)));
                 // Крылья: мелкая дрожь на месте, широкий взмах на бегу/рывке
-                float flap = 6.0f + 30.0f * Max(0.0f, walk) * (speedNow > 0.8f ? 1.0f : 0.3f);
+                float flap = 6.0f + 30.0f * Max(0.0f, walk) * (speedNow > 0.8f ? 1.0f : 0.3f) + 25.0f * lungeAmt;
                 if (Node* wl = e.wingLNode_.Get()) wl->SetRotation(Quaternion( 18.0f + flap, Vector3(0, 0, 1)));
                 if (Node* wr = e.wingRNode_.Get()) wr->SetRotation(Quaternion(-18.0f - flap, Vector3(0, 0, 1)));
                 if (Node* tail = e.tailNode_.Get())
@@ -9647,7 +9564,30 @@ private:
         }
     }
 
-    void DamageEnemy(EnemyData& e, float damage) {
+    void UpdateCorpses(float dt) {
+        for (unsigned i = corpses_.Size(); i-- > 0; ) {
+            EnemyCorpse& c = corpses_[i];
+            Node* n = c.node_.Get();
+            if (!n || !n->GetScene()) { corpses_.Erase(i); continue; }
+            c.age_ += dt;
+            if (c.age_ >= c.maxAge_) {
+                n->Remove();
+                corpses_.Erase(i);
+                continue;
+            }
+            float fallT = Clamp(c.age_ / 0.42f, 0.0f, 1.0f);
+            float ease = 1.0f - (1.0f - fallT) * (1.0f - fallT);
+            float sinkT = c.age_ > (c.maxAge_ - 0.70f)
+                ? Clamp((c.age_ - (c.maxAge_ - 0.70f)) / 0.70f, 0.0f, 1.0f) : 0.0f;
+            Vector3 p = n->GetPosition();
+            float y = Lerp(c.startY_, 0.24f, ease) - sinkT * 0.95f;
+            n->SetPosition(Vector3(p.x_, y, p.z_));
+            n->SetRotation(Quaternion(c.fallSide_ * 88.0f * ease, Vector3(0, 0, 1)) *
+                           Quaternion(22.0f * c.fallSide_ * ease, Vector3(1, 0, 0)));
+        }
+    }
+
+    void DamageEnemy(EnemyData& e, float damage, bool isHeadshot = false) {
         if (!e.alive_) return;
         e.health_ -= damage;
         Node* n = e.node_.Get();
@@ -9688,7 +9628,23 @@ private:
                 PlaySfx3D(deathPos, killedType == E_BOSS ? bossRoarSound_ : squawkSound_, 0.85f);
                 CreateDebrisBurst(deathPos);
                 PlayExplosionAt(deathPos);
-                n->Remove();
+                RemoveColliderLite(e.colliderIdx_);
+                e.colliderIdx_ = -1;
+                if (killedType == E_KAMIKAZE) {
+                    n->Remove();
+                } else {
+                    if ((unsigned)corpses_.Size() >= 24u) {
+                        if (corpses_[0].node_) corpses_[0].node_->Remove();
+                        corpses_.Erase(0);
+                    }
+                    EnemyCorpse cp;
+                    cp.node_ = SharedPtr<Node>(n);
+                    cp.age_ = 0.0f;
+                    cp.maxAge_ = 3.5f;
+                    cp.fallSide_ = (rand() % 2 == 0) ? 1.0f : -1.0f;
+                    cp.startY_ = deathPos.y_;
+                    corpses_.Push(cp);
+                }
             }
 
             const Cyber::MutatorInfo& mut = Cyber::GetMutatorInfo(activeMutator_);
@@ -9699,7 +9655,7 @@ private:
                 float blastD = (killedType == E_KAMIKAZE) ? 115.0f : 55.0f;
                 CreateShockwave(deathPos + Vector3(0, 0.5f, 0), nullptr, 0.62f);
                 if (barrelBoomSound_ && killedType == E_KAMIKAZE) PlaySfx3D(deathPos, barrelBoomSound_, 0.88f);
-                for (unsigned oi = 0; oi < enemies_.Size(); ++oi) {
+                for (unsigned oi = 0; oi < (unsigned)enemies_.Size(); ++oi) {
                     if (!enemies_[oi].alive_ || !enemies_[oi].node_) continue;
                     float dd = (enemies_[oi].node_->GetPosition() - deathPos).Length();
                     if (dd < blastR) DamageEnemy(enemies_[oi], blastD * (1.0f - dd / blastR));
@@ -9709,13 +9665,13 @@ private:
             int baseCred = (killedType == E_BOSS) ? 120 : (killedType == E_DRONE || killedType == E_KAMIKAZE ? 35 : 22);
             int creditGain = (int)lroundf((float)baseCred * mut.creditMul);
             credits_ += creditGain;
-            orbitalCharge_ = Cyber::AddOrbitalCharge(orbitalCharge_, killedType == E_BOSS, false);
+            orbitalCharge_ = Cyber::AddOrbitalCharge(orbitalCharge_, killedType == E_BOSS, isHeadshot);
 
             // Бонус за убийство в воздухе с джамп-платформы!
             if (!onGround_ && airborneFromPad_) {
                 player_.score_ += 100;
                 credits_ += 20;
-                PushKillFeed("🚀 АЭРО-ФРАГ С ДЖАМП-ПАДА! +100");
+                PushKillFeed("^ АЭРО-ФРАГ С ДЖАМП-ПАДА! +100");
                 UnlockAchievement(3, "НЕБЕСНЫЙ ПЕТУХ (убийство в полёте с джамп-пада)");
             }
 
@@ -9730,17 +9686,17 @@ private:
             // Система быстрых серий (Multi-Kill Announcer)
             multiKillCount_ = (multiKillTimer_ > 0.0f) ? (multiKillCount_ + 1) : 1;
             multiKillTimer_ = 3.2f;
-            if (multiKillCount_ == 2)      PushKillFeed("🔥 ДВОЙНОЙ ФРАГ!");
-            else if (multiKillCount_ == 3) PushKillFeed("🔥🔥 ТРОЙНОЙ ШАШЛЫК!");
-            else if (multiKillCount_ == 4) PushKillFeed("⚡ УЛЬТРА-ОЩИП x4!");
+            if (multiKillCount_ == 2)      PushKillFeed("◆ ДВОЙНОЙ ФРАГ!");
+            else if (multiKillCount_ == 3) PushKillFeed("◆◆ ТРОЙНОЙ ШАШЛЫК!");
+            else if (multiKillCount_ == 4) PushKillFeed("[!] УЛЬТРА-ОЩИП x4!");
             else if (multiKillCount_ >= 5) {
-                PushKillFeed("💀 КУРИНЫЙ АПОКАЛИПСИС x" + String(multiKillCount_) + "!");
+                PushKillFeed("[X] КУРИНЫЙ АПОКАЛИПСИС x" + String(multiKillCount_) + "!");
                 slowMoTimer_ = Max(slowMoTimer_, 0.30f);
             }
 
             UpdateScoreDisplay();
             ShowMessage((killedType == E_BOSS ? "БОСС-ИНДЮК ПАЛ! +" : "КУРИЦА ОЩИПАНА! +") +
-                        String(scoreVal) + " (+" + String(creditGain) + "₵)" +
+                        String(scoreVal) + " (+" + String(creditGain) + "¤)" +
                         (comboCount_ > 1 ? (" [COMBO x" + String(comboCount_) + "]") : ""));
             PushKillFeed((killedType == E_BOSS ? "ИНДЮК ПАЛ +" : "курица ощипана +") +
                          String(scoreVal) +
@@ -9842,50 +9798,90 @@ private:
     }
 
     // =========================================================================
-    // НАТИВНАЯ «ЗОЛОТАЯ РУЛЕТКА» (только виртуальные фишки)
+    // НАТИВНОЕ КАЗИНО [J]: «ЗОЛОТАЯ РУЛЕТКА» + «КИБЕР-СЛОТЫ 777»
     // =========================================================================
 
     void UpdateCasinoVisuals() {
         if (!casinoPanel_) return;
+        if (casinoTitleText_)
+            casinoTitleText_->SetText(casinoSlotsMode_ ? "КИБЕР-СЛОТЫ 777" : "ЗОЛОТАЯ РУЛЕТКА");
         if (casinoBalanceText_)
-            casinoBalanceText_->SetText("ФИШКИ: " + String(casinoBalance_) + "₵");
+            casinoBalanceText_->SetText("ФИШКИ: " + String(casinoBalance_) + " ¤");
         if (casinoBetText_) {
-            String bet = String(Casino::BetName(casinoBet_.type));
-            if (casinoBet_.type >= Casino::BET_NUMBER)
-                bet += " " + String(casinoBet_.number);
-            casinoBetText_->SetText("СТАВКА: " + bet + "  •  " + String(casinoBet_.amount) + "₵");
+            if (casinoSlotsMode_) {
+                casinoBetText_->SetText("СТАВКА НА СПИН: " + String(casinoBet_.amount) + " ¤   •   3×777 = ×50  |  ПАРА = ×2..×3");
+            } else {
+                String bet = String(Casino::BetName(casinoBet_.type));
+                if (casinoBet_.type >= Casino::BET_NUMBER)
+                    bet += " " + String(casinoBet_.number);
+                casinoBetText_->SetText("СТАВКА: " + bet + "  •  " + String(casinoBet_.amount) + " ¤");
+            }
         }
         if (casinoStatsText_)
             casinoStatsText_->SetText("ПОБЕДЫ: " + String(casinoWins_) + "   ПОРАЖЕНИЯ: " + String(casinoLosses_));
+
+        if (casinoHistoryText_) {
+            if (casinoSlotsMode_) {
+                casinoHistoryText_->SetText("СЛОТЫ: [777]=×50  •  [КОРОНА]=×20  •  [ЗВЕЗДА]=×12  •  [АЛМАЗ]=×8  •  ПАРА=×2..3");
+            } else if (casinoHistory_.Empty()) {
+                casinoHistoryText_->SetText("ИСТОРИЯ СПИНОВ: пока пусто");
+            } else {
+                String hist = "ИСТОРИЯ: ";
+                for (int i = (int)casinoHistory_.Size() - 1; i >= 0; --i) {
+                    int n = casinoHistory_[(unsigned)i];
+                    const char* tag = (n == 0) ? "З" : (Casino::IsRed(n) ? "К" : "Ч");
+                    hist += "[" + String(n) + tag + "] ";
+                }
+                casinoHistoryText_->SetText(hist);
+            }
+        }
+
         if (casinoResultText_) {
             if (casinoSpinTimer_ > 0.0f) {
-                casinoResultText_->SetText("Шарик в полёте… ставка уже на столе");
+                casinoResultText_->SetText(casinoSlotsMode_ ? "Барабаны крутятся… ловим три семёрки!"
+                                                            : "Шарик в полёте… ставка уже на столе");
                 casinoResultText_->SetColor(Color(1.0f, 0.84f, 0.35f, 1.0f));
-            } else if (casinoLastResult_ >= 0) {
+            } else if (!casinoSlotsMode_ && casinoLastResult_ >= 0) {
                 casinoResultText_->SetText("Выпало: " + String(casinoLastResult_) + " • " + String(Casino::ColorName(casinoLastResult_)));
                 casinoResultText_->SetColor(casinoLastResult_ == 0 ? Color(0.35f, 1.0f, 0.62f, 1.0f)
                     : Casino::IsRed(casinoLastResult_) ? Color(1.0f, 0.42f, 0.42f, 1.0f)
                                                         : Color(0.72f, 0.80f, 0.88f, 1.0f));
-            } else {
+            } else if (!casinoSlotsMode_) {
                 casinoResultText_->SetText("Сделайте виртуальную ставку и нажмите ПРОКРУТИТЬ");
                 casinoResultText_->SetColor(Color(0.72f, 0.80f, 0.88f, 1.0f));
             }
         }
 
         if (casinoWheelText_) {
-            static const int kWheelPreview[18] = { 0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23 };
-            int offset = casinoSpinTimer_ > 0.0f ? ((int)(timeAcc_ * 18.0f) % 18) : 0;
-            String wheel = "◉  ";
-            for (int i = 0; i < 9; ++i) {
-                if (i > 0) wheel += "  •  ";
-                int n = kWheelPreview[(offset + i) % 18];
-                wheel += String(n);
+            if (casinoSlotsMode_) {
+                int r0 = slotReels_[0], r1 = slotReels_[1], r2 = slotReels_[2];
+                if (casinoSpinTimer_ > 0.0f) {
+                    int tick = (int)(timeAcc_ * 20.0f);
+                    r0 = (casinoSpinTimer_ > 0.9f) ? ((tick + 0) % Casino::SYM_COUNT) : slotPendingReels_[0];
+                    r1 = (casinoSpinTimer_ > 0.45f) ? ((tick + 2) % Casino::SYM_COUNT) : slotPendingReels_[1];
+                    r2 = ((tick + 4) % Casino::SYM_COUNT);
+                }
+                casinoWheelText_->SetText(String(Casino::SlotLabel(r0)) + "   |   " +
+                                          String(Casino::SlotLabel(r1)) + "   |   " +
+                                          String(Casino::SlotLabel(r2)));
+            } else {
+                static const int kWheelPreview[18] = { 0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23 };
+                int offset = casinoSpinTimer_ > 0.0f ? ((int)(timeAcc_ * 18.0f) % 18) : 0;
+                String wheel = "*  ";
+                for (int i = 0; i < 9; ++i) {
+                    if (i > 0) wheel += "  •  ";
+                    int n = kWheelPreview[(offset + i) % 18];
+                    wheel += String(n);
+                }
+                casinoWheelText_->SetText(wheel);
             }
-            casinoWheelText_->SetText(wheel);
         }
         if (casinoSpinButton_)
             casinoSpinButton_->SetColor(casinoSpinTimer_ > 0.0f ? Color(0.22f, 0.22f, 0.24f, 0.96f)
                                                                     : Color(0.64f, 0.38f, 0.08f, 0.98f));
+        if (casinoModeButton_)
+            casinoModeButton_->SetColor(casinoSlotsMode_ ? Color(0.48f, 0.14f, 0.46f, 0.98f)
+                                                         : Color(0.14f, 0.36f, 0.22f, 0.98f));
     }
 
     void CreateCasinoPanel() {
@@ -9929,14 +9925,16 @@ private:
         casinoTitleText_->SetFont(font_, SF(38));
         casinoTitleText_->SetText("ЗОЛОТАЯ РУЛЕТКА");
         casinoTitleText_->SetTextAlignment(HA_CENTER);
-        casinoTitleText_->SetPosition(cx + S(30), cy + S(28));
+        casinoTitleText_->SetPosition(cx + S(30), cy + S(24));
         casinoTitleText_->SetWidth(cw - S(60));
         casinoTitleText_->SetColor(Color(1.0f, 0.82f, 0.28f, 1.0f));
         StyleCrispText(casinoTitleText_.Get(), true);
 
+        casinoModeButton_ = SharedPtr<BorderImage>(makeButton(cx + cw - S(260), cy + S(26), S(224), S(40), "[TAB] РУЛЕТКА / СЛОТЫ 777", Color(0.14f, 0.36f, 0.22f, 0.98f)));
+
         casinoBalanceText_ = casinoPanel_->CreateChild<Text>();
         casinoBalanceText_->SetFont(font_, SF(24));
-        casinoBalanceText_->SetPosition(cx + S(34), cy + S(92));
+        casinoBalanceText_->SetPosition(cx + S(34), cy + S(82));
         casinoBalanceText_->SetWidth(cw - S(68));
         casinoBalanceText_->SetTextAlignment(HA_CENTER);
         casinoBalanceText_->SetColor(Color(0.65f, 1.0f, 0.75f, 1.0f));
@@ -9945,15 +9943,23 @@ private:
         casinoWheelText_ = casinoPanel_->CreateChild<Text>();
         casinoWheelText_->SetFont(font_, SF(27));
         casinoWheelText_->SetTextAlignment(HA_CENTER);
-        casinoWheelText_->SetPosition(cx + S(50), cy + S(150));
+        casinoWheelText_->SetPosition(cx + S(50), cy + S(136));
         casinoWheelText_->SetWidth(cw - S(100));
         casinoWheelText_->SetColor(Color(1.0f, 0.90f, 0.48f, 1.0f));
         StyleCrispText(casinoWheelText_, true);
 
+        casinoHistoryText_ = casinoPanel_->CreateChild<Text>();
+        casinoHistoryText_->SetFont(font_, SF(15));
+        casinoHistoryText_->SetTextAlignment(HA_CENTER);
+        casinoHistoryText_->SetPosition(cx + S(40), cy + S(186));
+        casinoHistoryText_->SetWidth(cw - S(80));
+        casinoHistoryText_->SetColor(Color(0.75f, 0.88f, 0.82f, 0.95f));
+        StyleCrispText(casinoHistoryText_);
+
         casinoResultText_ = casinoPanel_->CreateChild<Text>();
         casinoResultText_->SetFont(font_, SF(18));
         casinoResultText_->SetTextAlignment(HA_CENTER);
-        casinoResultText_->SetPosition(cx + S(55), cy + S(218));
+        casinoResultText_->SetPosition(cx + S(55), cy + S(224));
         casinoResultText_->SetWidth(cw - S(110));
         casinoResultText_->SetColor(Color(0.72f, 0.80f, 0.88f, 1.0f));
         StyleCrispText(casinoResultText_);
@@ -9972,7 +9978,7 @@ private:
         casinoChipButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42) + bw + gap, row1, bw, bh, "РАЗМЕР ФИШКИ [A/D]", Color(0.10f, 0.20f, 0.30f, 0.98f)));
         casinoNumberButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42) + (bw + gap) * 2, row1, bw, bh, "ЧИСЛО [W/S]", Color(0.16f, 0.25f, 0.14f, 0.98f)));
 
-        casinoSpinButton_ = SharedPtr<BorderImage>(makeButton(cx + S(190), cy + S(390), cw - S(380), S(58), "ПРОКРУТИТЬ РУЛЕТКУ [ENTER / SPACE]", Color(0.64f, 0.38f, 0.08f, 0.98f)));
+        casinoSpinButton_ = SharedPtr<BorderImage>(makeButton(cx + S(190), cy + S(390), cw - S(380), S(58), "КРУТИТЬ БАРАБАН [ENTER / SPACE]", Color(0.64f, 0.38f, 0.08f, 0.98f)));
         casinoTopupButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42), cy + S(470), bw, bh, "+5000 ФИШЕК", Color(0.12f, 0.32f, 0.22f, 0.98f)));
         casinoCloseButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42) + bw + gap, cy + S(470), bw * 2 + gap, bh, "НАЗАД В ГЛАВНОЕ МЕНЮ [ESC]", Color(0.16f, 0.16f, 0.20f, 0.98f)));
 
@@ -9986,8 +9992,8 @@ private:
 
         casinoHelpText_ = casinoPanel_->CreateChild<Text>();
         casinoHelpText_->SetFont(font_, SF(14));
-        casinoHelpText_->SetText("Q/E — тип ставки   •   A/D — размер фишки   •   W/S — число 0..36   •   R — случайное число\n"
-                                 "Прямые ставки: ×2   •   дюжина/колонка: ×3   •   сплит/стрит/корнер/сикс-лайн: ×18/×12/×8/×6   •   число: ×36");
+        casinoHelpText_->SetText("TAB — Рулетка / Слоты 777  •  Q/E — ставка  •  A/D — размер фишки  •  W/S — число 0..36\n"
+                                 "Рулетка: до ×36   •   Кибер-Слоты 777: пара ×2..3, три символа ×4..×20, джекпот 777 = ×50");
         casinoHelpText_->SetTextAlignment(HA_CENTER);
         casinoHelpText_->SetPosition(cx + S(30), cy + S(570));
         casinoHelpText_->SetWidth(cw - S(60));
@@ -9998,8 +10004,9 @@ private:
         UpdateCasinoVisuals();
     }
 
-    void OpenCasino() {
+    void OpenCasino(bool fromMenu = true) {
         if (casinoOpen_) return;
+        casinoFromMenu_ = fromMenu;
         casinoOpen_ = true;
         casinoSpinTimer_ = 0.0f;
         if (!casinoPanel_) CreateCasinoPanel();
@@ -10018,8 +10025,14 @@ private:
         if (casinoPanel_) casinoPanel_->SetVisible(false);
         SaveSettingsFile();
         auto* input = GetSubsystem<Input>();
-        if (input) { input->SetMouseVisible(false); isMouseVisible_ = false; }
-        ShowMainMenu(true);
+        if (casinoFromMenu_) {
+            if (input) { input->SetMouseVisible(false); isMouseVisible_ = false; }
+            ShowMainMenu(true);
+        } else {
+            SetGameHudVisible(!photoMode_);
+            if (input) { input->SetMouseVisible(false); isMouseVisible_ = false; }
+            UpdateScoreDisplay();
+        }
     }
 
     void StartCasinoSpin() {
@@ -10032,19 +10045,50 @@ private:
             return;
         }
         casinoBalance_ -= casinoBet_.amount;
-        casinoPendingResult_ = rand() % 37;
-        casinoSpinTimer_ = 2.8f;
+        if (casinoSlotsMode_) {
+            for (int r = 0; r < 3; ++r)
+                slotPendingReels_[r] = rand() % Casino::SYM_COUNT;
+            casinoSpinTimer_ = 1.6f;
+        } else {
+            casinoPendingResult_ = rand() % 37;
+            casinoSpinTimer_ = 2.8f;
+        }
         PlayUISound();
         UpdateCasinoVisuals();
     }
 
     void FinishCasinoSpin() {
+        if (casinoSlotsMode_) {
+            for (int r = 0; r < 3; ++r) slotReels_[r] = slotPendingReels_[r];
+            int payout = Casino::SlotsPayout(casinoBet_.amount, slotReels_[0], slotReels_[1], slotReels_[2]);
+            if (payout > 0) {
+                casinoBalance_ += payout;
+                ++casinoWins_;
+                casinoResultText_->SetText(
+                    (slotReels_[0] == Casino::SYM_SEVEN && slotReels_[1] == Casino::SYM_SEVEN && slotReels_[2] == Casino::SYM_SEVEN)
+                        ? ("ДЖЕКПОТ 777!! +" + String(payout) + " ¤")
+                        : ("ПОБЕДА НА СЛОТАХ! +" + String(payout) + " ¤"));
+                casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
+            } else {
+                ++casinoLosses_;
+                casinoResultText_->SetText("Мимо линии — крути ещё! Всё понарошку");
+                casinoResultText_->SetColor(Color(1.0f, 0.40f, 0.42f, 1.0f));
+            }
+            SaveSettingsFile();
+            PlayUISound();
+            UpdateCasinoVisuals();
+            return;
+        }
         casinoLastResult_ = casinoPendingResult_;
+        if (casinoLastResult_ >= 0) {
+            if ((unsigned)casinoHistory_.Size() >= 10u) casinoHistory_.Erase(0);
+            casinoHistory_.Push(casinoLastResult_);
+        }
         int payout = Casino::Payout(casinoBet_, casinoLastResult_);
         if (payout > 0) {
             casinoBalance_ += payout;
             ++casinoWins_;
-            casinoResultText_->SetText("ВЫИГРЫШ: +" + String(payout) + "₵ • " + String(Casino::ColorName(casinoLastResult_)));
+            casinoResultText_->SetText("ВЫИГРЫШ: +" + String(payout) + " ¤ • " + String(Casino::ColorName(casinoLastResult_)));
             casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
         } else {
             ++casinoLosses_;
@@ -10068,7 +10112,13 @@ private:
 
     void HandleCasinoKey(int key) {
         if (casinoSpinTimer_ > 0.0f) return;
-        if (key == KEY_ESCAPE) { CloseCasino(); return; }
+        if (key == KEY_ESCAPE || key == KEY_J) { CloseCasino(); return; }
+        if (key == KEY_TAB) {
+            casinoSlotsMode_ = !casinoSlotsMode_;
+            PlayUISound();
+            UpdateCasinoVisuals();
+            return;
+        }
         if (key == KEY_RETURN || key == KEY_SPACE) { StartCasinoSpin(); return; }
         if (key == KEY_Q || key == KEY_LEFT) {
             int t = (static_cast<int>(casinoBet_.type) + Casino::BET_COUNT - 1) % Casino::BET_COUNT;
@@ -10096,8 +10146,8 @@ private:
         if (key == KEY_T) {
             casinoBalance_ += 5000; SaveSettingsFile(); UpdateCasinoVisuals(); PlayUISound(); return;
         }
-        if (key >= KEY_0 && key <= KEY_9) {
-            casinoBet_.number = Clamp(static_cast<int>(key) - static_cast<int>(KEY_0), 0, 9); UpdateCasinoVisuals(); return;
+        if (key >= (int)KEY_0 && key <= (int)KEY_9) {
+            casinoBet_.number = Clamp(key - static_cast<int>(KEY_0), 0, 9); UpdateCasinoVisuals(); return;
         }
     }
 
@@ -10105,6 +10155,10 @@ private:
         auto* input = GetSubsystem<Input>();
         if (!input || casinoSpinTimer_ > 0.0f) return;
         IntVector2 mp = input->GetMousePosition();
+        if (HitUIElement(casinoModeButton_.Get(), mp)) {
+            casinoSlotsMode_ = !casinoSlotsMode_;
+            PlayUISound(); UpdateCasinoVisuals(); return;
+        }
         if (HitUIElement(casinoSpinButton_.Get(), mp)) { StartCasinoSpin(); return; }
         if (HitUIElement(casinoBetButton_.Get(), mp)) {
             int t = (static_cast<int>(casinoBet_.type) + 1) % Casino::BET_COUNT;
@@ -10128,10 +10182,12 @@ private:
 
     void ResetBanyaUIPointers() {
         banyaParticles_.Clear();
+        banyaSnowMotes_.Clear();
         banyaPanel_ = nullptr; banyaSceneBox_ = nullptr;
         banyaRiddleBox_ = nullptr; banyaEndBox_ = nullptr; banyaStatsBox_ = nullptr;
         banyaHeatWash_ = nullptr; banyaAirWash_ = nullptr; banyaColdWash_ = nullptr; banyaEndTint_ = nullptr;
         banyaStoveFire_ = nullptr; banyaStonesGlow_ = nullptr; banyaVenikVis_ = nullptr;
+        banyaThermoFill_ = nullptr;
         banyaRoosterBody_ = nullptr; banyaRoosterComb_ = nullptr; banyaRoosterCrown_ = nullptr;
         banyaRoosterEyesText_ = nullptr;
         banyaTempText_ = nullptr; banyaMoodText_ = nullptr; banyaClockText_ = nullptr;
@@ -10237,15 +10293,24 @@ private:
         banyaSceneBox_->SetSize(scW, scH);
         banyaSceneBox_->SetClipChildren(true);
 
-        // Бревенчатая стена
+        // Бревенчатая стена (с 4K PBR текстурой сруба, если загружена)
+        ResourceCache* cache = GetSubsystem<ResourceCache>();
+        Texture2D* banyaWallTex = cache ? cache->GetResource<Texture2D>("Textures/BanyaLogDiffuse.png") : nullptr;
+        Texture2D* banyaRoosterTex = cache ? cache->GetResource<Texture2D>("Textures/BanyaRoosterDiffuse.png") : nullptr;
         BorderImage* wall = banyaSceneBox_->CreateChild<BorderImage>();
         wall->SetSize(scW, scH);
-        wall->SetColor(Color(0.36f, 0.22f, 0.12f, 1.0f));
-        for (int i = 0; i < 12; ++i) {
-            BorderImage* plank = banyaSceneBox_->CreateChild<BorderImage>();
-            plank->SetPosition((scW * i) / 12, 0);
-            plank->SetSize(Max(2, S(2)), scH);
-            plank->SetColor(Color(0.16f, 0.09f, 0.04f, 0.52f));
+        if (banyaWallTex) {
+            wall->SetTexture(banyaWallTex);
+            wall->SetFullImageRect();
+            wall->SetColor(Color(0.86f, 0.78f, 0.70f, 1.0f));
+        } else {
+            wall->SetColor(Color(0.36f, 0.22f, 0.12f, 1.0f));
+            for (int i = 0; i < 12; ++i) {
+                BorderImage* plank = banyaSceneBox_->CreateChild<BorderImage>();
+                plank->SetPosition((scW * i) / 12, 0);
+                plank->SetSize(Max(2, S(2)), scH);
+                plank->SetColor(Color(0.16f, 0.09f, 0.04f, 0.52f));
+            }
         }
         // Потолочная балка и пол
         BorderImage* ceil = banyaSceneBox_->CreateChild<BorderImage>();
@@ -10267,6 +10332,29 @@ private:
         winGlass->SetPosition(S(6), S(6));
         winGlass->SetSize(winFrame->GetWidth() - S(12), winFrame->GetHeight() - S(12));
         winGlass->SetColor(Color(0.72f, 0.86f, 0.94f, 1.0f));
+        winGlass->SetClipChildren(true);
+        banyaSnowMotes_.Clear();
+        for (int sf = 0; sf < 8; ++sf) {
+            BorderImage* mote = winGlass->CreateChild<BorderImage>();
+            int sz = Max(2, S(3 + (sf % 3)));
+            mote->SetSize(sz, sz);
+            mote->SetColor(Color(0.96f, 0.99f, 1.0f, 0.82f));
+            mote->SetPosition((sf * winGlass->GetWidth()) / 8, (sf * 29) % Max(16, winGlass->GetHeight()));
+            banyaSnowMotes_.Push(SharedPtr<BorderImage>(mote));
+        }
+
+        // Настенный градусник пара между окном и печью
+        BorderImage* thermoFrame = banyaSceneBox_->CreateChild<BorderImage>();
+        thermoFrame->SetPosition((int)(scW * 0.705f), (int)(scH * 0.16f));
+        thermoFrame->SetSize(S(18), (int)(scH * 0.24f));
+        thermoFrame->SetColor(Color(0.24f, 0.14f, 0.07f, 0.95f));
+        BorderImage* thermoTrack = thermoFrame->CreateChild<BorderImage>();
+        thermoTrack->SetPosition(S(5), S(6));
+        thermoTrack->SetSize(S(8), thermoFrame->GetHeight() - S(12));
+        thermoTrack->SetColor(Color(0.09f, 0.06f, 0.04f, 0.95f));
+        banyaThermoFill_ = thermoTrack->CreateChild<BorderImage>();
+        banyaThermoFill_->SetSize(S(8), S(20));
+        banyaThermoFill_->SetColor(Color(0.95f, 0.35f, 0.16f, 1.0f));
 
         // Каменная печь слева + труба + топка + камни
         BorderImage* pipe = banyaSceneBox_->CreateChild<BorderImage>();
@@ -10315,10 +10403,14 @@ private:
         banyaVenikVis_->SetSize((int)(scW * 0.05f), (int)(scH * 0.14f));
         banyaVenikVis_->SetColor(Color(0.38f, 0.56f, 0.26f, 1.0f));
 
-        // Кочет в полотенце на полке
+        // Кочет в полотенце на полке (с 4K PBR оперением, если текстура загружена)
         banyaRoosterBody_ = banyaSceneBox_->CreateChild<BorderImage>();
         banyaRoosterBody_->SetPosition((int)(scW * 0.61f), (int)(scH * 0.36f));
         banyaRoosterBody_->SetSize((int)(scW * 0.11f), (int)(scH * 0.18f));
+        if (banyaRoosterTex) {
+            banyaRoosterBody_->SetTexture(banyaRoosterTex);
+            banyaRoosterBody_->SetFullImageRect();
+        }
         banyaRoosterBody_->SetColor(Color(0.96f, 0.91f, 0.82f, 1.0f));
 
         BorderImage* towel = banyaRoosterBody_->CreateChild<BorderImage>();
@@ -10350,7 +10442,7 @@ private:
         banyaRoosterEyesText_->SetFont(font_, SF(15));
         banyaRoosterEyesText_->SetPosition(S(10), S(8));
         banyaRoosterEyesText_->SetColor(Color(0.14f, 0.08f, 0.04f, 1.0f));
-        banyaRoosterEyesText_->SetText("●");
+        banyaRoosterEyesText_->SetText("•");
 
         // Атмосферные фильтры опасности / концовок
         banyaColdWash_ = banyaSceneBox_->CreateChild<BorderImage>();
@@ -10867,7 +10959,7 @@ private:
             return;
         }
 
-        if (key >= KEY_1 && key <= KEY_5) { TriggerBanyaAction(key - KEY_1); return; }
+        if (key >= (int)KEY_1 && key <= (int)KEY_5) { TriggerBanyaAction(key - (int)KEY_1); return; }
         if (banyaSim_.riddle.active && !banyaSim_.riddle.settled) {
             if (key == KEY_Q) { AnswerBanyaRiddleUI(0); return; }
             if (key == KEY_W) { AnswerBanyaRiddleUI(1); return; }
@@ -10933,11 +11025,11 @@ private:
         int scW = banyaSceneBox_->GetWidth(), scH = banyaSceneBox_->GetHeight();
 
         int wallet = banyaFromMenu_ ? (100 + banyaBonusCredits_) : credits_;
-        String buffStr = (banyaBuffTier_ >= 2) ? "👑 КОВШ СМОТРЯЩЕГО (+50HP/+15%УР)"
-                       : (banyaBuffTier_ == 1) ? "♨ БАННЫЙ ЗАКАЛ (+25HP/+25БР)"
+        String buffStr = (banyaBuffTier_ >= 2) ? "◆ КОВШ СМОТРЯЩЕГО (+50HP/+15%УР)"
+                       : (banyaBuffTier_ == 1) ? "• БАННЫЙ ЗАКАЛ (+25HP/+25БР)"
                                                : "нет баффа";
         if (banyaBadgeText_) {
-            banyaBadgeText_->SetText("🐔 CHIKENGUN 2.5  •  КОШЕЛЁК: " + String(wallet) + "₵  •  БАФФ АРЕНЫ: " + buffStr +
+            banyaBadgeText_->SetText("CHIKENGUN 2.5  •  КОШЕЛЁК: " + String(wallet) + "¤  •  БАФФ АРЕНЫ: " + buffStr +
                                      "  •  ОТКРЫТО КОНЦОВОК: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + "/14");
         }
 
@@ -10956,6 +11048,27 @@ private:
         setBar(banyaBarAir_.Get(),   banyaSim_.air  / 100.0f, S(126));
         setBar(banyaBarLife_.Get(),  banyaSim_.life / 100.0f, S(126));
         setBar(banyaBarTime_.Get(),  banyaSim_.left / Banya::DURATION, S(154));
+
+        // Настенный термометр + падающие снежинки за окном
+        if (banyaThermoFill_ && banyaThermoFill_->GetParent()) {
+            int fullH = banyaThermoFill_->GetParent()->GetHeight();
+            float tr = Clamp((banyaSim_.temp - 40.0f) / 85.0f, 0.06f, 1.0f);
+            int fillH = Clamp((int)(fullH * tr), 2, fullH);
+            banyaThermoFill_->SetPosition(0, fullH - fillH);
+            banyaThermoFill_->SetSize(banyaThermoFill_->GetWidth(), fillH);
+            banyaThermoFill_->SetColor(banyaSim_.temp > 98.0f ? Color(1.0f, 0.25f, 0.15f, 1.0f)
+                                     : banyaSim_.temp < 62.0f ? Color(0.32f, 0.78f, 1.0f, 1.0f)
+                                                              : Color(0.98f, 0.62f, 0.20f, 1.0f));
+        }
+        for (unsigned i = 0; i < (unsigned)banyaSnowMotes_.Size(); ++i) {
+            BorderImage* m = banyaSnowMotes_[i].Get();
+            if (!m || !m->GetParent()) continue;
+            int gw = Max(16, m->GetParent()->GetWidth());
+            int gh = Max(16, m->GetParent()->GetHeight());
+            float fy = fmodf(timeAcc_ * (18.0f + (float)(i % 3) * 9.0f) + (float)i * 23.0f, (float)gh);
+            int fx = (int)(((float)i + 0.5f) * (float)gw / (float)banyaSnowMotes_.Size() + sinf(timeAcc_ * 1.4f + (float)i) * 5.0f);
+            m->SetPosition(Clamp(fx, 0, gw - m->GetWidth()), (int)fy);
+        }
 
         // Свечение печи и камней от температуры
         if (banyaStonesGlow_) {
@@ -10981,8 +11094,8 @@ private:
         if (banyaRoosterBody_ && banyaRoosterEyesText_) {
             int baseX = (int)(scW * 0.61f), baseY = (int)(scH * 0.36f);
             if (banyaSim_.phase == Banya::PHASE_OVER) {
-                banyaRoosterEyesText_->SetText((banyaSim_.ending == Banya::END_WIN || banyaSim_.ending == Banya::END_STEWARD) ? "◠" : "✕");
-               banyaRoosterCrown_->SetVisible(banyaSim_.ending == Banya::END_STEWARD);
+                banyaRoosterEyesText_->SetText((banyaSim_.ending == Banya::END_WIN || banyaSim_.ending == Banya::END_STEWARD) ? "^" : "×");
+                banyaRoosterCrown_->SetVisible(banyaSim_.ending == Banya::END_STEWARD);
                 if (banyaSim_.ending == Banya::END_FROZEN)      banyaRoosterBody_->SetColor(Color(0.68f, 0.88f, 0.98f, 1.0f));
                 else if (banyaSim_.ending == Banya::END_BURNED || banyaSim_.ending == Banya::END_FIRE || banyaSim_.ending == Banya::END_BLAST)
                     banyaRoosterBody_->SetColor(Color(0.38f, 0.24f, 0.18f, 1.0f));
@@ -10994,7 +11107,7 @@ private:
                 int sway = (banyaSim_.blissRemaining > 0.0f) ? (int)(sinf(timeAcc_ * 3.0f) * S(4.0f))
                          : (banyaSim_.ventRemaining  > 0.0f) ? (int)(sinf(timeAcc_ * 22.0f)  * S(2.0f)) : 0;
                 banyaRoosterBody_->SetPosition(baseX + sway, baseY);
-                banyaRoosterEyesText_->SetText(banyaSim_.blissRemaining > 0.0f ? "◡" : "●");
+                banyaRoosterEyesText_->SetText(banyaSim_.blissRemaining > 0.0f ? "v" : "•");
                 Color bodyC = (banyaSim_.temp > 100.0f) ? Color(1.0f, 0.72f, 0.64f, 1.0f)
                             : (banyaSim_.temp < 60.0f)  ? Color(0.84f, 0.91f, 0.98f, 1.0f)
                                                         : Color(0.96f, 0.91f, 0.82f, 1.0f);
@@ -11065,9 +11178,9 @@ private:
                 banyaEndTitle_->SetText(ei.title);
                 banyaEndText_->SetText(ei.text);
                 banyaEndHint_->SetText(String("Совет: ") + ei.hint);
-                String rewardLine = "Награда Чикенган: +" + String(cr) + "₵";
-                if (tier >= 2)      rewardLine += "  •  👑 БАФФ «КОВШ СМОТРЯЩЕГО» (+50 HP/Брони, +15% Урона, +35% Орбиты)!";
-                else if (tier == 1) rewardLine += "  •  ♨ БАФФ «БАННЫЙ ЗАКАЛ» (+25 HP/Брони)!";
+                String rewardLine = "Награда Чикенган: +" + String(cr) + "¤";
+                if (tier >= 2)      rewardLine += "  •  ◆ БАФФ «КОВШ СМОТРЯЩЕГО» (+50 HP/Брони, +15% Урона, +35% Орбиты)!";
+                else if (tier == 1) rewardLine += "  •  • БАФФ «БАННЫЙ ЗАКАЛ» (+25 HP/Брони)!";
                 banyaEndStats_->SetText(
                     "Продержался " + FormatBanyaClock(Min(banyaSim_.elapsed, Banya::DURATION)) + " из 3:00  •  загадок " +
                     String(banyaSim_.riddles) + "  •  очков " + String(pts) + "\n" +
@@ -11132,6 +11245,294 @@ private:
         }
 
         SyncBanyaVisuals(dt);
+    }
+
+    // =========================================================================
+    // PIXEL ARCADE [K] — 4 ЛОКАЛЬНЫЕ АРКАДНЫЕ ИГРЫ В НАТИВНОМ C++ КЛИЕНТЕ
+    // =========================================================================
+
+    void ResetMiniAppUIPointers() {
+        arcadePanel_ = nullptr; arcadeCanvas_ = nullptr;
+        arcadeTitleText_ = nullptr; arcadeScoreText_ = nullptr; arcadeHintText_ = nullptr; arcadeOverlayText_ = nullptr;
+        arcadeRectPool_.Clear();
+        arcadeGameTabs_.Clear();
+    }
+
+    int GetMiniAppWallet(bool fromMenu) const {
+        return fromMenu ? (100 + banyaBonusCredits_) : credits_;
+    }
+
+    void SetMiniAppWallet(bool fromMenu, int newVal) {
+        newVal = Max(0, newVal);
+        if (fromMenu) banyaBonusCredits_ = Max(-100, newVal - 100);
+        else credits_ = newVal;
+    }
+
+    void CreateArcadePanel() {
+        if (arcadePanel_) return;
+        RefreshUIScale();
+        auto* ui = GetSubsystem<UI>();
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!ui || !gfx) return;
+        UIElement* root = ui->GetRoot();
+        int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+
+        arcadePanel_ = root->CreateChild<UIElement>("ArcadePanel");
+        arcadePanel_->SetSize(sw, sh);
+        arcadePanel_->SetPriority(710);
+
+        BorderImage* bg = arcadePanel_->CreateChild<BorderImage>();
+        bg->SetSize(sw, sh);
+        bg->SetColor(Color(0.03f, 0.02f, 0.08f, 0.96f));
+
+        int pw = Min(sw - S(40), S(860)), ph = Min(sh - S(40), S(620));
+        int px = (sw - pw) / 2, py = (sh - ph) / 2;
+
+        BorderImage* frame = arcadePanel_->CreateChild<BorderImage>();
+        frame->SetPosition(px, py);
+        frame->SetSize(pw, ph);
+        frame->SetColor(Color(0.06f, 0.05f, 0.16f, 0.98f));
+
+        arcadeTitleText_ = arcadePanel_->CreateChild<Text>();
+        arcadeTitleText_->SetFont(font_, SF(22));
+        arcadeTitleText_->SetPosition(px + S(20), py + S(14));
+        arcadeTitleText_->SetColor(Color(1.0f, 0.34f, 0.72f, 1.0f));
+        StyleCrispText(arcadeTitleText_, true);
+
+        arcadeScoreText_ = arcadePanel_->CreateChild<Text>();
+        arcadeScoreText_->SetFont(font_, SF(18));
+        arcadeScoreText_->SetPosition(px + pw - S(340), py + S(16));
+        arcadeScoreText_->SetColor(Color(0.32f, 0.96f, 0.92f, 1.0f));
+        StyleCrispText(arcadeScoreText_);
+
+        // 6 вкладок выбора игры ([1..6]) + кнопки Рестарт [R] и Назад [ESC]
+        static const char* kTabs[8] = {
+            "[1] ЗМЕЙКА", "[2] АРКАНОИД", "[3] КУРО-РАН", "[4] PONG",
+            "[5] FLAPPY", "[6] ТЕТРИС", "[R] ЗАНОВО", "[ESC] НАЗАД"
+        };
+        int tabW = (pw - S(40) - S(35)) / 8;
+        for (int i = 0; i < 8; ++i) {
+            BorderImage* tb = arcadePanel_->CreateChild<BorderImage>();
+            tb->SetPosition(px + S(20) + i * (tabW + S(5)), py + S(52));
+            tb->SetSize(tabW, S(34));
+            tb->SetColor(Color(0.14f, 0.12f, 0.32f, 0.95f));
+            Text* tt = tb->CreateChild<Text>();
+            tt->SetFont(font_, SF(12));
+            tt->SetText(kTabs[i]);
+            tt->SetAlignment(HA_CENTER, VA_CENTER);
+            tt->SetColor(Color(0.95f, 0.95f, 1.0f, 1.0f));
+            StyleCrispText(tt);
+            arcadeGameTabs_.Push(SharedPtr<BorderImage>(tb));
+        }
+
+        // Игровое поле 480x320 масштабируем под окно
+        int cw = pw - S(40), ch = ph - S(165);
+        BorderImage* canvasBg = arcadePanel_->CreateChild<BorderImage>();
+        canvasBg->SetPosition(px + S(20), py + S(98));
+        canvasBg->SetSize(cw, ch);
+        canvasBg->SetColor(Color(0.02f, 0.02f, 0.06f, 1.0f));
+
+        arcadeCanvas_ = arcadePanel_->CreateChild<UIElement>("ArcadeCanvas");
+        arcadeCanvas_->SetPosition(px + S(20), py + S(98));
+        arcadeCanvas_->SetSize(cw, ch);
+        arcadeCanvas_->SetClipChildren(true);
+
+        arcadeOverlayText_ = arcadePanel_->CreateChild<Text>();
+        arcadeOverlayText_->SetFont(font_, SF(26));
+        arcadeOverlayText_->SetTextAlignment(HA_CENTER);
+        arcadeOverlayText_->SetPosition(px + S(40), py + S(240));
+        arcadeOverlayText_->SetWidth(pw - S(80));
+        arcadeOverlayText_->SetColor(Color(1.0f, 0.86f, 0.25f, 1.0f));
+        StyleCrispText(arcadeOverlayText_, true);
+
+        arcadeHintText_ = arcadePanel_->CreateChild<Text>();
+        arcadeHintText_->SetFont(font_, SF(14));
+        arcadeHintText_->SetPosition(px + S(20), py + ph - S(44));
+        arcadeHintText_->SetColor(Color(0.75f, 0.85f, 0.98f, 1.0f));
+        StyleCrispText(arcadeHintText_);
+    }
+
+    void SyncArcadeUI() {
+        if (!arcadePanel_ || !arcadeCanvas_) return;
+        for (unsigned i = 0; i < 6u && i < (unsigned)arcadeGameTabs_.Size(); ++i) {
+            bool act = ((int)i == (int)arcadeSim_.kind);
+            arcadeGameTabs_[i]->SetColor(act ? Color(0.86f, 0.22f, 0.58f, 0.98f) : Color(0.14f, 0.12f, 0.32f, 0.95f));
+        }
+        if (arcadeTitleText_)
+            arcadeTitleText_->SetText(String("PIXEL ARCADE: ") + Arcade::PixelArcadeSim::GameTitle(arcadeSim_.kind));
+        if (arcadeScoreText_) {
+            int hi = arcadeSim_.highScores[(size_t)arcadeSim_.kind];
+            arcadeScoreText_->SetText("СЧЕТ: " + String(arcadeSim_.score) + "  |  РЕК: " + String(hi) +
+                                      "  |  " + String(GetMiniAppWallet(arcadeFromMenu_)) + " ¤");
+        }
+        if (arcadeHintText_)
+            arcadeHintText_->SetText(String(Arcade::PixelArcadeSim::GameControls(arcadeSim_.kind)) + "  •  [1..6] Игра  •  [R] Заново  •  [ESC] Выход");
+
+        if (arcadeOverlayText_) {
+            if (arcadeSim_.over) {
+                int bonus = Arcade::PixelArcadeSim::ComputeCreditsReward(arcadeSim_.score, arcadeSim_.won);
+                arcadeOverlayText_->SetText((arcadeSim_.won ? "ПОБЕДА! " : "ИГРА ОКОНЧЕНА! ") +
+                                            String("СЧЕТ: ") + String(arcadeSim_.score) +
+                                            (bonus > 0 ? (" (+" + String(bonus) + " ¤)") : String()) +
+                                            "\n[R] — сыграть ещё   •   [1..6] — другая игра");
+                arcadeOverlayText_->SetVisible(true);
+            } else if (arcadeSim_.paused) {
+                arcadeOverlayText_->SetText("ПАУЗА\nНажмите [SPACE] чтобы продолжить");
+                arcadeOverlayText_->SetVisible(true);
+            } else {
+                arcadeOverlayText_->SetVisible(false);
+            }
+        }
+
+        // Отрисовка виртуального кадра через пул BorderImage
+        auto rects = arcadeSim_.BuildDrawRects();
+        float sx = (float)arcadeCanvas_->GetWidth() / Arcade::PixelArcadeSim::VIEW_W;
+        float sy = (float)arcadeCanvas_->GetHeight() / Arcade::PixelArcadeSim::VIEW_H;
+        while ((unsigned)arcadeRectPool_.Size() < (unsigned)rects.size()) {
+            BorderImage* ri = arcadeCanvas_->CreateChild<BorderImage>();
+            arcadeRectPool_.Push(SharedPtr<BorderImage>(ri));
+        }
+        static const Color kPal[6] = {
+            Color(0.24f, 0.96f, 0.92f, 1.0f), // cyan
+            Color(1.00f, 0.25f, 0.65f, 1.0f), // pink
+            Color(1.00f, 0.88f, 0.22f, 1.0f), // gold
+            Color(0.24f, 0.96f, 0.48f, 1.0f), // green
+            Color(1.00f, 0.24f, 0.26f, 1.0f), // red
+            Color(0.98f, 0.98f, 1.00f, 1.0f)  // white
+        };
+        for (unsigned i = 0; i < (unsigned)arcadeRectPool_.Size(); ++i) {
+            BorderImage* ri = arcadeRectPool_[i].Get();
+            if (!ri) continue;
+            if (i < (unsigned)rects.size()) {
+                const auto& r = rects[i];
+                ri->SetVisible(true);
+                ri->SetPosition((int)(r.x * sx), (int)(r.y * sy));
+                ri->SetSize(Max(2, (int)(r.w * sx)), Max(2, (int)(r.h * sy)));
+                ri->SetColor(kPal[r.colorTag % 6u]);
+            } else {
+                ri->SetVisible(false);
+            }
+        }
+    }
+
+    void OpenArcade(bool fromMenu) {
+        arcadeFromMenu_ = fromMenu;
+        arcadeOpen_ = true;
+        arcadeSim_.rng ^= (uint32_t)(timeAcc_ * 1000.0f) ^ 0xA2Cu;
+        arcadeSim_.Reset(arcadeSim_.kind);
+        if (!arcadePanel_) CreateArcadePanel();
+        if (arcadePanel_) arcadePanel_->SetVisible(true);
+        if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
+        SetGameHudVisible(false);
+        if (auto* input = GetSubsystem<Input>()) { input->SetMouseVisible(true); isMouseVisible_ = true; }
+        SyncArcadeUI();
+        PlayUISound();
+    }
+
+    void CloseArcade() {
+        arcadeOpen_ = false;
+        if (arcadePanel_) arcadePanel_->SetVisible(false);
+        SaveSettingsFile();
+        if (arcadeFromMenu_) {
+            ShowMainMenu(true);
+        } else {
+            SetGameHudVisible(!photoMode_);
+            if (auto* input = GetSubsystem<Input>()) { input->SetMouseVisible(false); isMouseVisible_ = false; }
+            UpdateScoreDisplay();
+        }
+    }
+
+    void HandleArcadeKey(int key) {
+        if (key == KEY_ESCAPE || key == KEY_K) { CloseArcade(); return; }
+        if (key >= (int)KEY_1 && key <= (int)KEY_6) {
+            arcadeSim_.Reset((Arcade::ArcadeGameKind)(key - (int)KEY_1));
+            PlayUISound();
+            SyncArcadeUI();
+            return;
+        }
+        if (key == KEY_R) { arcadeSim_.Reset(arcadeSim_.kind); PlayUISound(); SyncArcadeUI(); return; }
+        if (key == KEY_SPACE) {
+            if (arcadeSim_.kind == Arcade::GAME_DINO && !arcadeSim_.over) {
+                // В Куро-Ране SPACE — прыжок!
+            } else if (arcadeSim_.kind == Arcade::GAME_FLAPPY && !arcadeSim_.over) {
+                arcadeSim_.FlappyFlap();
+                return;
+            } else if (arcadeSim_.kind == Arcade::GAME_TETRIS && !arcadeSim_.over && !arcadeSim_.paused) {
+                arcadeSim_.TetrisHardDrop();
+                PlayUISound();
+                SyncArcadeUI();
+                return;
+            } else {
+                arcadeSim_.paused = !arcadeSim_.paused;
+                PlayUISound();
+                SyncArcadeUI();
+                return;
+            }
+        }
+        if (arcadeSim_.kind == Arcade::GAME_FLAPPY && !arcadeSim_.over) {
+            if (key == KEY_W || key == KEY_UP) {
+                arcadeSim_.FlappyFlap();
+                return;
+            }
+        }
+        // Дискретные ходы в Кибер-Тетрисе
+        if (arcadeSim_.kind == Arcade::GAME_TETRIS) {
+            if (key == KEY_LEFT || key == KEY_A) { arcadeSim_.TetrisMove(-1); SyncArcadeUI(); return; }
+            if (key == KEY_RIGHT || key == KEY_D) { arcadeSim_.TetrisMove(1); SyncArcadeUI(); return; }
+            if (key == KEY_UP || key == KEY_W) { arcadeSim_.TetrisRotate(); PlayUISound(); SyncArcadeUI(); return; }
+        }
+        // Повороты змейки фиксируем мгновенно по нажатию клавиши
+        if (arcadeSim_.kind == Arcade::GAME_SNAKE) {
+            if (key == KEY_LEFT || key == KEY_A) arcadeSim_.SetSnakeDir(-1, 0);
+            else if (key == KEY_RIGHT || key == KEY_D) arcadeSim_.SetSnakeDir(1, 0);
+            else if (key == KEY_UP || key == KEY_W) arcadeSim_.SetSnakeDir(0, -1);
+            else if (key == KEY_DOWN || key == KEY_S) arcadeSim_.SetSnakeDir(0, 1);
+        }
+    }
+
+    void HandleArcadeClick() {
+        auto* input = GetSubsystem<Input>();
+        if (!input) return;
+        IntVector2 mp = input->GetMousePosition();
+        for (unsigned i = 0; i < (unsigned)arcadeGameTabs_.Size(); ++i) {
+            if (HitUIElement(arcadeGameTabs_[i].Get(), mp)) {
+                if (i < 6u) { arcadeSim_.Reset((Arcade::ArcadeGameKind)i); PlayUISound(); SyncArcadeUI(); }
+                else if (i == 6u) { arcadeSim_.Reset(arcadeSim_.kind); PlayUISound(); SyncArcadeUI(); }
+                else if (i == 7u) { CloseArcade(); }
+                return;
+            }
+        }
+        if (arcadeSim_.kind == Arcade::GAME_FLAPPY && HitUIElement(arcadeCanvas_.Get(), mp)) {
+            arcadeSim_.FlappyFlap();
+        }
+    }
+
+    void UpdateArcadeOverlay(float dt) {
+        auto* input = GetSubsystem<Input>();
+        int mx = 0, my = 0;
+        bool jump = false;
+        if (input) {
+            if (input->GetKeyDown(KEY_LEFT) || input->GetKeyDown(KEY_A)) mx -= 1;
+            if (input->GetKeyDown(KEY_RIGHT) || input->GetKeyDown(KEY_D)) mx += 1;
+            if (input->GetKeyDown(KEY_UP) || input->GetKeyDown(KEY_W)) my -= 1;
+            if (input->GetKeyDown(KEY_DOWN) || input->GetKeyDown(KEY_S)) my += 1;
+            jump = input->GetKeyDown(KEY_SPACE) || input->GetKeyDown(KEY_W) || input->GetKeyDown(KEY_UP);
+        }
+        bool wasOver = arcadeSim_.over;
+        arcadeSim_.Step(dt, mx, my, jump);
+        if (!wasOver && arcadeSim_.over) {
+            int bonus = Arcade::PixelArcadeSim::ComputeCreditsReward(arcadeSim_.score, arcadeSim_.won);
+            if (bonus > 0 && !arcadeSim_.rewardClaimed) {
+                arcadeSim_.rewardClaimed = true;
+                int wallet = GetMiniAppWallet(arcadeFromMenu_) + bonus;
+                SetMiniAppWallet(arcadeFromMenu_, wallet);
+                SaveSettingsFile();
+                PlayBanyaSound(achievementSound_, 0.85f);
+            } else {
+                PlayUISound();
+            }
+        }
+        SyncArcadeUI();
     }
 };
 

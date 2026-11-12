@@ -1,0 +1,124 @@
+name: Release — Cross-Platform Native Packages (Linux / macOS / Windows)
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  package-linux:
+    name: Portable Linux x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install native build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake git pkg-config python3 \
+            libsdl2-dev libgl-dev libglu1-mesa-dev libx11-dev libxrandr-dev \
+            libxi-dev libxext-dev libxcb1-dev libasound2-dev libpulse-dev libudev-dev
+
+      - name: Cache static Urho3D 1.9.0 SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/urho3d-sdk
+          key: urho3d-1.9.0-static-linux-x86_64-v2
+
+      - name: Build native client & PBR textures
+        run: TEX_SIZE=2048 ./build.sh -j4
+
+      - name: Run C++17 core test suite
+        run: ./build.sh --tests-only
+
+      - name: Package portable tarball
+        run: ./tools/package_linux.sh
+
+      - name: Upload portable Linux release
+        uses: actions/upload-artifact@v4
+        with:
+          name: CHIKENGUN-2.5-Linux-x86_64
+          path: |
+            build/release/CHIKENGUN-2.5-Linux-*.tar.gz
+            build/release/SHA256SUMS.txt
+
+  package-macos:
+    name: Portable macOS (arm64)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: brew install cmake pkg-config python
+
+      - name: Cache static Urho3D 1.9.0 SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/urho3d-sdk
+          key: urho3d-1.9.0-static-macos-${{ runner.arch }}-v1
+
+      - name: Build native macOS client & PBR textures
+        run: TEX_SIZE=2048 ./build.sh -j4
+
+      - name: Run C++17 core test suite
+        run: ./build.sh --tests-only
+
+      - name: Package macOS archive
+        run: |
+          ARCH="$(uname -m)"
+          PKG="CHIKENGUN-2.5-macOS-${ARCH}"
+          mkdir -p "build/release/$PKG"
+          cp build/MyShooter "build/release/$PKG/MyShooter"
+          cp -R build/Data "build/release/$PKG/Data"
+          cp -R build/CoreData "build/release/$PKG/CoreData"
+          [ -f build/settings.ini ] && cp build/settings.ini "build/release/$PKG/settings.ini" || cp bin/settings.ini "build/release/$PKG/settings.ini"
+          printf '#!/usr/bin/env bash\ncd "$(dirname "$0")" && exec ./MyShooter "$@"\n' > "build/release/$PKG/ChikenGun.command"
+          chmod +x "build/release/$PKG/ChikenGun.command"
+          tar -C build/release -czf "build/release/${PKG}.tar.gz" "$PKG"
+
+      - name: Upload macOS release
+        uses: actions/upload-artifact@v4
+        with:
+          name: CHIKENGUN-2.5-macOS
+          path: build/release/CHIKENGUN-2.5-macOS-*.tar.gz
+
+  package-windows:
+    name: Portable Windows x86_64
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cache static Urho3D 1.9.0 SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/urho3d-sdk
+          key: urho3d-1.9.0-static-win-x64-v1
+
+      - name: Build Windows native client & PBR textures
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Run C++17 core test suite
+        shell: pwsh
+        run: .\build.ps1 -TestsOnly
+
+      - name: Package Windows ZIP archive
+        shell: pwsh
+        run: |
+          $pkg = "build\release\CHIKENGUN-2.5-Windows-x86_64"
+          New-Item -ItemType Directory -Force -Path $pkg | Out-Null
+          Copy-Item "build-win\Release\MyShooter.exe" "$pkg\MyShooter.exe"
+          Copy-Item -Recurse -Force "build-win\Release\Data" "$pkg\Data"
+          Copy-Item -Recurse -Force "build-win\Release\CoreData" "$pkg\CoreData"
+          Copy-Item -Force "bin\settings.ini" "$pkg\settings.ini"
+          Compress-Archive -Path "$pkg" -DestinationPath "build\release\CHIKENGUN-2.5-Windows-x86_64.zip" -Force
+
+      - name: Upload Windows release
+        uses: actions/upload-artifact@v4
+        with:
+          name: CHIKENGUN-2.5-Windows-x86_64
+          path: build/release/CHIKENGUN-2.5-Windows-x86_64.zip

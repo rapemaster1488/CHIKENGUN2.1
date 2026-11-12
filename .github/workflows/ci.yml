@@ -1,52 +1,156 @@
-name: CI — Syntax, Core Tests & 4K Asset Pipeline
+name: CI — Cross-Platform Native C++17, Nix & 4K Asset Pipeline
 
 on:
   push:
   pull_request:
 
 jobs:
-  verify:
+  verify-urho-and-assets:
+    name: Urho3D Type Check (1.9.0 & master) + Assets
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Fetch Urho3D headers for static type check
+      - name: Fetch Urho3D headers (1.9.0 & master) for static type check
         run: |
           mkdir -p /tmp/urho_ci
-          git clone --depth 1 --filter=blob:none --sparse https://github.com/urho3d/Urho3D.git /tmp/urho_ci/master
-          cd /tmp/urho_ci/master
-          git sparse-checkout set Source/Urho3D Source/ThirdParty/SDL/include Source/ThirdParty/Bullet/src
-          mkdir -p include Source/Urho3D/ThirdParty
-          ln -sfn ../Source/Urho3D include/Urho3D
-          ln -sfn ../../ThirdParty/SDL/include Source/Urho3D/ThirdParty/SDL
-          ln -sfn ../../ThirdParty/Bullet/src Source/Urho3D/ThirdParty/Bullet
-          printf '#ifndef SDL_config_h_\n#define SDL_config_h_\n#include "SDL_platform.h"\n#include <stdint.h>\n#include <stddef.h>\n#include <stdarg.h>\n#endif\n' > Source/ThirdParty/SDL/include/SDL_config.h
-          printf '#pragma once\n#define URHO3D_API\n' > Source/Urho3D/Urho3D.h
+          for ref in 1.9.0 master; do
+            git clone --depth 1 --branch "$ref" --filter=blob:none --sparse https://github.com/urho3d/Urho3D.git "/tmp/urho_ci/$ref"
+            (
+              cd "/tmp/urho_ci/$ref"
+              git sparse-checkout set Source/Urho3D Source/ThirdParty/SDL/include Source/ThirdParty/Bullet/src
+              mkdir -p include Source/Urho3D/ThirdParty
+              ln -sfn ../Source/Urho3D include/Urho3D
+              ln -sfn ../../ThirdParty/SDL/include Source/Urho3D/ThirdParty/SDL
+              ln -sfn ../../ThirdParty/Bullet/src Source/Urho3D/ThirdParty/Bullet
+              printf '#ifndef SDL_config_h_\n#define SDL_config_h_\n#include "SDL_platform.h"\n#include <stdint.h>\n#include <stddef.h>\n#include <stdarg.h>\n#endif\n' > Source/ThirdParty/SDL/include/SDL_config.h
+              printf '#pragma once\n#define URHO3D_API\n' > Source/Urho3D/Urho3D.h
+            )
+          done
 
       - name: Run C++17 & Urho3D type check (src/MyApp.cpp + tools + tests)
         run: |
+          URHO3D_HOME=/tmp/urho_ci/1.9.0 ./tools/syntax_check.sh
           URHO3D_HOME=/tmp/urho_ci/master ./tools/syntax_check.sh
 
-      - name: Build & run CMake unit tests + 4K generator test
+      - name: Validate native launchers, XML materials, particle effects & sounds
         run: |
-          cmake -B build_ci -DBUILD_GAME=OFF
-          cmake --build build_ci -j
-          ctest --test-dir build_ci --output-on-failure
-
-      - name: Headless WebGL2 engine smoke test (~2 min of simulated combat)
-        run: node tools/headless_smoke.js
-
-      - name: Asset integrity check (no 404s in referenced textures/sounds)
-        run: node tools/asset_check.js
-
-      - name: Validate XML materials, postprocess & procedural WAV generator
-        run: |
+          bash -n build.sh run.sh tools/syntax_check.sh tools/package_linux.sh
           python3 tools/gen_sounds.py
           python3 -c '
-          import glob, xml.etree.ElementTree as ET
-          files = set(glob.glob("Data/**/*.xml", recursive=True) + glob.glob("CoreData/**/*.xml", recursive=True) + ["bin/settings.ini"])
+          import glob, os, xml.etree.ElementTree as ET
+          for dead in ("index.html", "banya.html", "casino.html", "minigames.html", "web/webgl2_arena.js", "play.sh"):
+              assert not os.path.exists(dead), f"Web artifact must remain retired: {dead}"
+          files = set(glob.glob("Data/**/*.xml", recursive=True) + glob.glob("Data/**/*.pfx", recursive=True) + glob.glob("CoreData/**/*.xml", recursive=True) + ["bin/settings.ini"])
           for f in sorted(files):
               ET.parse(f)
-          print(f"Validated {len(files)} XML files")
+          print(f"Validated {len(files)} XML/PFX files (100% native repository)")
           '
+
+  verify-cross-platform:
+    name: Core C++17 Build & Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build & run CMake unit tests + 4K generator
+        run: |
+          cmake -S . -B build_ci -DBUILD_GAME=OFF
+          cmake --build build_ci --config Release --parallel 4
+          ctest --test-dir build_ci -C Release --output-on-failure
+
+      - name: Verify PowerShell runner (--TestsOnly) on Windows
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: .\build.ps1 -TestsOnly
+
+      - name: Verify build.sh --tests-only on Unix/macOS
+        if: matrix.os != 'windows-latest'
+        run: ./build.sh --tests-only
+
+  verify-nix:
+    name: Nix Flake & shell.nix Evaluation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Nix with Flakes enabled
+        uses: cachix/install-nix-action@v30
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Parse & evaluate flake.nix and shell.nix across all target systems
+        run: |
+          nix-instantiate --parse flake.nix >/dev/null
+          nix-instantiate --parse shell.nix >/dev/null
+          nix-instantiate shell.nix >/dev/null
+          for sys in x86_64-linux aarch64-linux aarch64-darwin x86_64-darwin; do
+            echo "Evaluating Nix derivations for $sys..."
+            nix eval --raw ".#packages.${sys}.urho3d.drvPath" && echo ""
+            nix eval --raw ".#packages.${sys}.default.drvPath" && echo ""
+            nix eval --raw ".#devShells.${sys}.default.drvPath" && echo ""
+          done
+          nix flake show --no-write-lock-file
+
+      - name: Build full package via Nix (urho3d + MyShooter + ctest)
+        run: nix build .#default --no-link -L --no-write-lock-file
+
+  verify-full-client:
+    name: Full Client Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y -o Acquire::Retries=3 build-essential cmake git pkg-config python3 \
+            libsdl2-dev libgl-dev libglu1-mesa-dev libx11-dev libxrandr-dev \
+            libxi-dev libxext-dev libxcb1-dev libasound2-dev libpulse-dev libudev-dev
+
+      - name: Install macOS dependencies
+        if: matrix.os == 'macos-latest'
+        run: brew install cmake pkg-config python
+
+      - name: Cache static Urho3D 1.9.0 SDK
+        uses: actions/cache@v4
+        with:
+          path: .cache/urho3d-sdk
+          key: urho3d-1.9.0-ci-${{ runner.os }}-${{ runner.arch }}-v2
+
+      - name: Build full client on Linux & package tarball
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          TEX_SIZE=512 ./build.sh -j4
+          ./tools/package_linux.sh
+          test -x build/MyShooter
+
+      - name: Build full client on macOS
+        if: matrix.os == 'macos-latest'
+        run: |
+          TEX_SIZE=512 ./build.sh -j4
+          test -x build/MyShooter
+
+      - name: Build full client on Windows (MSVC + OpenGL Urho3D)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          .\build.ps1
+          if (-not (Test-Path "build-win\Release\MyShooter.exe")) { throw "Missing MyShooter.exe" }
+          if (-not (Test-Path "build-win\Release\Data\Materials\Game\BanyaLog.xml")) { throw "Missing Data sync" }
+          if (-not (Test-Path "build-win\Release\CoreData\Shaders\GLSL\Cinema4K.glsl")) { throw "Missing CoreData sync" }

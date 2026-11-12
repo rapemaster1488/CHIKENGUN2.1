@@ -1,99 +1,111 @@
-# Desktop-first: сборка и проверка CHIKENGUN
+# Native Desktop Guide: сборка и запуск CHIKENGUN 2.5 (NixOS / Linux / macOS / Windows)
 
-Основная цель проекта — нативный desktop-клиент `src/MyApp.cpp` на C++17 и Urho3D. `casino.html` остаётся визуальным/функциональным ориентиром, но рулетка реализована отдельно внутри native-клиента; `index.html` и `banya.html` — вспомогательные браузерные версии. Браузерное превью не заменяет нативную игру.
+Проект полностью работает как единый **нативный C++17 / Urho3D desktop-клиент** (`src/MyApp.cpp`).
+Вся функциональность (арена 2.5 «ПЕРО СУДЬБЫ», 12 видов оружия, 4K PBR, «Кочет в баньке», «Золотая Рулетка» + «Кибер-Слоты 777», «Pixel Arcade» на 6 мини-игр, интро-заставка 2.5.6) находится внутри одного нативного бинарника.
 
-## Зависимости Linux
+---
 
-Нужны:
+## 1. Nix / NixOS (Flakes и классический `nix-shell`)
 
-- `g++` с поддержкой C++17;
-- CMake 3.16+ (для пресетов нужен CMake 3.21+);
-- собранные Urho3D headers и `libUrho3D.so` или `libUrho3D.a`;
-- SDL2, OpenGL, X11 и pthread;
-- Python 3 — для генераторов звуковых ресурсов.
-
-`build.sh` ищет Urho3D в `$URHO3D_HOME`, `$HOME/urho3d_build`, `$HOME/urho3d/build`, `/usr/local` и `/usr`.
-
-## Быстрая native-сборка
-
-Если Urho3D уже собран:
+### Вариант A — запуск в 1 команду (Flakes)
 
 ```bash
-export URHO3D_HOME="$HOME/urho3d_build"
-TEX_SIZE=1024 ./build.sh
+# Соберёт Urho3D 1.9.0 в Nix store, прогонит тесты и сразу запустит игру
+nix run
+```
+
+### Вариант B — окружение разработчика (Flakes или `nix-shell`)
+
+```bash
+# С Flakes (Urho3D 1.9.0 уже собран и подключен через URHO3D_HOME):
+nix develop -c ./run.sh
+
+# Без Flakes (классический nix-shell, на первом запуске соберёт кэш .cache/urho3d-sdk):
+nix-shell --run ./run.sh
+```
+
+> На NixOS скрипты `run.sh`, `build.sh` и `flake.nix` автоматически добавляют `/run/opengl-driver/lib`, `/run/opengl-driver-32/lib`, SDL2, X11, Mesa, ALSA, PulseAudio и udev в `LD_LIBRARY_PATH` и пробрасывают `CHIKENGUN_DATA_DIR` / `CHIKENGUN_COREDATA_DIR`.
+
+---
+
+## 2. Linux (Ubuntu / Debian, Fedora, Arch, openSUSE, Alpine, Void) и macOS
+
+```bash
+git clone https://github.com/rapemaster1488/CHIKENGUN2.1.git
+cd CHIKENGUN2.1
+
+# На чистой машине (поставит системные пакеты, соберёт статический Urho3D 1.9.0 в .cache/urho3d-sdk,
+# сгенерирует PBR-текстуры/звуки и запустит игру):
+./run.sh --install-deps
+```
+
+Поддерживаемые пакетные менеджеры при `--install-deps`: `apt`, `dnf`, `pacman`, `zypper`, `apk` (Alpine musl), `xbps` (Void), `brew` (macOS Intel & Apple Silicon), плюс авто-вход в Nix на NixOS.
+
+После первого запуска:
+
+```bash
 ./run.sh
 ```
 
-Для полноценного 4K-пакета можно убрать `TEX_SIZE=1024`, но генерация текстур 4096×4096 требует заметно больше времени и памяти.
+### Полезные флаги (`./build.sh` и `./run.sh`)
 
-### Если в логе есть `not enough pixels` или Segmentation fault
+- `./run.sh --4k` / `./build.sh --4k` — генерация полного 4096×4096 набора PBR-текстур + 3840×2160 `LoadingBg4K.png` (по умолчанию `TEX_SIZE=1024`).
+- `./build.sh --install-deps` — автоустановка системных пакетов сборки.
+- `./build.sh --tests-only` — сборка и прогон модульных C++17 тестов (`test_core`) без Urho3D.
+- `URHO3D_HOME=/путь/к/sdk ./build.sh` — использовать уже установленный Urho3D SDK.
+- `./tools/package_linux.sh` — собрать автономный переносимый архив `build/release/CHIKENGUN-2.5-Linux-<arch>.tar.gz`.
 
-Это обычно означает, что в старом `build/Data/Textures` остался повреждённый кэш 4K-текстур. Удалите только локальный каталог сборки и пересоберите пакет:
+---
 
-```bash
-rm -rf build
-export URHO3D_HOME="$HOME/urho3d_build"
-TEX_SIZE=1024 ./build.sh
-./build/MyShooter
+## 3. Windows (MSVC / Visual Studio, CMake или MSYS2)
+
+### Нативный PowerShell / Visual Studio (рекомендуется)
+
+```powershell
+# Первый запуск сам закэширует Urho3D 1.9.0 (OpenGL + GLSL), сгенерирует PBR-текстуры и запустит игру:
+.\run.bat
+
+# Сборка в 4K или только C++17 модульные тесты:
+.\build.ps1 -Ultra4K
+.\build.ps1 -TestsOnly
 ```
 
-`build.sh` проверяет размеры и целостность PNG перед запуском клиента. В режиме полного 4K карты Feather/Hazard имеют безопасный размер 2048×2048, остальные PBR-карты — выбранный `TEX_SIZE`.
+> Скрипт `build.ps1` и `CMakeLists.txt` принудительно собирают Urho3D для Windows с `-DURHO3D_OPENGL=ON`, чтобы работали кастомные GLSL-шейдеры (`Cinema4K.glsl`, `SSAO4K.glsl`).
 
-## CMake: сначала headless-тесты
-
-Тесты ядра не требуют Urho3D:
+### MSYS2 / MinGW64
 
 ```bash
-cmake --preset tests
-cmake --build --preset tests
-ctest --preset tests
+./run.sh --install-deps
 ```
 
-Эквивалент для CMake старше 3.21:
+---
+
+## 4. Универсальная сборка через CMake (Linux / NixOS / macOS / Windows)
 
 ```bash
-cmake -S . -B build-tests -DBUILD_GAME=OFF -DTEX_SIZE=512
-cmake --build build-tests -j2
-ctest --test-dir build-tests --output-on-failure
+cmake -S . -B build-desktop -DBUILD_GAME=ON -DAUTO_FETCH_URHO3D=ON
+cmake --build build-desktop --config Release -j
 ```
 
-В проекте проверяются Lite-физика, кибер-системы, 14 концовок бани, правила нативной виртуальной рулетки, PNG-генератор и наличие игровых звуков.
-
-## Сборка desktop через CMake
+Только headless-тесты (без OpenGL/SDL2/Urho3D):
 
 ```bash
-export URHO3D_HOME="$HOME/urho3d_build"
-cmake --preset desktop
-cmake --build --preset desktop
+cmake -S . -B build-tests -DBUILD_GAME=OFF
+cmake --build build-tests --config Release -j
+ctest --test-dir build-tests -C Release --output-on-failure
 ```
 
-Если CMake не видит Urho3D, можно указать пути явно:
+---
 
-```bash
-cmake -S . -B build-desktop \
-  -DBUILD_GAME=ON \
-  -DURHO3D_INCLUDE_DIR="$URHO3D_HOME/include" \
-  -DURHO3D_LIBRARY="$URHO3D_HOME/lib/libUrho3D.so"
-cmake --build build-desktop -j2
-```
+## Что проверять вручную в клиенте
 
-## Что проверять руками в desktop-клиенте
-
-1. Меню: `W/S` выбирают пункт, `Enter` запускает, `Esc` выходит.
-2. Полигон: стрельба, перезарядка, переключение 1–9/0/[ ], точность и мишени; проверить вращение ротора минигана, крио-колец и ION SAW, а в арене — замедление цели от CRYO LANCE и ограничение эффективной дальности ION SAW 36 м.
-3. Арена: волны, разные породы кур, босс, мутатор, кредиты, перки, сохранение рекорда.
-4. Ресайз окна и смена пресетов через настройки.
-5. Баня: действия 1–5, загадки `Q/W/E/R`, статистика `6`, награды и баффы.
-6. Рулетка: пункт `ЗОЛОТАЯ РУЛЕТКА` в главном меню; это только внутриигровые виртуальные фишки.
-   - `Q/E` — тип ставки (красное, чёрное, чёт, нечёт, диапазон, дюжина, колонка, сплит, стрит, корнер, сикс-лайн или число);
-   - `A/D` — размер ставки;
-   - `W/S` — число 0–36 или опорный сектор для сложной ставки;
-   - `R` — случайное число;
-   - `Enter/Space` — прокрутить;
-   - `T` или кнопка `+5000 ФИШЕК` — демонстрационный топ-ап;
-   - `Esc` — обратно в меню.
-7. `F3`, `F8`, `F9`, `F11`, `F12` и настройки графики.
-
-## Ограничения
-
-Рулетка использует только виртуальные фишки, не принимает платежи и не подключается к онлайн-казино. Настройки, рекорд, прогресс бани и статистика рулетки сохраняются в пользовательской директории Urho3D (`GetAppPreferencesDir`). Старый `settings.ini` рядом с desktop-бинарником автоматически подхватывается при первом запуске и затем переносится в новое место.
+1. **Интро 2.5.6**: `koch.studios` → `powered by fall.os` → `CHICHKENCUM 2.1` под `KochSplashTheme.wav` (скип: клик / `Space` / `Enter` / `Esc`).
+2. **Меню**: `W/S` выбирают пункт, `Enter` запускает, `Esc` выходит.
+3. **Полигон и Арена 2.5 «ПЕРО СУДЬБЫ»**:
+   - Неоновый ритуальный круг с взлётными полосами в центре, 4 hazard-ежа, 2 северные/южные арки, вентили на трубах.
+   - Оружие 1–9 / 0 / `[` / `]`, цвет перекрестия под цвет ствола, полоса прогресса перезарядки.
+   - Живое поведение кур (weaving при сближении, выпад клювом, падение и исчезновение трупов через 3.5 сек) + счётчик оставшихся врагов текущей волны в HUD.
+4. **Кочет в баньке `[P]`**: сруб на 3D-арене и в меню, градусник пара и снег за окном, действия `1..5`, загадки `Q/W/E/R`, статистика `6`, 14 концовок и боевые баффы Арены.
+5. **Казино `[J]`**: переключение `[TAB]` между **Золотой рулеткой** (с историей последних 10 спинов) и **Кибер-Слотами 777** (выплаты до `×50`).
+6. **Pixel Arcade `[K]`**: все 6 игр — `[1] Змейка`, `[2] Арканоид`, `[3] Куро-Ран`, `[4] Pong`, `[5] Flappy Кочет`, `[6] Кибер-Тетрис` (начисление кредитов `¤` за результаты).
+7. **Горячие клавиши**: `F1`–`F3`, `F8`, `F9`, `F11`, `F12`, ресайз окна и `settings.ini` в пользовательской директории Urho3D (`GetAppPreferencesDir`).
