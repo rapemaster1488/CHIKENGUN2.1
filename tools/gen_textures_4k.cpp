@@ -1502,6 +1502,205 @@ PbrSet genBanyaBirch4K(int S) {
     return out;
 }
 
+// 14. CasinoFelt — элитное изумрудное сукно VIP-стола (саржевое плетение, золотая разметка ромбами, бархатный ворс)
+PbrSet genCasinoFelt4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+            float twill = 0.5f + 0.5f * std::sin((u * 180.0f + v * 180.0f) * TAU) * 0.5f
+                        + 0.25f * std::sin((u * 180.0f - v * 180.0f) * TAU);
+            float microWool = tileFbm(u, v, 36, 3, 1409u);
+            float velvet = tileFbm(u, v, 8, 3, 1423u);
+
+            // Тончайшая золотая сетка-ромбы VIP-сукна и двойная нить по краю
+            float d1 = std::fabs(std::fmod(u * 4.0f + v * 4.0f + 8.0f, 1.0f) - 0.5f);
+            float d2 = std::fabs(std::fmod(u * 4.0f - v * 4.0f + 8.0f, 1.0f) - 0.5f);
+            float line = std::max(smoothstep(0.010f, 0.002f, d1), smoothstep(0.010f, 0.002f, d2));
+            float borderLine = smoothstep(0.008f, 0.002f, std::fabs(std::fabs(u - 0.5f) - 0.46f));
+            float goldThread = clamp01(line * 0.42f + borderLine * 0.68f);
+
+            float r = lerpf(0.022f, 0.055f, velvet * 0.65f + microWool * 0.35f) + twill * 0.010f;
+            float g = lerpf(0.245f, 0.375f, velvet * 0.70f + microWool * 0.30f) + twill * 0.032f;
+            float b = lerpf(0.118f, 0.195f, velvet * 0.65f + microWool * 0.35f) + twill * 0.016f;
+
+            r = lerpf(r, 0.86f, goldThread);
+            g = lerpf(g, 0.69f, goldThread);
+            b = lerpf(b, 0.22f, goldThread);
+
+            float h = 0.40f + twill * 0.16f + microWool * 0.28f + goldThread * 0.18f;
+            float rough = lerpf(0.88f, 0.32f, goldThread);
+            float metal = goldThread * 0.75f;
+
+            hf[static_cast<size_t>(y) * S + x] = h;
+            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            out.diff[idx + 0] = toByte(r);
+            out.diff[idx + 1] = toByte(g);
+            out.diff[idx + 2] = toByte(b);
+            out.roughMetal[idx + 0] = toByte(rough);
+            out.roughMetal[idx + 1] = toByte(metal);
+            out.roughMetal[idx + 2] = toByte(0.76f + microWool * 0.20f);
+        }
+    });
+    applyCavityAO(hf, S, 0.22f, out.diff);
+    heightToNormal(hf, S, 1.8f, out.norm);
+    return out;
+}
+
+// 15. CasinoGold — чеканное полированное 24К золото (радиальное гильоше + зеркальные фаски + патина)
+PbrSet genCasinoGold4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+            float cx = u - 0.5f, cy = v - 0.5f;
+            float rad = std::sqrt(cx * cx + cy * cy);
+            float ang = std::atan2(cy, cx);
+
+            float guilloche = 0.5f + 0.5f * std::sin(rad * 16.0f * TAU + std::sin(ang * 12.0f) * 0.8f);
+            float brush = tileFbmXY(u, v, 96, 8, 3, 1511u);
+            float fineBrush = tileFbmXY(u, v, 140, 12, 2, 1517u);
+            float patina = tileFbm(u, v, 8, 3, 1523u);
+            float rimRing = smoothstep(0.012f, 0.002f, std::fabs(std::fmod(rad * 4.0f, 1.0f) - 0.5f));
+
+            float tone = 0.80f + 0.05f * guilloche + 0.11f * brush + 0.05f * fineBrush - patina * 0.05f;
+            float r = clamp01(0.99f * tone);
+            float g = clamp01(0.79f * tone + rimRing * 0.06f);
+            float b = clamp01(0.28f * tone + rimRing * 0.05f);
+
+            float h = 0.48f + guilloche * 0.10f + rimRing * 0.24f + brush * 0.14f + fineBrush * 0.06f;
+            float rough = clamp01(0.12f + patina * 0.10f - rimRing * 0.04f + (1.0f - brush) * 0.05f);
+
+            hf[static_cast<size_t>(y) * S + x] = h;
+            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            out.diff[idx + 0] = toByte(r);
+            out.diff[idx + 1] = toByte(g);
+            out.diff[idx + 2] = toByte(b);
+            out.roughMetal[idx + 0] = toByte(rough);
+            out.roughMetal[idx + 1] = toByte(0.96f);
+            out.roughMetal[idx + 2] = toByte(0.84f + guilloche * 0.14f);
+        }
+    });
+    applyCavityAO(hf, S, 0.18f, out.diff);
+    heightToNormal(hf, S, 1.9f, out.norm);
+    return out;
+}
+
+// 16. CasinoMarble — полированный чёрно-золотой мрамор Nero Portoro с кристаллическими прожилками
+PbrSet genCasinoMarble4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+            float warpX = tileFbm(u, v, 4, 4, 1601u);
+            float warpY = tileFbm(u + 0.37f, v + 0.19f, 4, 4, 1607u);
+            float baseStone = tileFbm(u, v, 10, 4, 1613u);
+
+            // Тонкие золотые и кремовые минеральные прожилки (domain warping)
+            float veinA = std::fabs(std::sin((u * 3.0f + v * 2.0f + warpX * 2.6f) * TAU));
+            float veinB = std::fabs(std::sin((u * 2.0f - v * 3.0f + warpY * 3.1f) * TAU));
+            float goldVein = smoothstep(0.11f, 0.012f, veinA);
+            float whiteVein = smoothstep(0.06f, 0.008f, veinB) * 0.65f;
+
+            // Крупноформатные плиты пола с полированной фаской
+            float tileU = std::fmod(u * 2.0f, 1.0f), tileV = std::fmod(v * 2.0f, 1.0f);
+            float grout = std::max(smoothstep(0.012f, 0.002f, std::min(tileU, 1.0f - tileU)),
+                                   smoothstep(0.012f, 0.002f, std::min(tileV, 1.0f - tileV)));
+
+            float r = lerpf(0.032f, 0.075f, baseStone);
+            float g = lerpf(0.036f, 0.082f, baseStone);
+            float b = lerpf(0.048f, 0.105f, baseStone);
+
+            r = lerpf(r, 0.94f, goldVein);
+            g = lerpf(g, 0.72f, goldVein);
+            b = lerpf(b, 0.24f, goldVein);
+
+            r = lerpf(r, 0.85f, whiteVein * 0.45f);
+            g = lerpf(g, 0.82f, whiteVein * 0.45f);
+            b = lerpf(b, 0.78f, whiteVein * 0.45f);
+
+            r = lerpf(r, 0.46f, grout * 0.55f);
+            g = lerpf(g, 0.36f, grout * 0.55f);
+            b = lerpf(b, 0.14f, grout * 0.55f);
+
+            float h = 0.62f - grout * 0.38f + goldVein * 0.04f + baseStone * 0.06f;
+            float rough = clamp01(0.11f + baseStone * 0.09f + grout * 0.45f);
+            float metal = clamp01(goldVein * 0.62f);
+
+            hf[static_cast<size_t>(y) * S + x] = h;
+            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            out.diff[idx + 0] = toByte(r);
+            out.diff[idx + 1] = toByte(g);
+            out.diff[idx + 2] = toByte(b);
+            out.roughMetal[idx + 0] = toByte(rough);
+            out.roughMetal[idx + 1] = toByte(metal);
+            out.roughMetal[idx + 2] = toByte(1.0f - grout * 0.45f);
+        }
+    });
+    applyCavityAO(hf, S, 0.20f, out.diff);
+    heightToNormal(hf, S, 1.6f, out.norm);
+    return out;
+}
+
+// 17. CasinoMahogany — лакированное красное дерево VIP-бортов и корпуса 777
+PbrSet genCasinoMahogany4K(int S) {
+    PbrSet out;
+    out.diff.resize(static_cast<size_t>(S) * S * 3);
+    out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
+    std::vector<float> hf(static_cast<size_t>(S) * S);
+
+    parallelRows(S, [&](int y) {
+        float v = float(y) / S;
+        for (int x = 0; x < S; ++x) {
+            float u = float(x) / S;
+            float grainWarp = tileFbm(u, v, 4, 3, 1709u) * 0.28f;
+            float ring = 0.5f + 0.5f * std::sin((u * 18.0f + grainWarp * 4.5f) * TAU);
+            float fiber = tileFbmXY(u, v, 110, 8, 3, 1721u);
+            float pore = tileFbmXY(u, v, 180, 14, 2, 1733u);
+
+            // Тонкая филёнка с фрезеровкой по краям шпона
+            float seamU = smoothstep(0.010f, 0.002f, std::min(u, 1.0f - u));
+            float seamV = smoothstep(0.010f, 0.002f, std::min(v, 1.0f - v));
+            float bevel = std::max(seamU, seamV);
+
+            float t = clamp01(ring * 0.42f + fiber * 0.43f + pore * 0.15f);
+            float r = lerpf(0.21f, 0.48f, t) * (1.0f - bevel * 0.30f);
+            float g = lerpf(0.052f, 0.140f, t) * (1.0f - bevel * 0.30f);
+            float b = lerpf(0.028f, 0.072f, t) * (1.0f - bevel * 0.30f);
+
+            float h = 0.56f - bevel * 0.28f + fiber * 0.14f + pore * 0.06f;
+            float rough = clamp01(0.15f + (1.0f - fiber) * 0.09f + bevel * 0.16f);
+
+            hf[static_cast<size_t>(y) * S + x] = h;
+            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            out.diff[idx + 0] = toByte(r);
+            out.diff[idx + 1] = toByte(g);
+            out.diff[idx + 2] = toByte(b);
+            out.roughMetal[idx + 0] = toByte(rough);
+            out.roughMetal[idx + 1] = toByte(0.04f);
+            out.roughMetal[idx + 2] = toByte(1.0f - bevel * 0.35f);
+        }
+    });
+    applyCavityAO(hf, S, 0.24f, out.diff);
+    heightToNormal(hf, S, 2.0f, out.norm);
+    return out;
+}
+
 // ============================================================================
 // Бесшовный 6-гранный 360° Skybox + IBL Cubemap (сумеречный кибер-закат + многослойный мегаполис)
 // ============================================================================
@@ -1770,9 +1969,13 @@ int main(int argc, char** argv) {
     saveSet("BanyaLog",     S,         genBanyaLog4K(S));
     saveSet("BanyaRooster", S,         genBanyaRooster4K(S));
     saveSet("BanyaPlank",   S,         genBanyaPlank4K(S));
-    saveSet("BanyaStone",   S,         genBanyaStone4K(S));
-    saveSet("BanyaCopper",  smallSize, genBanyaCopper4K(smallSize));
-    saveSet("BanyaBirch",   smallSize, genBanyaBirch4K(smallSize));
+    saveSet("BanyaStone",     S,         genBanyaStone4K(S));
+    saveSet("BanyaCopper",    smallSize, genBanyaCopper4K(smallSize));
+    saveSet("BanyaBirch",     smallSize, genBanyaBirch4K(smallSize));
+    saveSet("CasinoFelt",     smallSize, genCasinoFelt4K(smallSize));
+    saveSet("CasinoGold",     smallSize, genCasinoGold4K(smallSize));
+    saveSet("CasinoMarble",   S,         genCasinoMarble4K(S));
+    saveSet("CasinoMahogany", S,         genCasinoMahogany4K(S));
 
     int cubeS = 1024;
     genSkyCubemap(outDir, cubeS);

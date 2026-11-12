@@ -1,0 +1,11 @@
+<material>
+    <technique name="Techniques/PBR/PBRMetallicRoughDiffNormalSpec.xml" quality="2" />
+    <technique name="Techniques/DiffNormalSpec.xml" quality="1" />
+    <technique name="Techniques/Diff.xml" quality="0" />
+    <texture unit="diffuse" name="Textures/CasinoFeltDiffuse.png" />
+    <texture unit="normal" name="Textures/CasinoFeltNormal.png" />
+    <texture unit="specular" name="Textures/CasinoFeltRoughMetal.png" />
+    <parameter name="Roughness" value="0" />
+    <parameter name="Metallic" value="0" />
+    <parameter name="MatSpecColor" value="0.35 0.55 0.42 28" />
+</material>

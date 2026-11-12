@@ -985,23 +985,75 @@ private:
     String                lastBanyaRiddleQ_, lastBanyaRiddleTime_, lastBanyaRiddleFb_;
     int                   lastBanyaBarW_[5] = { -1, -1, -1, -1, -1 };
 
-    // === 2.5 НАТИВНОЕ КАЗИНО [J] («Золотая Рулетка» + «Кибер-Слоты 777») И PIXEL ARCADE [K] (6 игр) ===
+    // === 2.5 НАТИВНОЕ 3D 4K VIP-КАЗИНО [J] («Золотая Рулетка» + «Кибер-Слоты 777», 100% РОФЛ) ===
+    struct Casino3DFxMote {
+        SharedPtr<Node> node_;
+        SharedPtr<Material> mat_;
+        Vector3 pos_ = Vector3::ZERO;
+        Vector3 vel_ = Vector3::ZERO;
+        float life_ = 0.0f;
+        float ttl_ = 1.0f;
+        float baseScale_ = 0.1f;
+        float spin_ = 0.0f;
+        int kind_ = 0; // 0=золотая 3D-монета, 1=HDR искра джекпота
+        bool active_ = false;
+    };
     bool casinoOpen_ = false;
     bool casinoFromMenu_ = true;
     bool casinoSlotsMode_ = false;
+    bool casinoDisclaimerAck_ = false;
+    bool casinoDisclaimerVisible_ = false;
     Casino::Bet casinoBet_{};
     int casinoBalance_ = 1000;
     int casinoLastResult_ = -1;
     int casinoPendingResult_ = -1;
     int casinoWins_ = 0;
     int casinoLosses_ = 0;
+    int casinoMaxWin_ = 0;
+    int casinoSessionSpins_ = 0;
+    int casinoLastPayout_ = 0;
     float casinoSpinTimer_ = 0.0f;
+    float casinoSpinDur_ = 2.8f;
+    float casinoResultFlash_ = 0.0f;
+    float casinoCamModeBlend_ = 0.0f;
+    float casinoWheelAngle_ = 0.0f;
+    float casinoWheelVel_ = 18.0f;
+    float casinoBallAngle_ = 0.0f;
+    float casinoBallStartAngle_ = 0.0f;
+    float casinoBallDropProg_ = 0.0f;
+    int   casinoBallTargetSector_ = 0;
+    bool  casinoBallSettled_ = true;
+    float casinoSlotAngle_[3] = { 300.0f, 60.0f, 240.0f };
+    float casinoSlotStartAngle_[3] = { 0.0f, 0.0f, 0.0f };
+    float casinoSlotTargetAngle_[3] = { 300.0f, 60.0f, 240.0f };
+    bool  casinoSlotStopped_[3] = { true, true, true };
+    float casinoLeverPull_ = 0.0f;
     int slotReels_[3] = { Casino::SYM_SEVEN, Casino::SYM_ROOSTER, Casino::SYM_CROWN };
     int slotPendingReels_[3] = { 0, 0, 0 };
     Vector<int> casinoHistory_;
-    SharedPtr<UIElement> casinoPanel_;
+
+    SharedPtr<Scene>      casinoScene_;
+    SharedPtr<Viewport>   casinoViewport_;
+    SharedPtr<RenderPath> casinoRenderPath_;
+    SharedPtr<Zone>       casinoZone_;
+    SharedPtr<Node>       casinoCamNode_;
+    SharedPtr<Light>      casinoChandelierLight_, casinoWheelSpot_, casinoNeonLightL_, casinoNeonLightR_;
+    SharedPtr<Node>       casinoChandelierNode_, casinoWheelHub_, casinoWheelDrum_, casinoWheelTurret_;
+    SharedPtr<Node>       casinoBallPivot_, casinoBallNode_, casinoDollyNode_;
+    SharedPtr<Node>       casinoChipStacks_[6];
+    SharedPtr<Node>       casinoRoosterNode_, casinoRoosterHead_, casinoRoosterWingL_, casinoRoosterWingR_;
+    SharedPtr<Node>       casinoSlotMachineNode_, casinoSlotLever_;
+    SharedPtr<Node>       casinoSlotDrum_[3];
+    Vector<SharedPtr<Material>> casinoSlotBeaconMats_;
+    SharedPtr<Material>   casinoRoosterMoodMat_, casinoNeonSignMat_;
+    Vector<Casino3DFxMote> casino3DFxPool_;
+    int                   casino3DFxCursor_ = 0;
+
+    SharedPtr<UIElement> casinoPanel_, casinoDisclaimerBox_;
     SharedPtr<BorderImage> casinoWheelCard_, casinoSpinButton_, casinoBetButton_, casinoChipButton_, casinoNumberButton_, casinoTopupButton_, casinoCloseButton_, casinoModeButton_;
-    SharedPtr<Text> casinoTitleText_, casinoBalanceText_, casinoWheelText_, casinoBetText_, casinoResultText_, casinoStatsText_, casinoHelpText_, casinoHistoryText_;
+    SharedPtr<BorderImage> casinoQuickRedBtn_, casinoQuickBlackBtn_, casinoQuickZeroBtn_, casinoQuickDoubleBtn_, casinoInfoBtn_, casinoDisclaimerBtn_;
+    SharedPtr<BorderImage> casinoNumMinusBtn_, casinoNumPlusBtn_, casinoChipMinusBtn_, casinoChipPlusBtn_;
+    SharedPtr<Text> casinoTitleText_, casinoRoflBannerText_, casinoBalanceText_, casinoStatusText_, casinoWheelText_, casinoBetText_, casinoResultText_, casinoStatsText_, casinoHistoryText_;
 
     Arcade::PixelArcadeSim arcadeSim_;
     bool                   arcadeOpen_ = false;
@@ -1085,6 +1137,10 @@ private:
     Material* hdBanyaStone_ = nullptr;
     Material* hdBanyaCopper_ = nullptr;
     Material* hdBanyaBirch_ = nullptr;
+    Material* hdCasinoFelt_ = nullptr;
+    Material* hdCasinoGold_ = nullptr;
+    Material* hdCasinoMarble_ = nullptr;
+    Material* hdCasinoMahogany_ = nullptr;
     SharedPtr<Material> pbrBaseMat_;
     SharedPtr<Material> glowBaseMat_;
     SharedPtr<Material> critTracerMat_;
@@ -1134,6 +1190,10 @@ private:
     Sound* banyaVenikSound_ = nullptr;
     Sound* banyaSplashSound_ = nullptr;
     Sound* banyaDoorSound_ = nullptr;
+    Sound* casinoSpinSound_ = nullptr;
+    Sound* casinoChipSound_ = nullptr;
+    Sound* casinoSlotStopSound_ = nullptr;
+    Sound* casinoJackpotSound_ = nullptr;
     SoundSource* soundSource_ = nullptr;   // 2D-микшер на камере
     SharedPtr<SoundSource> musicSource_;       // фоновая музыка
     SoundSource3D* explosionSource3D_ = nullptr; // взрывы в мировом пространстве
@@ -1602,6 +1662,10 @@ private:
         banyaVenikSound_  = cache->GetResource<Sound>("Sounds/BanyaVenik.wav");
         banyaSplashSound_ = cache->GetResource<Sound>("Sounds/BanyaSplash.wav");
         banyaDoorSound_   = cache->GetResource<Sound>("Sounds/BanyaDoor.wav");
+        casinoSpinSound_     = cache->GetResource<Sound>("Sounds/CasinoWheelSpin.wav");
+        casinoChipSound_     = cache->GetResource<Sound>("Sounds/CasinoChipClick.wav");
+        casinoSlotStopSound_ = cache->GetResource<Sound>("Sounds/CasinoSlotStop.wav");
+        casinoJackpotSound_  = cache->GetResource<Sound>("Sounds/CasinoJackpot.wav");
 
         cluckSounds_[0] = cache->GetResource<Sound>("Sounds/Chicken_Cluck.wav");
         if (!cluckSounds_[0]) cluckSounds_[0] = cache->GetResource<Sound>("Sounds/ChickenCluck.wav");
@@ -1864,6 +1928,10 @@ private:
         hdBanyaStone_   = loadPbrMaterial("Materials/Game/BanyaStone.xml",   "Textures/BanyaStoneDiffuse.png",   "Textures/BanyaStoneNormal.png",   "Textures/BanyaStoneRoughMetal.png");
         hdBanyaCopper_  = loadPbrMaterial("Materials/Game/BanyaCopper.xml",  "Textures/BanyaCopperDiffuse.png",  "Textures/BanyaCopperNormal.png",  "Textures/BanyaCopperRoughMetal.png");
         hdBanyaBirch_   = loadPbrMaterial("Materials/Game/BanyaBirch.xml",   "Textures/BanyaBirchDiffuse.png",   "Textures/BanyaBirchNormal.png",   "Textures/BanyaBirchRoughMetal.png");
+        hdCasinoFelt_     = loadPbrMaterial("Materials/Game/CasinoFelt.xml",     "Textures/CasinoFeltDiffuse.png",     "Textures/CasinoFeltNormal.png",     "Textures/CasinoFeltRoughMetal.png");
+        hdCasinoGold_     = loadPbrMaterial("Materials/Game/CasinoGold.xml",     "Textures/CasinoGoldDiffuse.png",     "Textures/CasinoGoldNormal.png",     "Textures/CasinoGoldRoughMetal.png");
+        hdCasinoMarble_   = loadPbrMaterial("Materials/Game/CasinoMarble.xml",   "Textures/CasinoMarbleDiffuse.png",   "Textures/CasinoMarbleNormal.png",   "Textures/CasinoMarbleRoughMetal.png");
+        hdCasinoMahogany_ = loadPbrMaterial("Materials/Game/CasinoMahogany.xml", "Textures/CasinoMahoganyDiffuse.png", "Textures/CasinoMahoganyNormal.png", "Textures/CasinoMahoganyRoughMetal.png");
         skyTexture_ = cache->GetResource<Texture2D>("Textures/SkyDay.png");
         EnsureSkyCubemap();
 
@@ -1882,6 +1950,10 @@ private:
                 "Textures/BanyaStoneDiffuse.png",   "Textures/BanyaStoneNormal.png",   "Textures/BanyaStoneRoughMetal.png",
                 "Textures/BanyaCopperDiffuse.png",  "Textures/BanyaCopperNormal.png",  "Textures/BanyaCopperRoughMetal.png",
                 "Textures/BanyaBirchDiffuse.png",   "Textures/BanyaBirchNormal.png",   "Textures/BanyaBirchRoughMetal.png",
+                "Textures/CasinoFeltDiffuse.png",   "Textures/CasinoFeltNormal.png",   "Textures/CasinoFeltRoughMetal.png",
+                "Textures/CasinoGoldDiffuse.png",   "Textures/CasinoGoldNormal.png",   "Textures/CasinoGoldRoughMetal.png",
+                "Textures/CasinoMarbleDiffuse.png", "Textures/CasinoMarbleNormal.png", "Textures/CasinoMarbleRoughMetal.png",
+                "Textures/CasinoMahoganyDiffuse.png","Textures/CasinoMahoganyNormal.png","Textures/CasinoMahoganyRoughMetal.png",
                 "Textures/SkyDay.png"
             };
             anisoTextures_.Clear();
@@ -1914,6 +1986,10 @@ private:
             tileMat(hdBanyaStone_, 1.5f);   // 4K габбро-диабаз каменки
             tileMat(hdBanyaCopper_, 1.0f);  // 4K чеканная полированная медь
             tileMat(hdBanyaBirch_, 1.5f);   // 4K листва берёзового веника
+            tileMat(hdCasinoFelt_, 2.0f);     // 4K изумрудное сукно VIP-стола
+            tileMat(hdCasinoGold_, 1.0f);     // 4K полированное 24К золото
+            tileMat(hdCasinoMarble_, 4.0f);   // 4K полированный чёрно-золотой мрамор пола
+            tileMat(hdCasinoMahogany_, 1.5f); // 4K лакированное красное дерево
         }
 
         // Мишени тира: насыщенный PBR с лёгким HDR-само-свечением, чтобы читались на любой дистанции
@@ -3320,6 +3396,13 @@ private:
             banyaRenderPath_->SetShaderParameter("BloomHDRMix", Variant(Vector2(1.0f, bloomMix)));
             banyaRenderPath_->SetShaderParameter("SharpenStrength", Variant(gfxSharpen_ ? 0.45f : 0.0f));
         }
+        if (casinoRenderPath_) {
+            casinoRenderPath_->SetEnabled("BloomHDR", useBloom);
+            casinoRenderPath_->SetEnabled("Cinema4K", useCinema);
+            casinoRenderPath_->SetEnabled("FXAA3", useFxaa);
+            casinoRenderPath_->SetShaderParameter("BloomHDRMix", Variant(Vector2(1.0f, bloomMix)));
+            casinoRenderPath_->SetShaderParameter("SharpenStrength", Variant(gfxSharpen_ ? 0.45f : 0.0f));
+        }
     }
 
     // =========================================================================
@@ -4701,7 +4784,7 @@ private:
                 "ТАКТИКА, БАНЬКА СМОТРЯЩЕГО [P] И ПЕРКИ\n"
                 "  • [P] «КОЧЕТ В БАНЬКЕ»: продержись 3 минуты и разгадай загадки смотрящего (14 концовок, 57 загадок)!\n"
                 "    Выход с зачётом даёт кредиты (¤) и бафф «Банный закал» (+25 HP/Брони) или «Ковш Смотрящего» (+50 HP, +15% урона)!\n"
-                "  • [J] «КАЗИНО» (Золотая рулетка + Кибер-слоты 777) и [K] «PIXEL ARCADE» (6 миниигр) работают внутри клиента.\n"
+                "  • [J] «3D КАЗИНО VIP» (3D-рулетка + 3D-слоты 777, 100% рофл понарошку) и [K] «PIXEL ARCADE» (6 миниигр).\n"
                 "  • [8] RAILGUN прошивает всех! [9] PLASMA рикошетит. [0] ARC CANNON цепляет стаю.\n"
                 "  • CRYO LANCE вращает охлаждающие кольца, ION SAW крутит энергетический диск.\n"
                 "  • Встань на ДЖАМП-ПЛАТФОРМУ или зацепись крюком [Z] для аэро-фрагов с высоты!\n"
@@ -4965,12 +5048,7 @@ private:
         deployBarFill_ = nullptr; deployTimer_ = 0.0f;
         achievToastBg_ = nullptr; achievToastText_ = nullptr;
         perkShopPanel_ = nullptr; perkShopBody_ = nullptr;
-        casinoPanel_ = nullptr; casinoWheelCard_ = nullptr; casinoSpinButton_ = nullptr;
-        casinoBetButton_ = nullptr; casinoChipButton_ = nullptr; casinoNumberButton_ = nullptr;
-        casinoTopupButton_ = nullptr; casinoCloseButton_ = nullptr; casinoModeButton_ = nullptr;
-        casinoTitleText_ = nullptr; casinoBalanceText_ = nullptr; casinoWheelText_ = nullptr;
-        casinoBetText_ = nullptr; casinoResultText_ = nullptr; casinoStatsText_ = nullptr;
-        casinoHelpText_ = nullptr; casinoHistoryText_ = nullptr;
+        ResetCasinoUIPointers();
         ResetBanyaUIPointers();
         ResetMiniAppUIPointers();
 
@@ -5032,11 +5110,18 @@ private:
 
         if (banyaOpen_) {
             if (scene_) scene_->SetUpdateEnabled(false);
+            if (casinoScene_) casinoScene_->SetUpdateEnabled(false);
             if (banyaScene_) banyaScene_->SetUpdateEnabled(true);
             if (banyaViewport_) renderer->SetViewport(0, banyaViewport_);
+        } else if (casinoOpen_) {
+            if (scene_) scene_->SetUpdateEnabled(false);
+            if (banyaScene_) banyaScene_->SetUpdateEnabled(false);
+            if (casinoScene_) casinoScene_->SetUpdateEnabled(true);
+            if (casinoViewport_) renderer->SetViewport(0, casinoViewport_);
         } else {
             if (banyaScene_) banyaScene_->SetUpdateEnabled(false);
-            bool pauseWorld = casinoOpen_ || arcadeOpen_;
+            if (casinoScene_) casinoScene_->SetUpdateEnabled(false);
+            bool pauseWorld = arcadeOpen_;
             if (scene_) scene_->SetUpdateEnabled(!pauseWorld);
             if (mainViewport_) renderer->SetViewport(0, mainViewport_);
         }
@@ -8342,6 +8427,10 @@ private:
             casinoWins_ = Max(0, XmlGetInt(prog, "casinoWins", casinoWins_));
         if (prog.HasAttribute("casinoLosses"))
             casinoLosses_ = Max(0, XmlGetInt(prog, "casinoLosses", casinoLosses_));
+        if (prog.HasAttribute("casinoMaxWin"))
+            casinoMaxWin_ = Max(0, XmlGetInt(prog, "casinoMaxWin", casinoMaxWin_));
+        if (prog.HasAttribute("casinoSpins"))
+            casinoSessionSpins_ = Max(0, XmlGetInt(prog, "casinoSpins", casinoSessionSpins_));
 
         if (migrateLegacy) SaveSettingsFile();
     }
@@ -8386,6 +8475,8 @@ private:
         XmlSetInt(prog, "casinoBalance", casinoBalance_);
         XmlSetInt(prog, "casinoWins",    casinoWins_);
         XmlSetInt(prog, "casinoLosses",  casinoLosses_);
+        XmlSetInt(prog, "casinoMaxWin",  casinoMaxWin_);
+        XmlSetInt(prog, "casinoSpins",   casinoSessionSpins_);
         auto* fs = GetSubsystem<FileSystem>();
         if (!fs) return;
 
@@ -8619,7 +8710,7 @@ private:
             "ПОЛИГОН (тир 4K)",
             "КИБЕР-АРЕНА (волны + босс)",
             "КОЧЕТ В БАНЬКЕ (парная) [P]",
-            "КАЗИНО (рулетка + 777) [J]",
+            "3D КАЗИНО VIP (рофл) [J]",
             "PIXEL ARCADE (6 миниигр) [K]",
             "НАСТРОЙКИ 4K ULTRA",
             "ВЫХОД"
@@ -8773,7 +8864,7 @@ private:
             "ПОЛИГОН (тир 4K)",
             "КИБЕР-АРЕНА (волны + босс)",
             "КОЧЕТ В БАНЬКЕ (парная) [P]",
-            "КАЗИНО (рулетка + 777) [J]",
+            "3D КАЗИНО VIP (рофл) [J]",
             "PIXEL ARCADE (6 миниигр) [K]",
             "НАСТРОЙКИ 4K ULTRA",
             "ВЫХОД"
@@ -10045,35 +10136,743 @@ private:
     }
 
     // =========================================================================
-    // НАТИВНОЕ КАЗИНО [J]: «ЗОЛОТАЯ РУЛЕТКА» + «КИБЕР-СЛОТЫ 777»
+    // НАТИВНОЕ 3D 4K VIP-КАЗИНО [J]: «ЗОЛОТАЯ РУЛЕТКА» + «КИБЕР-СЛОТЫ 777» (100% РОФЛ)
     // =========================================================================
+
+    void ResetCasinoUIPointers() {
+        casinoPanel_ = nullptr;
+        casinoDisclaimerBox_ = nullptr;
+        casinoWheelCard_ = nullptr;
+        casinoSpinButton_ = nullptr;
+        casinoBetButton_ = nullptr;
+        casinoChipButton_ = nullptr;
+        casinoNumberButton_ = nullptr;
+        casinoTopupButton_ = nullptr;
+        casinoCloseButton_ = nullptr;
+        casinoModeButton_ = nullptr;
+        casinoQuickRedBtn_ = nullptr;
+        casinoQuickBlackBtn_ = nullptr;
+        casinoQuickZeroBtn_ = nullptr;
+        casinoQuickDoubleBtn_ = nullptr;
+        casinoInfoBtn_ = nullptr;
+        casinoDisclaimerBtn_ = nullptr;
+        casinoNumMinusBtn_ = nullptr;
+        casinoNumPlusBtn_ = nullptr;
+        casinoChipMinusBtn_ = nullptr;
+        casinoChipPlusBtn_ = nullptr;
+        casinoTitleText_ = nullptr;
+        casinoRoflBannerText_ = nullptr;
+        casinoBalanceText_ = nullptr;
+        casinoStatusText_ = nullptr;
+        casinoWheelText_ = nullptr;
+        casinoBetText_ = nullptr;
+        casinoResultText_ = nullptr;
+        casinoStatsText_ = nullptr;
+        casinoHistoryText_ = nullptr;
+    }
+
+    void PlayCasinoSound(Sound* s, float gain = 0.85f) {
+        if (soundSource_ && s) {
+            soundSource_->SetGain(sfxVolume_ * gain);
+            soundSource_->Play(s);
+        }
+    }
+
+    void CreateCasinoScene3D() {
+        if (casinoScene_) return;
+        auto* cache = GetSubsystem<ResourceCache>();
+
+        casinoScene_ = SharedPtr<Scene>(new Scene(context_));
+        casinoScene_->CreateComponent<Octree>();
+
+        // 1. Роскошная тёмно-золотая дымка VIP-зала
+        Node* zoneNode = casinoScene_->CreateChild("CasinoZone");
+        casinoZone_ = SharedPtr<Zone>(zoneNode->CreateComponent<Zone>());
+        casinoZone_->SetBoundingBox(BoundingBox(-40.0f, 40.0f));
+        casinoZone_->SetAmbientColor(Color(0.24f, 0.21f, 0.26f, 0.78f));
+        casinoZone_->SetFogColor(Color(0.05f, 0.03f, 0.07f));
+        casinoZone_->SetFogStart(8.5f);
+        casinoZone_->SetFogEnd(24.0f);
+
+        // 2. Камера VIP-зала (плавный перелёт между 3D Рулеткой и 3D Автоматом 777)
+        casinoCamNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoCamera"));
+        casinoCamNode_->SetPosition(Vector3(0.12f, 2.34f, -2.85f));
+        casinoCamNode_->LookAt(Vector3(-0.08f, 1.02f, 0.10f));
+        Camera* cam = casinoCamNode_->CreateComponent<Camera>();
+        cam->SetFov(50.0f);
+        cam->SetNearClip(0.06f);
+        cam->SetFarClip(80.0f);
+
+        casinoViewport_ = SharedPtr<Viewport>(new Viewport(context_, casinoScene_, cam));
+        if (cache) {
+            if (XMLFile* hwDepth = cache->GetResource<XMLFile>("RenderPaths/ForwardHWDepth.xml")) {
+                SharedPtr<RenderPath> rp(new RenderPath());
+                if (rp->Load(hwDepth)) casinoViewport_->SetRenderPath(rp);
+            }
+            casinoRenderPath_ = casinoViewport_->GetRenderPath();
+            if (casinoRenderPath_) {
+                if (XMLFile* bloomXml = cache->GetResource<XMLFile>("PostProcess/BloomHDR.xml"))
+                    casinoRenderPath_->Append(bloomXml);
+                if (XMLFile* cinemaXml = cache->GetResource<XMLFile>("PostProcess/Cinema4K.xml"))
+                    casinoRenderPath_->Append(cinemaXml);
+                if (XMLFile* fxaaXml = cache->GetResource<XMLFile>("PostProcess/FXAA3.xml"))
+                    casinoRenderPath_->Append(fxaaXml);
+                casinoRenderPath_->SetEnabled("BloomHDR", gfxGlowIdx_ > 0);
+                casinoRenderPath_->SetEnabled("Cinema4K", true);
+                casinoRenderPath_->SetEnabled("FXAA3", gfxFxaa_);
+                casinoRenderPath_->SetShaderParameter("BloomHDRThreshold", Variant(0.92f));
+                casinoRenderPath_->SetShaderParameter("BloomHDRMix", Variant(Vector2(1.0f, 0.34f)));
+                casinoRenderPath_->SetShaderParameter("CinemaExposure", Variant(1.10f));
+                casinoRenderPath_->SetShaderParameter("CinemaSaturation", Variant(1.16f));
+                casinoRenderPath_->SetShaderParameter("SharpenStrength", Variant(gfxSharpen_ ? 0.45f : 0.0f));
+                casinoRenderPath_->SetShaderParameter("VignetteStrength", Variant(0.22f));
+            }
+        }
+
+        // 3. Кинематографическое PBR-освещение VIP-зала
+        float pbr = (gfxQualityIdx_ >= 2) ? 6.5f : 1.18f;
+        {
+            Node* fillN = casinoScene_->CreateChild("CasinoFillLight");
+            fillN->SetDirection(Vector3(0.20f, -0.84f, 0.50f).Normalized());
+            Light* fill = fillN->CreateComponent<Light>();
+            fill->SetLightType(LIGHT_DIRECTIONAL);
+            fill->SetColor(Color(0.96f, 0.90f, 0.82f));
+            fill->SetBrightness(0.42f * pbr);
+            fill->SetSpecularIntensity(0.85f);
+            fill->SetCastShadows(false);
+
+            Node* chandLN = casinoScene_->CreateChild("CasinoChandelierLight");
+            chandLN->SetPosition(Vector3(0.0f, 3.35f, 0.05f));
+            casinoChandelierLight_ = SharedPtr<Light>(chandLN->CreateComponent<Light>());
+            casinoChandelierLight_->SetLightType(LIGHT_POINT);
+            casinoChandelierLight_->SetColor(Color(1.0f, 0.82f, 0.46f));
+            casinoChandelierLight_->SetRange(14.5f);
+            casinoChandelierLight_->SetBrightness(2.15f * pbr);
+            casinoChandelierLight_->SetRadius(0.35f);
+            casinoChandelierLight_->SetCastShadows(gfxQualityIdx_ >= 1);
+
+            Node* spotLN = casinoScene_->CreateChild("CasinoWheelSpot");
+            spotLN->SetPosition(Vector3(-0.25f, 3.60f, -0.35f));
+            spotLN->LookAt(Vector3(-0.42f, 0.95f, -0.05f));
+            casinoWheelSpot_ = SharedPtr<Light>(spotLN->CreateComponent<Light>());
+            casinoWheelSpot_->SetLightType(LIGHT_SPOT);
+            casinoWheelSpot_->SetColor(Color(1.0f, 0.94f, 0.78f));
+            casinoWheelSpot_->SetRange(11.0f);
+            casinoWheelSpot_->SetFov(56.0f);
+            casinoWheelSpot_->SetBrightness(2.35f * pbr);
+            casinoWheelSpot_->SetSpecularIntensity(1.35f);
+            casinoWheelSpot_->SetCastShadows(gfxQualityIdx_ >= 2);
+
+            Node* neonLN = casinoScene_->CreateChild("CasinoNeonL");
+            neonLN->SetPosition(Vector3(-4.2f, 2.35f, -0.5f));
+            casinoNeonLightL_ = SharedPtr<Light>(neonLN->CreateComponent<Light>());
+            casinoNeonLightL_->SetLightType(LIGHT_POINT);
+            casinoNeonLightL_->SetColor(Color(0.24f, 0.96f, 0.86f));
+            casinoNeonLightL_->SetRange(10.0f);
+            casinoNeonLightL_->SetBrightness(1.65f * pbr);
+            casinoNeonLightL_->SetCastShadows(false);
+
+            Node* neonRN = casinoScene_->CreateChild("CasinoNeonR");
+            neonRN->SetPosition(Vector3(4.2f, 2.35f, 0.6f));
+            casinoNeonLightR_ = SharedPtr<Light>(neonRN->CreateComponent<Light>());
+            casinoNeonLightR_->SetLightType(LIGHT_POINT);
+            casinoNeonLightR_->SetColor(Color(1.0f, 0.24f, 0.48f));
+            casinoNeonLightR_->SetRange(10.0f);
+            casinoNeonLightR_->SetBrightness(1.45f * pbr);
+            casinoNeonLightR_->SetCastShadows(false);
+        }
+
+        // 4. 4K PBR материалы VIP-казино
+        Material* marbleMat   = hdCasinoMarble_   ? hdCasinoMarble_   : (hdFloor_ ? hdFloor_ : fallbackMat_);
+        Material* feltMat     = hdCasinoFelt_     ? hdCasinoFelt_     : (hdBanyaBirch_ ? hdBanyaBirch_ : fallbackMat_);
+        Material* goldMat     = hdCasinoGold_     ? hdCasinoGold_     : (hdBanyaCopper_ ? hdBanyaCopper_ : metalMaterial_);
+        Material* mahogMat    = hdCasinoMahogany_ ? hdCasinoMahogany_ : (hdBanyaLog_ ? hdBanyaLog_ : fallbackMat_);
+        Material* roosterBase = hdBanyaRooster_   ? hdBanyaRooster_   : (hdFeather_ ? hdFeather_ : fallbackMat_);
+        Material* chromeMat   = hdMetal_          ? hdMetal_          : metalMaterial_;
+
+        SharedPtr<Material> redSectorMat   = MakePBR(Color(198, 24, 30),  0.18f, 0.08f, Color(0.10f, 0.01f, 0.01f));
+        SharedPtr<Material> blackSectorMat = MakePBR(Color(20, 22, 28),   0.16f, 0.12f);
+        SharedPtr<Material> zeroSectorMat  = MakePBR(Color(18, 178, 86),  0.18f, 0.08f, Color(0.04f, 0.24f, 0.10f));
+        SharedPtr<Material> ivoryBallMat   = MakePBR(Color(248, 250, 255),0.06f, 0.88f, Color(0.22f, 0.24f, 0.28f));
+        SharedPtr<Material> tuxMat         = MakePBR(Color(22, 22, 28),   0.62f, 0.04f);
+        SharedPtr<Material> shirtMat       = MakePBR(Color(246, 244, 238),0.74f, 0.02f);
+        SharedPtr<Material> bowtieMat      = MakePBR(Color(215, 24, 34),  0.34f, 0.05f);
+        SharedPtr<Material> visorMat       = MakeBanyaAlphaMat(Color(0.08f, 0.78f, 0.42f, 0.68f));
+        SharedPtr<Material> beakMat        = MakePBR(Color(250, 178, 36), 0.26f, 0.08f);
+        SharedPtr<Material> combMat        = MakePBR(Color(232, 28, 32),  0.34f, 0.04f);
+        SharedPtr<Material> eyeMat         = MakePBR(Color(14, 12, 16),   0.12f, 0.15f);
+        SharedPtr<Material> neonGoldMat    = MakeHDRGlow(Color(2.9f, 2.05f, 0.55f, 1.0f));
+        SharedPtr<Material> neonCyanMat    = MakeHDRGlow(Color(0.45f, 2.6f, 2.3f, 1.0f));
+        SharedPtr<Material> neonRubyMat    = MakeHDRGlow(Color(3.1f, 0.35f, 0.55f, 1.0f));
+        SharedPtr<Material> neonEmeraldMat = MakeHDRGlow(Color(0.35f, 2.75f, 1.15f, 1.0f));
+        SharedPtr<Material> drumBaseMat    = MakePBR(Color(246, 242, 230),0.26f, 0.05f);
+        SharedPtr<Material> glassFaceMat   = MakeBanyaAlphaMat(Color(0.75f, 0.90f, 1.0f, 0.16f));
+
+        casinoRoosterMoodMat_ = roosterBase->Clone();
+        casinoNeonSignMat_    = neonGoldMat;
+
+        auto addObj = [&](Node* parent, const char* name, const Vector3& pos, const Vector3& scale,
+                          Model* m, Material* mat, const Quaternion& rot = Quaternion::IDENTITY, bool shadow = true) -> Node* {
+            Node* p = (parent ? parent : casinoScene_.Get())->CreateChild(name);
+            p->SetPosition(pos);
+            p->SetRotation(rot);
+            p->SetScale(scale);
+            StaticModel* sm = p->CreateComponent<StaticModel>();
+            sm->SetModel(m ? m : boxModel_);
+            sm->SetMaterial(mat ? mat : fallbackMat_);
+            sm->SetCastShadows(shadow);
+            return p;
+        };
+
+        // 5. Архитектура VIP-зала: мраморный пол Nero Portoro, подиум, стены красного дерева, золотые колонны
+        addObj(nullptr, "CasinoFloorMarble", Vector3(0.0f, -0.10f, 0.0f), Vector3(18.0f, 0.20f, 18.0f), boxModel_, marbleMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoCarpetBorder",Vector3(0.0f, 0.008f, 0.15f), Vector3(6.4f, 0.02f, 4.6f),  boxModel_, goldMat,   Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoCarpetFelt",  Vector3(0.0f, 0.014f, 0.15f), Vector3(6.1f, 0.02f, 4.3f),  boxModel_, feltMat,   Quaternion::IDENTITY, false);
+
+        // Стены и золотой плинтус
+        addObj(nullptr, "CasinoBackWall",    Vector3(0.0f, 2.4f, 5.2f),  Vector3(17.5f, 5.0f, 0.28f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoLeftWall",    Vector3(-6.4f,2.4f, 0.2f),  Vector3(0.28f, 5.0f, 14.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoRightWall",   Vector3(6.4f, 2.4f, 0.2f),  Vector3(0.28f, 5.0f, 14.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoCeiling",     Vector3(0.0f, 4.85f,0.2f),  Vector3(17.5f, 0.24f,14.0f), boxModel_, marbleMat,Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoBackTrim",    Vector3(0.0f, 0.18f, 5.02f),Vector3(17.0f, 0.36f, 0.12f), boxModel_, goldMat,  Quaternion::IDENTITY, false);
+
+        // 8 золотых каннелированных колонн по периметру зала + неоновые полосы
+        for (int ci = 0; ci < 4; ++ci) {
+            float cz = -2.0f + (float)ci * 2.25f;
+            for (int side = -1; side <= 1; side += 2) {
+                float cx = (float)side * 5.65f;
+                addObj(nullptr, "ColBase", Vector3(cx, 0.22f, cz), Vector3(0.72f, 0.44f, 0.72f), boxModel_, marbleMat);
+                addObj(nullptr, "ColBody", Vector3(cx, 2.40f, cz), Vector3(0.46f, 4.20f, 0.46f), cylModel_, goldMat);
+                addObj(nullptr, "ColCap",  Vector3(cx, 4.55f, cz), Vector3(0.74f, 0.36f, 0.74f), boxModel_, goldMat);
+                addObj(nullptr, "ColNeon", Vector3(cx - (float)side * 0.25f, 2.40f, cz), Vector3(0.04f, 3.5f, 0.04f),
+                       boxModel_, (side < 0 ? neonCyanMat.Get() : neonRubyMat.Get()), Quaternion::IDENTITY, false);
+            }
+        }
+        // Задняя неоновая VIP-арка и 5-лучевая корона «РОЯЛЬ» на задней стене
+        addObj(nullptr, "BackNeonArchTop", Vector3(0.0f, 3.65f, 4.98f), Vector3(6.8f, 0.08f, 0.08f), boxModel_, casinoNeonSignMat_.Get(), Quaternion::IDENTITY, false);
+        addObj(nullptr, "BackNeonArchL",   Vector3(-3.4f,2.05f, 4.98f), Vector3(0.08f, 3.25f,0.08f), boxModel_, neonCyanMat.Get(), Quaternion::IDENTITY, false);
+        addObj(nullptr, "BackNeonArchR",   Vector3( 3.4f,2.05f, 4.98f), Vector3(0.08f, 3.25f,0.08f), boxModel_, neonRubyMat.Get(), Quaternion::IDENTITY, false);
+        addObj(nullptr, "WallCrownBase",   Vector3(0.0f, 2.95f, 4.96f), Vector3(1.55f, 0.18f,0.12f), boxModel_, goldMat, Quaternion::IDENTITY, false);
+        for (int wc = -2; wc <= 2; ++wc) {
+            float wx = (float)wc * 0.34f;
+            float wy = 3.22f + (2 - abs(wc)) * 0.09f;
+            addObj(nullptr, "WallCrownTip", Vector3(wx, wy, 4.95f), Vector3(0.16f, 0.44f, 0.12f), coneModel_, neonGoldMat.Get(), Quaternion(0, 0, (float)(-wc * 8)), false);
+        }
+
+        // 6. Многоярусная золотая люстра VIP-зала сверху (вращается и сияет через BloomHDR!)
+        casinoChandelierNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoChandelier"));
+        casinoChandelierNode_->SetPosition(Vector3(0.0f, 3.85f, 0.05f));
+        addObj(casinoChandelierNode_.Get(), "ChandStem", Vector3(0.0f, 0.55f, 0.0f), Vector3(0.14f, 1.10f, 0.14f), cylModel_, goldMat);
+        addObj(casinoChandelierNode_.Get(), "ChandHub",  Vector3(0.0f, -0.05f, 0.0f), Vector3(0.55f, 0.24f, 0.55f), sphereModel_, goldMat);
+        for (int cr = 0; cr < 12; ++cr) {
+            float a = (float)cr * (6.283185f / 12.0f);
+            float rx = sinf(a) * 1.15f, rz = cosf(a) * 1.15f;
+            addObj(casinoChandelierNode_.Get(), "ChandArm",  Vector3(rx * 0.52f, -0.02f, rz * 0.52f), Vector3(0.04f, 0.04f, 1.12f), boxModel_, goldMat, Quaternion(0, a * 57.2958f, 0));
+            addObj(casinoChandelierNode_.Get(), "ChandBulb", Vector3(rx, -0.14f, rz), Vector3(0.16f, 0.26f, 0.16f), sphereModel_, neonGoldMat.Get(), Quaternion::IDENTITY, false);
+        }
+
+        // 7. VIP-стол рулетки в центре (махагони, золотой кант, изумрудное сукно, сетка, фишки и золотые слитки)
+        addObj(nullptr, "TableLegL",     Vector3(-1.55f, 0.42f, 0.0f), Vector3(0.38f, 0.84f, 1.35f), boxModel_, mahogMat);
+        addObj(nullptr, "TableLegR",     Vector3( 1.55f, 0.42f, 0.0f), Vector3(0.38f, 0.84f, 1.35f), boxModel_, mahogMat);
+        addObj(nullptr, "TableLegGoldL", Vector3(-1.55f, 0.08f, 0.0f), Vector3(0.46f, 0.14f, 1.44f), boxModel_, goldMat);
+        addObj(nullptr, "TableLegGoldR", Vector3( 1.55f, 0.08f, 0.0f), Vector3(0.46f, 0.14f, 1.44f), boxModel_, goldMat);
+        addObj(nullptr, "TableRim",      Vector3(0.0f,   0.88f, 0.0f), Vector3(3.85f, 0.14f, 2.08f), boxModel_, mahogMat);
+        addObj(nullptr, "TableGoldTrim", Vector3(0.0f,   0.92f, 0.0f), Vector3(3.64f, 0.08f, 1.88f), boxModel_, goldMat);
+        addObj(nullptr, "TableFelt",     Vector3(0.0f,   0.955f,0.0f), Vector3(3.52f, 0.04f, 1.76f), boxModel_, feltMat);
+
+        // Разметка поля ставок справа от колеса (12 рядов x 3 колонки из золотых линий + цветные ячейки!)
+        for (int col = 0; col < 4; ++col) {
+            float lx = 0.62f + (float)col * 0.34f;
+            addObj(nullptr, "GridLineV", Vector3(lx, 0.978f, 0.0f), Vector3(0.015f, 0.008f, 1.24f), boxModel_, goldMat, Quaternion::IDENTITY, false);
+        }
+        for (int row = 0; row <= 6; ++row) {
+            float lz = -0.60f + (float)row * 0.20f;
+            addObj(nullptr, "GridLineH", Vector3(1.13f, 0.978f, lz), Vector3(1.04f, 0.008f, 0.015f), boxModel_, goldMat, Quaternion::IDENTITY, false);
+        }
+        for (int cell = 0; cell < 18; ++cell) {
+            int cx = cell % 3, cz = cell / 3;
+            float px = 0.79f + (float)cx * 0.34f;
+            float pz = -0.50f + (float)cz * 0.20f;
+            Material* cm = ((cell + cz) % 2 == 0) ? redSectorMat.Get() : blackSectorMat.Get();
+            addObj(nullptr, "BetCell", Vector3(px, 0.976f, pz), Vector3(0.28f, 0.006f, 0.15f), boxModel_, cm, Quaternion::IDENTITY, false);
+        }
+        // Сектор Зеро на сукне
+        addObj(nullptr, "BetZeroCell", Vector3(1.13f, 0.976f, 0.70f), Vector3(0.98f, 0.006f, 0.14f), boxModel_, zeroSectorMat.Get(), Quaternion::IDENTITY, false);
+
+        // Стопки золотых 3D-слитков VIP-банка на краю стола
+        for (int g = 0; g < 4; ++g) {
+            float gx = 1.44f - (float)(g % 2) * 0.22f;
+            float gy = 1.01f + (float)(g / 2) * 0.075f;
+            addObj(nullptr, "GoldIngot", Vector3(gx, gy, 0.68f), Vector3(0.18f, 0.07f, 0.32f), boxModel_, goldMat, Quaternion(0, (float)(g * 9 - 10), 0));
+        }
+
+        // Золотой маркер «долли» (ставится на стол и светится при победе)
+        casinoDollyNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoDolly"));
+        casinoDollyNode_->SetPosition(Vector3(1.13f, 1.04f, 0.0f));
+        addObj(casinoDollyNode_.Get(), "DollyBase", Vector3(0.0f, 0.0f, 0.0f),   Vector3(0.11f, 0.12f, 0.11f), cylModel_,    goldMat);
+        addObj(casinoDollyNode_.Get(), "DollyTop",  Vector3(0.0f, 0.09f, 0.0f),  Vector3(0.13f, 0.06f, 0.13f), sphereModel_, neonGoldMat.Get(), Quaternion::IDENTITY, false);
+
+        // 6 стопок цветных 3D-фишек игрока на столе (высота динамически зависит от ставки!)
+        SharedPtr<Material> chipWhiteMat  = MakePBR(Color(232, 236, 245), 0.22f, 0.08f);
+        SharedPtr<Material> chipBlueMat   = MakePBR(Color(32, 118, 224),  0.22f, 0.10f);
+        SharedPtr<Material> chipPurpleMat = MakePBR(Color(168, 52, 224),  0.22f, 0.12f);
+        Material* chipMats[6] = {
+            chipWhiteMat.Get(),
+            redSectorMat.Get(),
+            chipBlueMat.Get(),
+            zeroSectorMat.Get(),
+            chipPurpleMat.Get(),
+            goldMat
+        };
+        for (int cs = 0; cs < 6; ++cs) {
+            float x = 0.70f + (float)(cs % 3) * 0.24f;
+            float z = -0.68f - (float)(cs / 3) * 0.14f;
+            casinoChipStacks_[cs] = SharedPtr<Node>(casinoScene_->CreateChild("CasinoChipStack"));
+            casinoChipStacks_[cs]->SetPosition(Vector3(x, 0.99f, z));
+            for (int disc = 0; disc < 4; ++disc) {
+                addObj(casinoChipStacks_[cs].Get(), "ChipDisc", Vector3(0.0f, (float)disc * 0.022f, 0.0f), Vector3(0.14f, 0.018f, 0.14f), cylModel_, chipMats[cs]);
+                addObj(casinoChipStacks_[cs].Get(), "ChipGoldRim", Vector3(0.0f, (float)disc * 0.022f, 0.0f), Vector3(0.146f, 0.008f, 0.146f), cylModel_, goldMat);
+            }
+        }
+
+        // 8. Настоящее 3D-колесо европейской рулетки (37 точных секторов + перегородки + дефлекторы + шарик!)
+        casinoWheelHub_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoWheelHub"));
+        casinoWheelHub_->SetPosition(Vector3(-0.62f, 0.99f, -0.02f));
+
+        // Внешняя чаша из махагони и золотой дорожки шарика
+        addObj(casinoWheelHub_.Get(), "BowlMahog", Vector3(0.0f, 0.04f, 0.0f), Vector3(1.68f, 0.14f, 1.68f), cylModel_, mahogMat);
+        addObj(casinoWheelHub_.Get(), "BowlRimG",  Vector3(0.0f, 0.115f,0.0f), Vector3(1.56f, 0.04f, 1.56f), cylModel_, goldMat);
+        addObj(casinoWheelHub_.Get(), "BowlTrack", Vector3(0.0f, 0.09f, 0.0f), Vector3(1.44f, 0.04f, 1.44f), cylModel_, mahogMat);
+
+        // 8 ромбовидных золотых дефлекторов по внешнему треку
+        for (int df = 0; df < 8; ++df) {
+            float a = (float)df * (6.283185f / 8.0f);
+            addObj(casinoWheelHub_.Get(), "Deflector", Vector3(sinf(a) * 0.67f, 0.125f, cosf(a) * 0.67f),
+                   Vector3(0.055f, 0.028f, 0.055f), boxModel_, goldMat, Quaternion(0, a * 57.2958f + 45.0f, 0));
+        }
+
+        // Вращающийся 37-секторный барабан рулетки!
+        casinoWheelDrum_ = SharedPtr<Node>(casinoWheelHub_->CreateChild("CasinoWheelDrum"));
+        casinoWheelDrum_->SetPosition(Vector3(0.0f, 0.095f, 0.0f));
+        addObj(casinoWheelDrum_.Get(), "DrumPlate", Vector3(0.0f, -0.01f, 0.0f), Vector3(1.16f, 0.03f, 1.16f), cylModel_, goldMat);
+
+        for (int s = 0; s < 37; ++s) {
+            int num = Casino::kEuropeanWheelOrder[s];
+            float angDeg = Casino::WheelSectorAngleDeg(s);
+            float angRad = angDeg * 0.01745329f;
+            Material* sMat = (num == 0) ? zeroSectorMat.Get() : (Casino::IsRed(num) ? redSectorMat.Get() : blackSectorMat.Get());
+
+            // Цветной сектор + карман
+            Vector3 pSec(sinf(angRad) * 0.45f, 0.015f, cosf(angRad) * 0.45f);
+            addObj(casinoWheelDrum_.Get(), "WheelPocket", pSec, Vector3(0.072f, 0.026f, 0.24f), boxModel_, sMat, Quaternion(0, angDeg, 0));
+
+            // Золотая перегородка (fret) между карманами
+            float divRad = angRad + (3.14159265f / 37.0f);
+            Vector3 pDiv(sinf(divRad) * 0.45f, 0.028f, cosf(divRad) * 0.45f);
+            addObj(casinoWheelDrum_.Get(), "PocketFret", pDiv, Vector3(0.011f, 0.026f, 0.25f), boxModel_, goldMat, Quaternion(0, angDeg + (180.0f / 37.0f), 0));
+        }
+
+        // Внутренний золотой конус и 4-лучевой турет рулетки
+        addObj(casinoWheelDrum_.Get(), "WheelCone", Vector3(0.0f, 0.07f, 0.0f), Vector3(0.56f, 0.15f, 0.56f), coneModel_, goldMat);
+        casinoWheelTurret_ = SharedPtr<Node>(casinoWheelDrum_->CreateChild("WheelTurret"));
+        casinoWheelTurret_->SetPosition(Vector3(0.0f, 0.16f, 0.0f));
+        addObj(casinoWheelTurret_.Get(), "TurretSpire", Vector3(0.0f, 0.07f, 0.0f), Vector3(0.08f, 0.16f, 0.08f), coneModel_, goldMat);
+        addObj(casinoWheelTurret_.Get(), "TurretBarA",  Vector3(0.0f, 0.02f, 0.0f), Vector3(0.38f, 0.025f, 0.025f), boxModel_, goldMat);
+        addObj(casinoWheelTurret_.Get(), "TurretBarB",  Vector3(0.0f, 0.02f, 0.0f), Vector3(0.025f, 0.025f, 0.38f), boxModel_, goldMat);
+        for (int tk = 0; tk < 4; ++tk) {
+            float ta = (float)tk * 1.570796f;
+            addObj(casinoWheelTurret_.Get(), "TurretKnob", Vector3(sinf(ta) * 0.19f, 0.02f, cosf(ta) * 0.19f), Vector3(0.055f, 0.055f, 0.055f), sphereModel_, goldMat);
+        }
+
+        // Физичный 3D хромированный шарик рулетки
+        casinoBallPivot_ = SharedPtr<Node>(casinoWheelHub_->CreateChild("CasinoBallPivot"));
+        casinoBallPivot_->SetPosition(Vector3(0.0f, 0.115f, 0.0f));
+        casinoBallNode_ = SharedPtr<Node>(addObj(casinoBallPivot_.Get(), "CasinoBall3D", Vector3(0.0f, 0.015f, 0.45f), Vector3(0.056f, 0.056f, 0.056f), sphereModel_, ivoryBallMat.Get()));
+
+        // 9. 3D Кочет-Крупье «Дон Чикено» за столом (чёрный смокинг, красная бабочка, монокль и зелёный козырёк!)
+        casinoRoosterNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoCroupier"));
+        casinoRoosterNode_->SetPosition(Vector3(0.18f, 1.32f, 1.36f));
+        casinoRoosterNode_->SetRotation(Quaternion(0.0f, 180.0f, 0.0f));
+
+        addObj(casinoRoosterNode_.Get(), "CroupierTorso",  Vector3(0.0f, -0.05f, 0.0f),  Vector3(0.68f, 0.72f, 0.62f), sphereModel_, tuxMat.Get());
+        addObj(casinoRoosterNode_.Get(), "CroupierShirt",  Vector3(0.0f, 0.02f, 0.24f),  Vector3(0.28f, 0.44f, 0.16f), boxModel_,    shirtMat.Get());
+        addObj(casinoRoosterNode_.Get(), "BowtieL",        Vector3(-0.07f, 0.20f, 0.30f),Vector3(0.12f, 0.07f, 0.05f), coneModel_,   bowtieMat.Get(), Quaternion(0, 0, -90));
+        addObj(casinoRoosterNode_.Get(), "BowtieR",        Vector3( 0.07f, 0.20f, 0.30f),Vector3(0.12f, 0.07f, 0.05f), coneModel_,   bowtieMat.Get(), Quaternion(0, 0,  90));
+
+        casinoRoosterWingL_ = SharedPtr<Node>(casinoRoosterNode_->CreateChild("CroupierWingL"));
+        casinoRoosterWingL_->SetPosition(Vector3(-0.36f, 0.04f, 0.04f));
+        addObj(casinoRoosterWingL_.Get(), "WingLMesh", Vector3(-0.08f, -0.10f, 0.05f), Vector3(0.20f, 0.48f, 0.34f), sphereModel_, tuxMat.Get(), Quaternion(0, 0, 18));
+
+        casinoRoosterWingR_ = SharedPtr<Node>(casinoRoosterNode_->CreateChild("CroupierWingR"));
+        casinoRoosterWingR_->SetPosition(Vector3(0.36f, 0.04f, 0.04f));
+        addObj(casinoRoosterWingR_.Get(), "WingRMesh", Vector3(0.08f, -0.10f, 0.05f), Vector3(0.20f, 0.48f, 0.34f), sphereModel_, tuxMat.Get(), Quaternion(0, 0, -18));
+
+        casinoRoosterHead_ = SharedPtr<Node>(casinoRoosterNode_->CreateChild("CroupierHead"));
+        casinoRoosterHead_->SetPosition(Vector3(0.0f, 0.46f, 0.10f));
+        addObj(casinoRoosterHead_.Get(), "HeadSphere", Vector3(0.0f, 0.0f, 0.0f),      Vector3(0.44f, 0.42f, 0.44f), sphereModel_, casinoRoosterMoodMat_.Get());
+        addObj(casinoRoosterHead_.Get(), "Beak",       Vector3(0.0f, -0.04f, 0.25f),   Vector3(0.11f, 0.09f, 0.22f), coneModel_,   beakMat.Get(), Quaternion(95, 0, 0));
+        addObj(casinoRoosterHead_.Get(), "Wattle",     Vector3(0.0f, -0.15f, 0.18f),   Vector3(0.10f, 0.14f, 0.08f), sphereModel_, combMat.Get());
+        addObj(casinoRoosterHead_.Get(), "Comb1",      Vector3(0.0f, 0.23f, 0.05f),    Vector3(0.08f, 0.18f, 0.11f), sphereModel_, combMat.Get());
+        addObj(casinoRoosterHead_.Get(), "Comb2",      Vector3(0.0f, 0.25f, -0.05f),   Vector3(0.08f, 0.20f, 0.11f), sphereModel_, combMat.Get());
+        addObj(casinoRoosterHead_.Get(), "EyeL",       Vector3(-0.13f, 0.05f, 0.18f),  Vector3(0.07f, 0.07f, 0.05f), sphereModel_, eyeMat.Get());
+        addObj(casinoRoosterHead_.Get(), "EyeR",       Vector3( 0.13f, 0.05f, 0.18f),  Vector3(0.07f, 0.07f, 0.05f), sphereModel_, eyeMat.Get());
+        // Золотой монокль на правом глазу + козырёк крупье
+        addObj(casinoRoosterHead_.Get(), "MonocleRim", Vector3(0.13f, 0.05f, 0.21f),   Vector3(0.11f, 0.11f, 0.02f), cylModel_,    goldMat, Quaternion(90, 0, 0));
+        addObj(casinoRoosterHead_.Get(), "VisorBand",  Vector3(0.0f, 0.13f, 0.0f),     Vector3(0.47f, 0.05f, 0.47f), cylModel_,    goldMat);
+        addObj(casinoRoosterHead_.Get(), "VisorPeak",  Vector3(0.0f, 0.12f, 0.26f),    Vector3(0.38f, 0.02f, 0.24f), boxModel_,    visorMat.Get(), Quaternion(16, 0, 0), false);
+
+        // 10. Гигантский 3D Игровой Автомат «ROOSTER ROYAL 777» слева у витрины (для [TAB])
+        casinoSlotMachineNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoSlot777"));
+        casinoSlotMachineNode_->SetPosition(Vector3(-3.35f, 0.0f, 0.65f));
+        casinoSlotMachineNode_->SetRotation(Quaternion(0.0f, 44.0f, 0.0f));
+
+        // Пьедестал, туловище махагони, золотые колонны и витрина барабанов
+        addObj(casinoSlotMachineNode_.Get(), "SlotPedestal", Vector3(0.0f, 0.46f, 0.0f),  Vector3(1.75f, 0.92f, 1.15f), boxModel_, mahogMat);
+        addObj(casinoSlotMachineNode_.Get(), "SlotBody",     Vector3(0.0f, 1.50f, 0.06f), Vector3(1.66f, 1.24f, 0.96f), boxModel_, mahogMat);
+        addObj(casinoSlotMachineNode_.Get(), "SlotTray",     Vector3(0.0f, 0.88f, -0.56f),Vector3(1.42f, 0.18f, 0.34f), boxModel_, goldMat);
+        addObj(casinoSlotMachineNode_.Get(), "SlotFrameL",   Vector3(-0.78f, 1.50f, -0.44f),Vector3(0.12f, 1.28f, 0.14f), boxModel_, goldMat);
+        addObj(casinoSlotMachineNode_.Get(), "SlotFrameR",   Vector3( 0.78f, 1.50f, -0.44f),Vector3(0.12f, 1.28f, 0.14f), boxModel_, goldMat);
+        addObj(casinoSlotMachineNode_.Get(), "SlotFrameT",   Vector3( 0.0f,  2.14f, -0.44f),Vector3(1.68f, 0.14f, 0.16f), boxModel_, goldMat);
+        addObj(casinoSlotMachineNode_.Get(), "SlotFrameB",   Vector3( 0.0f,  0.96f, -0.44f),Vector3(1.68f, 0.12f, 0.16f), boxModel_, goldMat);
+        addObj(casinoSlotMachineNode_.Get(), "SlotGlass",    Vector3( 0.0f,  1.56f, -0.46f),Vector3(1.36f, 0.78f, 0.02f), boxModel_, glassFaceMat.Get(), Quaternion::IDENTITY, false);
+        addObj(casinoSlotMachineNode_.Get(), "SlotPayLineL", Vector3(-0.70f, 1.56f, -0.44f),Vector3(0.08f, 0.04f, 0.08f), coneModel_, neonRubyMat.Get(), Quaternion(0, 0, -90), false);
+        addObj(casinoSlotMachineNode_.Get(), "SlotPayLineR", Vector3( 0.70f, 1.56f, -0.44f),Vector3(0.08f, 0.04f, 0.08f), coneModel_, neonRubyMat.Get(), Quaternion(0, 0,  90), false);
+
+        // Верхняя корона-шапка и сияющие цифры «777» сверху автомата
+        addObj(casinoSlotMachineNode_.Get(), "SlotTopBox", Vector3(0.0f, 2.46f, -0.10f), Vector3(1.38f, 0.50f, 0.62f), boxModel_, mahogMat);
+        addObj(casinoSlotMachineNode_.Get(), "SlotTopRim", Vector3(0.0f, 2.46f, -0.42f), Vector3(1.30f, 0.42f, 0.05f), boxModel_, goldMat);
+        for (int s7 = -1; s7 <= 1; ++s7) {
+            float sx = (float)s7 * 0.28f;
+            addObj(casinoSlotMachineNode_.Get(), "TopSevenBar", Vector3(sx, 2.54f, -0.46f), Vector3(0.18f, 0.05f, 0.04f), boxModel_, neonGoldMat.Get(), Quaternion::IDENTITY, false);
+            addObj(casinoSlotMachineNode_.Get(), "TopSevenLeg", Vector3(sx + 0.02f, 2.42f, -0.46f), Vector3(0.055f, 0.22f, 0.04f), boxModel_, neonRubyMat.Get(), Quaternion(0, 0, -24), false);
+        }
+
+        // 10 мигающих HDR-лампочек по бокам автомата 777
+        casinoSlotBeaconMats_.Clear();
+        for (int lb = 0; lb < 10; ++lb) {
+            SharedPtr<Material> bm = MakeHDRGlow(Color(2.4f, 1.8f, 0.4f, 1.0f));
+            casinoSlotBeaconMats_.Push(bm);
+            float side = (lb < 5) ? -0.78f : 0.78f;
+            float ly = 1.12f + (float)(lb % 5) * 0.21f;
+            addObj(casinoSlotMachineNode_.Get(), "SlotBeacon", Vector3(side, ly, -0.52f), Vector3(0.08f, 0.08f, 0.08f), sphereModel_, bm.Get(), Quaternion::IDENTITY, false);
+        }
+
+        // Россыпь золотых монет в лотке автомата
+        for (int tc = 0; tc < 9; ++tc) {
+            float cx = -0.44f + (float)tc * 0.11f;
+            float cz = -0.56f + ((tc % 2) ? 0.04f : -0.04f);
+            addObj(casinoSlotMachineNode_.Get(), "TrayCoin", Vector3(cx, 0.98f, cz), Vector3(0.11f, 0.025f, 0.11f), cylModel_, goldMat, Quaternion((float)(tc * 11), 0, (float)(tc * 7)));
+        }
+
+        // 3 настоящих 6-гранных вращающихся 3D-барабана с объёмными эмблемами 6 символов
+        for (int k = 0; k < 3; ++k) {
+            casinoSlotDrum_[k] = SharedPtr<Node>(casinoSlotMachineNode_->CreateChild("CasinoSlotDrum"));
+            casinoSlotDrum_[k]->SetPosition(Vector3(-0.40f + (float)k * 0.40f, 1.56f, -0.18f));
+            addObj(casinoSlotDrum_[k].Get(), "DrumCyl", Vector3(0.0f, 0.0f, 0.0f), Vector3(0.50f, 0.30f, 0.50f), cylModel_, drumBaseMat.Get(), Quaternion(0, 0, 90));
+            addObj(casinoSlotDrum_[k].Get(), "DrumRingL", Vector3(-0.155f, 0.0f, 0.0f), Vector3(0.52f, 0.025f, 0.52f), cylModel_, goldMat, Quaternion(0, 0, 90));
+            addObj(casinoSlotDrum_[k].Get(), "DrumRingR", Vector3( 0.155f, 0.0f, 0.0f), Vector3(0.52f, 0.025f, 0.52f), cylModel_, goldMat, Quaternion(0, 0, 90));
+
+            for (int sym = 0; sym < Casino::SYM_COUNT; ++sym) {
+                Node* face = casinoSlotDrum_[k]->CreateChild("SlotFace");
+                face->SetRotation(Quaternion(-(float)sym * 60.0f, 0.0f, 0.0f));
+                const float rFace = -0.255f;
+                switch (sym) {
+                    case Casino::SYM_CHERRY:
+                        addObj(face, "SymCherryL", Vector3(-0.045f, -0.03f, rFace), Vector3(0.085f, 0.085f, 0.05f), sphereModel_, neonRubyMat.Get(), Quaternion::IDENTITY, false);
+                        addObj(face, "SymCherryR", Vector3( 0.045f, -0.03f, rFace), Vector3(0.085f, 0.085f, 0.05f), sphereModel_, neonRubyMat.Get(), Quaternion::IDENTITY, false);
+                        addObj(face, "SymStem",    Vector3( 0.0f,    0.04f, rFace), Vector3(0.022f, 0.09f,  0.022f),boxModel_,   neonEmeraldMat.Get(), Quaternion::IDENTITY, false);
+                        break;
+                    case Casino::SYM_ROOSTER:
+                        addObj(face, "SymRoostBody", Vector3(0.0f, -0.01f, rFace), Vector3(0.11f, 0.11f, 0.06f), sphereModel_, goldMat, Quaternion::IDENTITY, false);
+                        addObj(face, "SymRoostComb", Vector3(0.0f,  0.07f, rFace), Vector3(0.05f, 0.07f, 0.04f), sphereModel_, combMat.Get(), Quaternion::IDENTITY, false);
+                        addObj(face, "SymRoostBeak", Vector3(0.05f, 0.01f, rFace - 0.02f), Vector3(0.05f, 0.04f, 0.06f), coneModel_, beakMat.Get(), Quaternion(0, 0, -90), false);
+                        break;
+                    case Casino::SYM_DIAMOND:
+                        addObj(face, "SymDiamond", Vector3(0.0f, 0.0f, rFace), Vector3(0.12f, 0.12f, 0.06f), boxModel_, neonCyanMat.Get(), Quaternion(0, 0, 45), false);
+                        break;
+                    case Casino::SYM_STAR:
+                        addObj(face, "SymStarA", Vector3(0.0f, 0.0f, rFace), Vector3(0.13f, 0.13f, 0.05f), boxModel_, neonGoldMat.Get(), Quaternion::IDENTITY, false);
+                        addObj(face, "SymStarB", Vector3(0.0f, 0.0f, rFace), Vector3(0.13f, 0.13f, 0.05f), boxModel_, neonGoldMat.Get(), Quaternion(0, 0, 45), false);
+                        break;
+                    case Casino::SYM_CROWN:
+                        addObj(face, "SymCrownBase", Vector3(0.0f, -0.04f, rFace), Vector3(0.16f, 0.045f, 0.05f), boxModel_, goldMat, Quaternion::IDENTITY, false);
+                        for (int ct = -1; ct <= 1; ++ct)
+                            addObj(face, "SymCrownTip", Vector3((float)ct * 0.055f, 0.02f, rFace), Vector3(0.045f, 0.08f, 0.045f), coneModel_, neonGoldMat.Get(), Quaternion::IDENTITY, false);
+                        break;
+                    case Casino::SYM_SEVEN:
+                    default:
+                        addObj(face, "SymSevenTop", Vector3(0.0f, 0.065f, rFace - 0.01f), Vector3(0.16f, 0.048f, 0.05f), boxModel_, neonRubyMat.Get(), Quaternion::IDENTITY, false);
+                        addObj(face, "SymSevenLeg", Vector3(0.015f, -0.015f, rFace - 0.01f), Vector3(0.055f, 0.16f, 0.05f), boxModel_, neonGoldMat.Get(), Quaternion(0, 0, -24), false);
+                        break;
+                }
+            }
+            casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k], 0.0f, 0.0f));
+        }
+
+        // 3D Рычаг «однорукого бандита» справа с красным шаром
+        casinoSlotLever_ = SharedPtr<Node>(casinoSlotMachineNode_->CreateChild("CasinoSlotLever"));
+        casinoSlotLever_->SetPosition(Vector3(0.92f, 1.25f, 0.0f));
+        addObj(casinoSlotLever_.Get(), "LeverMount", Vector3(-0.04f, 0.0f, 0.0f), Vector3(0.12f, 0.22f, 0.22f), cylModel_, goldMat, Quaternion(0, 0, 90));
+        addObj(casinoSlotLever_.Get(), "LeverArm",   Vector3(0.05f, 0.36f, 0.0f), Vector3(0.055f, 0.72f, 0.055f), cylModel_, chromeMat);
+        addObj(casinoSlotLever_.Get(), "LeverKnob",  Vector3(0.05f, 0.76f, 0.0f), Vector3(0.20f, 0.20f, 0.20f), sphereModel_, redSectorMat.Get());
+
+        // 11. Кольцевой пул из 64 3D-монет и искр салюта (0 аллокаций в рантайме!)
+        casino3DFxPool_.Clear();
+        casino3DFxCursor_ = 0;
+        for (int i = 0; i < 64; ++i) {
+            Casino3DFxMote m;
+            bool isCoin = (i % 2 == 0);
+            m.kind_ = isCoin ? 0 : 1;
+            m.mat_ = isCoin ? SharedPtr<Material>(goldMat->Clone()) : MakeHDRGlow(Color(2.6f, 2.0f, 0.45f, 1.0f));
+            m.node_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoFxMote"));
+            m.node_->SetEnabled(false);
+            StaticModel* sm = m.node_->CreateComponent<StaticModel>();
+            sm->SetModel(isCoin ? (cylModel_ ? cylModel_ : boxModel_) : (sphereModel_ ? sphereModel_ : boxModel_));
+            sm->SetMaterial(m.mat_.Get());
+            sm->SetCastShadows(false);
+            casino3DFxPool_.Push(m);
+        }
+    }
+
+    void SpawnCasino3DParticle(const Vector3& pos, const Vector3& vel, float ttl, float sz, int kind) {
+        if (casino3DFxPool_.Empty()) return;
+        Casino3DFxMote& m = casino3DFxPool_[casino3DFxCursor_];
+        casino3DFxCursor_ = (casino3DFxCursor_ + 1) % (int)casino3DFxPool_.Size();
+        m.pos_ = pos;
+        m.vel_ = vel;
+        m.life_ = 0.0f;
+        m.ttl_ = Max(0.25f, ttl);
+        m.baseScale_ = sz;
+        m.spin_ = (float)((rand() % 420) - 210);
+        m.kind_ = kind;
+        m.active_ = true;
+        if (m.node_) {
+            m.node_->SetPosition(pos);
+            m.node_->SetScale(kind == 0 ? Vector3(sz, sz * 0.25f, sz) : Vector3::ONE * sz);
+            m.node_->SetEnabled(true);
+        }
+    }
+
+    void SpawnCasinoJackpotBurst(const Vector3& center, int count, bool bigWin) {
+        for (int i = 0; i < count; ++i) {
+            float a = ((float)i / Max(1, count)) * 6.283185f + ((float)(rand() % 40)) * 0.02f;
+            float spd = (bigWin ? 2.4f : 1.4f) + ((float)(rand() % 100)) * 0.015f;
+            Vector3 vel(cosf(a) * spd, (bigWin ? 4.2f : 2.9f) + ((float)(rand() % 100)) * 0.02f, sinf(a) * spd);
+            Vector3 p = center + Vector3(((float)(rand() % 60) - 30) * 0.01f, 0.05f, ((float)(rand() % 60) - 30) * 0.01f);
+            SpawnCasino3DParticle(p, vel, bigWin ? 1.85f : 1.25f, (i % 2 == 0) ? 0.11f : 0.06f, (i % 2 == 0) ? 0 : 1);
+        }
+    }
+
+    void UpdateCasino3DScene(float dt) {
+        if (!casinoScene_) return;
+        float pbr = (gfxQualityIdx_ >= 2) ? 6.5f : 1.18f;
+
+        // 1. Плавный перелёт камеры между Рулеткой и 3D Одноруким Бандитом 777
+        float targetBlend = casinoSlotsMode_ ? 1.0f : 0.0f;
+        casinoCamModeBlend_ = Lerp(casinoCamModeBlend_, targetBlend, Clamp(dt * 4.2f, 0.0f, 1.0f));
+        if (casinoCamNode_) {
+            bool ballSuspense = (!casinoSlotsMode_ && casinoSpinTimer_ > 0.0f && casinoSpinTimer_ < 1.2f);
+            bool slotSuspense = (casinoSlotsMode_ && casinoSpinTimer_ > 0.0f && casinoSpinTimer_ < 0.75f && slotPendingReels_[0] == slotPendingReels_[1]);
+            Vector3 rCam(0.14f + sinf(timeAcc_ * 0.45f) * 0.08f, ballSuspense ? 2.02f : 2.34f, ballSuspense ? -2.30f : -2.85f);
+            Vector3 rLook(-0.08f, 1.04f, 0.12f);
+            Vector3 sCam(-1.62f + sinf(timeAcc_ * 0.50f) * 0.04f, slotSuspense ? 1.62f : 1.72f, slotSuspense ? -0.95f : -1.25f);
+            Vector3 sLook(-3.35f, 1.64f, 0.58f);
+
+            Vector3 cp = rCam.Lerp(sCam, casinoCamModeBlend_);
+            Vector3 lp = rLook.Lerp(sLook, casinoCamModeBlend_);
+            casinoCamNode_->SetPosition(cp);
+            casinoCamNode_->LookAt(lp);
+        }
+
+        // 2. Светомузыка зала, люстра и прожектор
+        if (casinoChandelierNode_) {
+            casinoChandelierNode_->SetRotation(Quaternion(sinf(timeAcc_ * 0.7f) * 1.4f, timeAcc_ * 10.0f, cosf(timeAcc_ * 0.6f) * 1.2f));
+        }
+        if (casinoWheelSpot_) {
+            Vector3 spotPos = Vector3(-0.25f, 3.60f, -0.35f).Lerp(Vector3(-2.15f, 3.45f, -0.85f), casinoCamModeBlend_);
+            Vector3 spotTarget = Vector3(-0.42f, 0.98f, -0.02f).Lerp(Vector3(-3.35f, 1.56f, 0.40f), casinoCamModeBlend_);
+            casinoWheelSpot_->GetNode()->SetPosition(spotPos);
+            casinoWheelSpot_->GetNode()->LookAt(spotTarget);
+            casinoWheelSpot_->SetBrightness((casinoResultFlash_ > 0.0f ? 3.2f : 2.35f) * pbr);
+        }
+        if (casinoNeonLightL_) casinoNeonLightL_->SetBrightness((1.45f + 0.35f * sinf(timeAcc_ * 2.2f)) * pbr);
+        if (casinoNeonLightR_) casinoNeonLightR_->SetBrightness((1.35f + 0.35f * cosf(timeAcc_ * 2.5f)) * pbr);
+
+        // 3. Вращение 3D-колеса рулетки и физика хромированного шарика
+        if (!casinoSlotsMode_ && casinoSpinTimer_ > 0.0f) {
+            float prog = Clamp(1.0f - (casinoSpinTimer_ / Max(0.1f, casinoSpinDur_)), 0.0f, 1.0f);
+            casinoWheelVel_ = Lerp(245.0f, 34.0f, EaseOutCubic(prog));
+            casinoWheelAngle_ = fmodf(casinoWheelAngle_ + casinoWheelVel_ * dt, 360.0f);
+
+            float targetSectorDeg = Casino::WheelSectorAngleDeg(casinoBallTargetSector_);
+            if (prog < 0.78f) {
+                float u = prog / 0.78f;
+                float spinsRemaining = (1.0f - EaseOutCubic(u));
+                float exactTargetWorld = casinoWheelAngle_ + targetSectorDeg;
+                // Шарик крутится в противоположную сторону по треку с подскоками перед падением в лунку
+                casinoBallAngle_ = exactTargetWorld - spinsRemaining * 1620.0f;
+                float rTrack = Lerp(0.70f, 0.45f, Clamp((u - 0.35f) / 0.65f, 0.0f, 1.0f));
+                float bounceY = 0.032f;
+                if (u > 0.42f) {
+                    float bt = (u - 0.42f) / 0.58f;
+                    bounceY += fabsf(sinf(bt * 15.708f)) * (1.0f - bt) * 0.075f;
+                }
+                if (casinoBallNode_) casinoBallNode_->SetPosition(Vector3(0.0f, bounceY, rTrack));
+            } else {
+                casinoBallSettled_ = true;
+                casinoBallAngle_ = casinoWheelAngle_ + targetSectorDeg;
+                if (casinoBallNode_) casinoBallNode_->SetPosition(Vector3(0.0f, 0.015f, 0.45f));
+            }
+        } else {
+            casinoWheelVel_ = Lerp(casinoWheelVel_, 18.0f, Clamp(dt * 2.5f, 0.0f, 1.0f));
+            casinoWheelAngle_ = fmodf(casinoWheelAngle_ + casinoWheelVel_ * dt, 360.0f);
+            float targetSectorDeg = Casino::WheelSectorAngleDeg(casinoBallTargetSector_);
+            casinoBallAngle_ = casinoWheelAngle_ + targetSectorDeg;
+            if (casinoBallNode_) casinoBallNode_->SetPosition(Vector3(0.0f, 0.015f, 0.45f));
+        }
+
+        if (casinoWheelDrum_) casinoWheelDrum_->SetRotation(Quaternion(0.0f, casinoWheelAngle_, 0.0f));
+        if (casinoBallPivot_) casinoBallPivot_->SetRotation(Quaternion(0.0f, casinoBallAngle_, 0.0f));
+
+        // 4. Живые 3D-стопки фишек (подстраиваются под размер ставки casinoBet_.amount)
+        static const int kChipVals[6] = { 10, 25, 50, 100, 250, 500 };
+        for (int cs = 0; cs < 6; ++cs) {
+            if (!casinoChipStacks_[cs]) continue;
+            bool selected = (casinoBet_.amount >= kChipVals[cs]);
+            float hScale = selected ? (1.0f + 0.15f * sinf(timeAcc_ * 4.0f + (float)cs)) : 0.35f;
+            casinoChipStacks_[cs]->SetScale(Vector3(1.0f, hScale, 1.0f));
+        }
+        if (casinoDollyNode_) {
+            float dy = (casinoResultFlash_ > 0.0f && casinoLastPayout_ > 0) ? (1.08f + fabsf(sinf(timeAcc_ * 7.0f)) * 0.16f) : 1.03f;
+            float dx = (casinoBet_.type == Casino::BET_BLACK) ? 1.13f : ((casinoBet_.type == Casino::BET_RED) ? 0.79f : 1.13f);
+            casinoDollyNode_->SetPosition(Vector3(dx, dy, (casinoBet_.type == Casino::BET_NUMBER && casinoBet_.number == 0) ? 0.70f : -0.10f));
+            casinoDollyNode_->SetRotation(Quaternion(0.0f, timeAcc_ * 65.0f, 0.0f));
+        }
+
+        // 5. Анимация 3D Автомата «777»: 3 барабана + рычаг + лампочки!
+        if (casinoSlotsMode_ && casinoSpinTimer_ > 0.0f) {
+            float elapsed = casinoSpinDur_ - casinoSpinTimer_;
+            const float stopAt[3] = { 0.68f, 1.15f, 1.60f };
+            for (int k = 0; k < 3; ++k) {
+                if (elapsed < stopAt[k]) {
+                    float u = Clamp(elapsed / stopAt[k], 0.0f, 1.0f);
+                    float speed = Lerp(1180.0f, 240.0f, u * u);
+                    casinoSlotAngle_[k] = fmodf(casinoSlotAngle_[k] + speed * dt, 360.0f);
+                } else {
+                    if (!casinoSlotStopped_[k]) {
+                        casinoSlotStopped_[k] = true;
+                        casinoSlotAngle_[k] = casinoSlotTargetAngle_[k];
+                        PlayCasinoSound(casinoSlotStopSound_, 0.90f);
+                    }
+                    float bounce = expf(-(elapsed - stopAt[k]) * 14.0f) * sinf((elapsed - stopAt[k]) * 38.0f) * 8.0f;
+                    if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k] + bounce, 0.0f, 0.0f));
+                    continue;
+                }
+                if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k], 0.0f, 0.0f));
+            }
+        } else {
+            for (int k = 0; k < 3; ++k) {
+                if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k], 0.0f, 0.0f));
+            }
+        }
+        if (casinoLeverPull_ > 0.0f) casinoLeverPull_ = Max(0.0f, casinoLeverPull_ - dt * 1.45f);
+        if (casinoSlotLever_) {
+            float pullAng = sinf(Clamp(casinoLeverPull_, 0.0f, 1.0f) * 3.14159f) * 58.0f;
+            casinoSlotLever_->SetRotation(Quaternion(-pullAng, 0.0f, 0.0f));
+        }
+        for (unsigned lb = 0; lb < (unsigned)casinoSlotBeaconMats_.Size(); ++lb) {
+            if (!casinoSlotBeaconMats_[lb]) continue;
+            bool lit = (casinoResultFlash_ > 0.0f && casinoLastPayout_ > 0)
+                ? (((int)(timeAcc_ * 12.0f) + (int)lb) % 2 == 0)
+                : (((int)(timeAcc_ * 4.5f) + (int)lb) % 5 == 0);
+            casinoSlotBeaconMats_[lb]->SetShaderParameter("MatDiffColor", Variant(lit ? Color(3.2f, 2.35f, 0.55f, 1.0f) : Color(0.55f, 0.32f, 0.12f, 1.0f)));
+        }
+
+        // 6. Кочет-Крупье «Дон Чикено»
+        if (casinoRoosterNode_) {
+            float bob = sinf(timeAcc_ * 2.2f) * 0.025f;
+            float sway = (casinoResultFlash_ > 0.0f && casinoLastPayout_ > 0) ? sinf(timeAcc_ * 10.0f) * 10.0f : sinf(timeAcc_ * 1.2f) * 3.5f;
+            casinoRoosterNode_->SetPosition(Vector3(0.18f, 1.32f + bob, 1.36f));
+            casinoRoosterNode_->SetRotation(Quaternion(0.0f, 180.0f + sway, 0.0f));
+            if (casinoRoosterHead_) {
+                float headLook = (casinoSpinTimer_ > 0.0f) ? (sinf(timeAcc_ * 5.0f) * 16.0f) : (casinoCamModeBlend_ * -32.0f + sinf(timeAcc_ * 1.1f) * 7.0f);
+                float headPitch = (casinoResultFlash_ > 0.0f && casinoLastPayout_ <= 0) ? 14.0f : -4.0f;
+                casinoRoosterHead_->SetRotation(Quaternion(headPitch, headLook, 0.0f));
+            }
+            if (casinoRoosterWingL_ && casinoRoosterWingR_) {
+                float wing = (casinoResultFlash_ > 0.0f && casinoLastPayout_ > 0) ? (22.0f + sinf(timeAcc_ * 14.0f) * 18.0f)
+                           : (casinoSpinTimer_ > 0.0f ? sinf(timeAcc_ * 6.0f) * 8.0f : 2.0f);
+                casinoRoosterWingL_->SetRotation(Quaternion(0.0f, 0.0f, -wing));
+                casinoRoosterWingR_->SetRotation(Quaternion(0.0f, 0.0f,  wing));
+            }
+        }
+
+        // 7. Физика 64 3D-монет и золотых искр салюта
+        if (casinoResultFlash_ > 0.0f) casinoResultFlash_ = Max(0.0f, casinoResultFlash_ - dt);
+        for (unsigned i = 0; i < (unsigned)casino3DFxPool_.Size(); ++i) {
+            Casino3DFxMote& m = casino3DFxPool_[i];
+            if (!m.active_) continue;
+            m.life_ += dt;
+            if (m.life_ >= m.ttl_) {
+                m.active_ = false;
+                if (m.node_) m.node_->SetEnabled(false);
+                continue;
+            }
+            m.vel_.y_ -= 6.8f * dt;
+            m.pos_ += m.vel_ * dt;
+            if (m.pos_.y_ < 0.99f && m.pos_.x_ > -1.8f && m.pos_.x_ < 1.8f && m.pos_.z_ > -0.95f && m.pos_.z_ < 0.95f) {
+                m.pos_.y_ = 0.99f;
+                m.vel_.y_ = fabsf(m.vel_.y_) * 0.42f;
+                m.vel_.x_ *= 0.72f;
+                m.vel_.z_ *= 0.72f;
+            }
+            if (m.node_) {
+                m.node_->SetPosition(m.pos_);
+                m.node_->SetRotation(Quaternion(m.life_ * m.spin_, m.life_ * m.spin_ * 1.3f, 0.0f));
+                float fade = 1.0f - powf(m.life_ / m.ttl_, 2.0f);
+                float sc = m.baseScale_ * Clamp(fade, 0.1f, 1.0f);
+                m.node_->SetScale(m.kind_ == 0 ? Vector3(sc, sc * 0.25f, sc) : Vector3::ONE * sc);
+            }
+        }
+    }
 
     void UpdateCasinoVisuals() {
         if (!casinoPanel_) return;
-        if (casinoTitleText_)
-            casinoTitleText_->SetText(casinoSlotsMode_ ? "КИБЕР-СЛОТЫ 777" : "ЗОЛОТАЯ РУЛЕТКА");
+        if (casinoDisclaimerBox_) casinoDisclaimerBox_->SetVisible(casinoDisclaimerVisible_);
+
+        if (casinoTitleText_) {
+            casinoTitleText_->SetText(casinoSlotsMode_
+                ? "VIP-КАЗИНО «ЧИКЕН-РОЯЛЬ»  •  3D КИБЕР-СЛОТЫ 777"
+                : "VIP-КАЗИНО «ЧИКЕН-РОЯЛЬ»  •  3D ЗОЛОТАЯ РУЛЕТКА");
+        }
         if (casinoBalanceText_)
-            casinoBalanceText_->SetText("ФИШКИ: " + String(casinoBalance_) + " ¤");
+            casinoBalanceText_->SetText("РОФЛ-ФИШКИ: " + String(casinoBalance_) + " ¤");
+        if (casinoStatusText_)
+            casinoStatusText_->SetText("Статус: " + String(Casino::RoflStatusTitle(casinoBalance_)) +
+                                         (casinoMaxWin_ > 0 ? ("  •  Рекорд: +" + String(casinoMaxWin_) + " ¤") : ""));
+
         if (casinoBetText_) {
             if (casinoSlotsMode_) {
-                casinoBetText_->SetText("СТАВКА НА СПИН: " + String(casinoBet_.amount) + " ¤   •   3×777 = ×50  |  ПАРА = ×2..×3");
+                casinoBetText_->SetText("СТАВКА НА СПИН: " + String(casinoBet_.amount) + " ¤   •   3×[777]=×50  |  3×КОРОНА=×20  |  ПАРА=×2..3");
             } else {
                 String bet = String(Casino::BetName(casinoBet_.type));
                 if (casinoBet_.type >= Casino::BET_NUMBER)
-                    bet += " " + String(casinoBet_.number);
-                casinoBetText_->SetText("СТАВКА: " + bet + "  •  " + String(casinoBet_.amount) + " ¤");
+                    bet += " #" + String(casinoBet_.number);
+                int mul = Casino::PayoutMultiplier(casinoBet_.type);
+                casinoBetText_->SetText("СТАВКА: " + bet + " (×" + String(mul) + ")   •   ФИШКА: " + String(casinoBet_.amount) + " ¤");
             }
         }
+
         if (casinoStatsText_)
-            casinoStatsText_->SetText("ПОБЕДЫ: " + String(casinoWins_) + "   ПОРАЖЕНИЯ: " + String(casinoLosses_));
+            casinoStatsText_->SetText("ПОБЕДЫ: " + String(casinoWins_) + "   ПРОМАХИ: " + String(casinoLosses_) + "   СПИНЫ: " + String(casinoSessionSpins_));
 
         if (casinoHistoryText_) {
             if (casinoSlotsMode_) {
-                casinoHistoryText_->SetText("СЛОТЫ: [777]=×50  •  [КОРОНА]=×20  •  [ЗВЕЗДА]=×12  •  [АЛМАЗ]=×8  •  ПАРА=×2..3");
+                casinoHistoryText_->SetText("ВЫПЛАТЫ 777:  [777]=×50  •  [КОРОНА]=×20  •  [ЗВЕЗДА]=×12  •  [АЛМАЗ]=×8  •  [КОЧЕТ]=×6  •  [ВИШНЯ]=×4");
             } else if (casinoHistory_.Empty()) {
-                casinoHistoryText_->SetText("ИСТОРИЯ СПИНОВ: пока пусто");
+                casinoHistoryText_->SetText("ИСТОРИЯ 3D-РУЛЕТКИ: пока пусто — крути барабан!");
             } else {
-                String hist = "ИСТОРИЯ: ";
+                String hist = "ПОСЛЕДНИЕ ШАРИКИ: ";
                 for (int i = (int)casinoHistory_.Size() - 1; i >= 0; --i) {
                     int n = casinoHistory_[(unsigned)i];
                     const char* tag = (n == 0) ? "З" : (Casino::IsRed(n) ? "К" : "Ч");
@@ -10085,17 +10884,15 @@ private:
 
         if (casinoResultText_) {
             if (casinoSpinTimer_ > 0.0f) {
-                casinoResultText_->SetText(casinoSlotsMode_ ? "Барабаны крутятся… ловим три семёрки!"
-                                                            : "Шарик в полёте… ставка уже на столе");
-                casinoResultText_->SetColor(Color(1.0f, 0.84f, 0.35f, 1.0f));
-            } else if (!casinoSlotsMode_ && casinoLastResult_ >= 0) {
-                casinoResultText_->SetText("Выпало: " + String(casinoLastResult_) + " • " + String(Casino::ColorName(casinoLastResult_)));
+                casinoResultText_->SetText(casinoSlotsMode_
+                    ? "Барабаны 777 раскручены… держим кулачки понарошку!"
+                    : "Хромированный шарик летит по треку…");
+                casinoResultText_->SetColor(Color(1.0f, 0.86f, 0.36f, 1.0f));
+            } else if (!casinoSlotsMode_ && casinoLastResult_ >= 0 && casinoResultFlash_ <= 0.0f) {
+                casinoResultText_->SetText("Последний шарик: " + String(casinoLastResult_) + " (" + String(Casino::ColorName(casinoLastResult_)) + ") — ставь и крути!");
                 casinoResultText_->SetColor(casinoLastResult_ == 0 ? Color(0.35f, 1.0f, 0.62f, 1.0f)
-                    : Casino::IsRed(casinoLastResult_) ? Color(1.0f, 0.42f, 0.42f, 1.0f)
-                                                        : Color(0.72f, 0.80f, 0.88f, 1.0f));
-            } else if (!casinoSlotsMode_) {
-                casinoResultText_->SetText("Сделайте виртуальную ставку и нажмите ПРОКРУТИТЬ");
-                casinoResultText_->SetColor(Color(0.72f, 0.80f, 0.88f, 1.0f));
+                    : Casino::IsRed(casinoLastResult_) ? Color(1.0f, 0.44f, 0.42f, 1.0f)
+                                                        : Color(0.80f, 0.86f, 0.94f, 1.0f));
             }
         }
 
@@ -10103,32 +10900,51 @@ private:
             if (casinoSlotsMode_) {
                 int r0 = slotReels_[0], r1 = slotReels_[1], r2 = slotReels_[2];
                 if (casinoSpinTimer_ > 0.0f) {
-                    int tick = (int)(timeAcc_ * 20.0f);
-                    r0 = (casinoSpinTimer_ > 0.9f) ? ((tick + 0) % Casino::SYM_COUNT) : slotPendingReels_[0];
-                    r1 = (casinoSpinTimer_ > 0.45f) ? ((tick + 2) % Casino::SYM_COUNT) : slotPendingReels_[1];
-                    r2 = ((tick + 4) % Casino::SYM_COUNT);
+                    float elapsed = casinoSpinDur_ - casinoSpinTimer_;
+                    int tick = (int)(timeAcc_ * 22.0f);
+                    r0 = (elapsed < 0.68f) ? ((tick + 0) % Casino::SYM_COUNT) : slotPendingReels_[0];
+                    r1 = (elapsed < 1.15f) ? ((tick + 2) % Casino::SYM_COUNT) : slotPendingReels_[1];
+                    r2 = (elapsed < 1.60f) ? ((tick + 4) % Casino::SYM_COUNT) : slotPendingReels_[2];
                 }
-                casinoWheelText_->SetText(String(Casino::SlotLabel(r0)) + "   |   " +
-                                          String(Casino::SlotLabel(r1)) + "   |   " +
+                casinoWheelText_->SetText(String(Casino::SlotLabel(r0)) + "  •  " +
+                                          String(Casino::SlotLabel(r1)) + "  •  " +
                                           String(Casino::SlotLabel(r2)));
-            } else {
-                static const int kWheelPreview[18] = { 0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23 };
-                int offset = casinoSpinTimer_ > 0.0f ? ((int)(timeAcc_ * 18.0f) % 18) : 0;
-                String wheel = "*  ";
-                for (int i = 0; i < 9; ++i) {
-                    if (i > 0) wheel += "  •  ";
-                    int n = kWheelPreview[(offset + i) % 18];
-                    wheel += String(n);
+            } else if (casinoSpinTimer_ > 0.0f) {
+                int tick = (int)(timeAcc_ * 20.0f);
+                String wheel = "* ";
+                for (int i = 0; i < 7; ++i) {
+                    if (i > 0) wheel += " · ";
+                    wheel += String(Casino::kEuropeanWheelOrder[(tick + i) % 37]);
                 }
-                casinoWheelText_->SetText(wheel);
+                casinoWheelText_->SetText(wheel + " *");
+            } else if (casinoLastResult_ >= 0) {
+                casinoWheelText_->SetText("ШАРИК В ЛУНКЕ: [ " + String(casinoLastResult_) + " • " + String(Casino::ColorName(casinoLastResult_)) + " ]");
+            } else {
+                casinoWheelText_->SetText("3D-РУЛЕТКА НА ГОТОВЕ  •  ВЫБИРАЙТЕ СТАВКУ");
             }
         }
+
+        auto setBtnText = [](BorderImage* btn, const String& txt) {
+            if (!btn || btn->GetNumChildren() == 0) return;
+            if (Text* t = dynamic_cast<Text*>(btn->GetChild(0u))) t->SetText(txt);
+        };
+        setBtnText(casinoSpinButton_.Get(), casinoSpinTimer_ > 0.0f
+            ? "КРУТИТСЯ… (ВСЕ ПОНАРОШКУ)"
+            : (casinoSlotsMode_ ? "ДЁРНУТЬ РЫЧАГ 777 [SPACE]" : "КРУТИТЬ 3D-РУЛЕТКУ [SPACE]"));
+
         if (casinoSpinButton_)
-            casinoSpinButton_->SetColor(casinoSpinTimer_ > 0.0f ? Color(0.22f, 0.22f, 0.24f, 0.96f)
-                                                                    : Color(0.64f, 0.38f, 0.08f, 0.98f));
+            casinoSpinButton_->SetColor(casinoSpinTimer_ > 0.0f ? Color(0.24f, 0.22f, 0.26f, 0.88f)
+                                                              : Color(0.76f, 0.48f, 0.06f, 0.94f));
         if (casinoModeButton_)
-            casinoModeButton_->SetColor(casinoSlotsMode_ ? Color(0.48f, 0.14f, 0.46f, 0.98f)
-                                                         : Color(0.14f, 0.36f, 0.22f, 0.98f));
+            casinoModeButton_->SetColor(casinoSlotsMode_ ? Color(0.54f, 0.14f, 0.50f, 0.92f)
+                                                         : Color(0.12f, 0.42f, 0.24f, 0.92f));
+        if (casinoQuickRedBtn_)   casinoQuickRedBtn_->SetVisible(!casinoSlotsMode_);
+        if (casinoQuickBlackBtn_) casinoQuickBlackBtn_->SetVisible(!casinoSlotsMode_);
+        if (casinoQuickZeroBtn_)  casinoQuickZeroBtn_->SetVisible(!casinoSlotsMode_);
+        if (casinoBetButton_)     casinoBetButton_->SetVisible(!casinoSlotsMode_);
+        if (casinoNumberButton_)  casinoNumberButton_->SetVisible(!casinoSlotsMode_);
+        if (casinoNumMinusBtn_)   casinoNumMinusBtn_->SetVisible(!casinoSlotsMode_);
+        if (casinoNumPlusBtn_)    casinoNumPlusBtn_->SetVisible(!casinoSlotsMode_);
     }
 
     void CreateCasinoPanel() {
@@ -10144,108 +10960,184 @@ private:
         casinoPanel_->SetSize(sw, sh);
         casinoPanel_->SetPriority(760);
 
-        BorderImage* bg = casinoPanel_->CreateChild<BorderImage>();
-        bg->SetSize(sw, sh);
-        bg->SetColor(Color(0.012f, 0.036f, 0.026f, 0.98f));
-
-        BorderImage* card = casinoPanel_->CreateChild<BorderImage>();
-        int cw = Min(sw - S(48), S(1080));
-        int ch = Min(sh - S(80), S(720));
-        int cx = (sw - cw) / 2;
-        int cy = (sh - ch) / 2;
-        card->SetPosition(cx, cy);
-        card->SetSize(cw, ch);
-        card->SetColor(Color(0.025f, 0.095f, 0.060f, 0.98f));
-        casinoWheelCard_ = SharedPtr<BorderImage>(card);
-
-        auto makeButton = [&](int x, int y, int w, int h, const String& label, const Color& color) -> BorderImage* {
-            BorderImage* b = casinoPanel_->CreateChild<BorderImage>();
+        auto makeGlassBtn = [&](UIElement* parent, int x, int y, int w, int h, const String& label, const Color& color, int fontSz = 14) -> BorderImage* {
+            BorderImage* b = parent->CreateChild<BorderImage>();
             b->SetPosition(x, y); b->SetSize(w, h); b->SetColor(color);
             Text* t = b->CreateChild<Text>();
-            t->SetFont(font_, SF(16)); t->SetText(label); t->SetTextAlignment(HA_CENTER);
-            t->SetPosition(S(6), (h - SF(16)) / 2 - S(2)); t->SetWidth(w - S(12));
-            t->SetColor(Color(1.0f, 0.94f, 0.76f, 1.0f)); StyleCrispText(t);
+            t->SetFont(font_, SF(fontSz)); t->SetText(label); t->SetTextAlignment(HA_CENTER);
+            t->SetPosition(S(4), (h - SF(fontSz)) / 2 - S(1)); t->SetWidth(w - S(8));
+            t->SetColor(Color(1.0f, 0.95f, 0.80f, 1.0f)); StyleCrispText(t);
             return b;
         };
 
-        casinoTitleText_ = casinoPanel_->CreateChild<Text>();
-        casinoTitleText_->SetFont(font_, SF(38));
-        casinoTitleText_->SetText("ЗОЛОТАЯ РУЛЕТКА");
-        casinoTitleText_->SetTextAlignment(HA_CENTER);
-        casinoTitleText_->SetPosition(cx + S(30), cy + S(24));
-        casinoTitleText_->SetWidth(cw - S(60));
-        casinoTitleText_->SetColor(Color(1.0f, 0.82f, 0.28f, 1.0f));
-        StyleCrispText(casinoTitleText_.Get(), true);
+        // 1. Постоянная, неблокирующая верхняя плашка-уведомление (100% РОФЛ)
+        BorderImage* roflStrip = casinoPanel_->CreateChild<BorderImage>();
+        roflStrip->SetPosition(0, 0);
+        roflStrip->SetSize(sw, S(34));
+        roflStrip->SetColor(Color(0.38f, 0.06f, 0.06f, 0.90f));
 
-        casinoModeButton_ = SharedPtr<BorderImage>(makeButton(cx + cw - S(260), cy + S(26), S(224), S(40), "[TAB] РУЛЕТКА / СЛОТЫ 777", Color(0.14f, 0.36f, 0.22f, 0.98f)));
+        casinoRoflBannerText_ = roflStrip->CreateChild<Text>();
+        casinoRoflBannerText_->SetFont(font_, SF(14));
+        casinoRoflBannerText_->SetText("⚠  100% РОФЛ-КАЗИНО  •  ВСЁ ПОНАРОШКУ! НИКАКИХ РЕАЛЬНЫХ ДЕНЕГ, ПЛАТЕЖЕЙ И ВЫВОДА — ТОЛЬКО ВИРТУАЛЬНЫЕ ФИШКИ ¤  ⚠");
+        casinoRoflBannerText_->SetTextAlignment(HA_CENTER);
+        casinoRoflBannerText_->SetPosition(S(12), S(7));
+        casinoRoflBannerText_->SetWidth(sw - S(24));
+        casinoRoflBannerText_->SetColor(Color(1.0f, 0.92f, 0.54f, 1.0f));
+        StyleCrispText(casinoRoflBannerText_, true);
 
-        casinoBalanceText_ = casinoPanel_->CreateChild<Text>();
-        casinoBalanceText_->SetFont(font_, SF(24));
-        casinoBalanceText_->SetPosition(cx + S(34), cy + S(82));
-        casinoBalanceText_->SetWidth(cw - S(68));
-        casinoBalanceText_->SetTextAlignment(HA_CENTER);
-        casinoBalanceText_->SetColor(Color(0.65f, 1.0f, 0.75f, 1.0f));
-        StyleCrispText(casinoBalanceText_);
+        // 2. Полупрозрачная верхняя панель (центр экрана 100% открыт для 3D 4K PBR зала!)
+        BorderImage* topBar = casinoPanel_->CreateChild<BorderImage>();
+        topBar->SetPosition(S(18), S(42));
+        topBar->SetSize(sw - S(36), S(78));
+        topBar->SetColor(Color(0.03f, 0.06f, 0.05f, 0.78f));
 
-        casinoWheelText_ = casinoPanel_->CreateChild<Text>();
-        casinoWheelText_->SetFont(font_, SF(27));
+        casinoTitleText_ = topBar->CreateChild<Text>();
+        casinoTitleText_->SetFont(font_, SF(19));
+        casinoTitleText_->SetPosition(S(16), S(10));
+        casinoTitleText_->SetColor(Color(1.0f, 0.84f, 0.30f, 1.0f));
+        StyleCrispText(casinoTitleText_, true);
+
+        casinoBalanceText_ = topBar->CreateChild<Text>();
+        casinoBalanceText_->SetFont(font_, SF(20));
+        casinoBalanceText_->SetPosition(S(16), S(41));
+        casinoBalanceText_->SetColor(Color(0.42f, 1.0f, 0.68f, 1.0f));
+        StyleCrispText(casinoBalanceText_, true);
+
+        casinoStatusText_ = topBar->CreateChild<Text>();
+        casinoStatusText_->SetFont(font_, SF(13));
+        casinoStatusText_->SetPosition(S(295), S(46));
+        casinoStatusText_->SetWidth(Max(S(150), sw - S(36) - S(546) - S(295)));
+        casinoStatusText_->SetColor(Color(0.84f, 0.88f, 0.78f, 0.95f));
+        StyleCrispText(casinoStatusText_);
+
+        int rx = sw - S(36);
+        casinoCloseButton_ = SharedPtr<BorderImage>(makeGlassBtn(topBar, rx - S(156), S(16), S(142), S(46), "ВЫХОД [ESC]", Color(0.28f, 0.12f, 0.14f, 0.92f), 14));
+        casinoInfoBtn_     = SharedPtr<BorderImage>(makeGlassBtn(topBar, rx - S(286), S(16), S(120), S(46), "[?] О РОФЛЕ", Color(0.32f, 0.22f, 0.08f, 0.92f), 13));
+        casinoModeButton_  = SharedPtr<BorderImage>(makeGlassBtn(topBar, rx - S(536), S(16), S(240), S(46), "[TAB] РУЛЕТКА / СЛОТЫ 777", Color(0.12f, 0.42f, 0.24f, 0.92f), 14));
+
+        // 3. Компактная плавающая плашка статуса спина под верхней панелью
+        BorderImage* midBadge = casinoPanel_->CreateChild<BorderImage>();
+        int mbw = Min(sw - S(80), S(780));
+        midBadge->SetPosition((sw - mbw) / 2, S(128));
+        midBadge->SetSize(mbw, S(68));
+        midBadge->SetColor(Color(0.02f, 0.04f, 0.04f, 0.70f));
+
+        casinoWheelText_ = midBadge->CreateChild<Text>();
+        casinoWheelText_->SetFont(font_, SF(20));
         casinoWheelText_->SetTextAlignment(HA_CENTER);
-        casinoWheelText_->SetPosition(cx + S(50), cy + S(136));
-        casinoWheelText_->SetWidth(cw - S(100));
-        casinoWheelText_->SetColor(Color(1.0f, 0.90f, 0.48f, 1.0f));
+        casinoWheelText_->SetPosition(S(12), S(7));
+        casinoWheelText_->SetWidth(mbw - S(24));
+        casinoWheelText_->SetColor(Color(1.0f, 0.90f, 0.45f, 1.0f));
         StyleCrispText(casinoWheelText_, true);
 
-        casinoHistoryText_ = casinoPanel_->CreateChild<Text>();
-        casinoHistoryText_->SetFont(font_, SF(15));
-        casinoHistoryText_->SetTextAlignment(HA_CENTER);
-        casinoHistoryText_->SetPosition(cx + S(40), cy + S(186));
-        casinoHistoryText_->SetWidth(cw - S(80));
-        casinoHistoryText_->SetColor(Color(0.75f, 0.88f, 0.82f, 0.95f));
-        StyleCrispText(casinoHistoryText_);
-
-        casinoResultText_ = casinoPanel_->CreateChild<Text>();
-        casinoResultText_->SetFont(font_, SF(18));
+        casinoResultText_ = midBadge->CreateChild<Text>();
+        casinoResultText_->SetFont(font_, SF(16));
         casinoResultText_->SetTextAlignment(HA_CENTER);
-        casinoResultText_->SetPosition(cx + S(55), cy + S(224));
-        casinoResultText_->SetWidth(cw - S(110));
-        casinoResultText_->SetColor(Color(0.72f, 0.80f, 0.88f, 1.0f));
+        casinoResultText_->SetPosition(S(12), S(38));
+        casinoResultText_->SetWidth(mbw - S(24));
+        casinoResultText_->SetColor(Color(0.80f, 0.88f, 0.94f, 1.0f));
         StyleCrispText(casinoResultText_);
 
-        casinoBetText_ = casinoPanel_->CreateChild<Text>();
-        casinoBetText_->SetFont(font_, SF(22));
-        casinoBetText_->SetTextAlignment(HA_CENTER);
-        casinoBetText_->SetPosition(cx + S(45), cy + S(270));
-        casinoBetText_->SetWidth(cw - S(90));
-        casinoBetText_->SetColor(Color(1.0f, 0.86f, 0.42f, 1.0f));
-        StyleCrispText(casinoBetText_);
+        // 4. Нижний стеклянный пульт управления VIP-столом
+        int botH = S(186);
+        int botY = sh - botH - S(14);
+        int botW = Min(sw - S(36), S(1140));
+        int botX = (sw - botW) / 2;
+        BorderImage* botBar = casinoPanel_->CreateChild<BorderImage>();
+        botBar->SetPosition(botX, botY);
+        botBar->SetSize(botW, botH);
+        botBar->SetColor(Color(0.03f, 0.06f, 0.05f, 0.82f));
+        casinoWheelCard_ = SharedPtr<BorderImage>(botBar);
 
-        int bw = S(260), bh = S(46), gap = S(16);
-        int row1 = cy + S(320);
-        casinoBetButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42), row1, bw, bh, "ТИП СТАВКИ [Q/E]", Color(0.42f, 0.12f, 0.14f, 0.98f)));
-        casinoChipButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42) + bw + gap, row1, bw, bh, "РАЗМЕР ФИШКИ [A/D]", Color(0.10f, 0.20f, 0.30f, 0.98f)));
-        casinoNumberButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42) + (bw + gap) * 2, row1, bw, bh, "ЧИСЛО [W/S]", Color(0.16f, 0.25f, 0.14f, 0.98f)));
+        casinoBetText_ = botBar->CreateChild<Text>();
+        casinoBetText_->SetFont(font_, SF(18));
+        casinoBetText_->SetPosition(S(18), S(10));
+        casinoBetText_->SetColor(Color(1.0f, 0.86f, 0.40f, 1.0f));
+        StyleCrispText(casinoBetText_, true);
 
-        casinoSpinButton_ = SharedPtr<BorderImage>(makeButton(cx + S(190), cy + S(390), cw - S(380), S(58), "КРУТИТЬ БАРАБАН [ENTER / SPACE]", Color(0.64f, 0.38f, 0.08f, 0.98f)));
-        casinoTopupButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42), cy + S(470), bw, bh, "+5000 ФИШЕК", Color(0.12f, 0.32f, 0.22f, 0.98f)));
-        casinoCloseButton_ = SharedPtr<BorderImage>(makeButton(cx + S(42) + bw + gap, cy + S(470), bw * 2 + gap, bh, "НАЗАД В ГЛАВНОЕ МЕНЮ [ESC]", Color(0.16f, 0.16f, 0.20f, 0.98f)));
-
-        casinoStatsText_ = casinoPanel_->CreateChild<Text>();
-        casinoStatsText_->SetFont(font_, SF(16));
-        casinoStatsText_->SetTextAlignment(HA_CENTER);
-        casinoStatsText_->SetPosition(cx + S(40), cy + S(535));
-        casinoStatsText_->SetWidth(cw - S(80));
-        casinoStatsText_->SetColor(Color(0.68f, 0.82f, 0.72f, 1.0f));
+        casinoStatsText_ = botBar->CreateChild<Text>();
+        casinoStatsText_->SetFont(font_, SF(13));
+        casinoStatsText_->SetTextAlignment(HA_RIGHT);
+        casinoStatsText_->SetPosition(botW - S(430), S(13));
+        casinoStatsText_->SetWidth(S(412));
+        casinoStatsText_->SetColor(Color(0.70f, 0.86f, 0.76f, 0.95f));
         StyleCrispText(casinoStatsText_);
 
-        casinoHelpText_ = casinoPanel_->CreateChild<Text>();
-        casinoHelpText_->SetFont(font_, SF(14));
-        casinoHelpText_->SetText("TAB — Рулетка / Слоты 777  •  Q/E — ставка  •  A/D — размер фишки  •  W/S — число 0..36\n"
-                                 "Рулетка: до ×36   •   Кибер-Слоты 777: пара ×2..3, три символа ×4..×20, джекпот 777 = ×50");
-        casinoHelpText_->SetTextAlignment(HA_CENTER);
-        casinoHelpText_->SetPosition(cx + S(30), cy + S(570));
-        casinoHelpText_->SetWidth(cw - S(60));
-        casinoHelpText_->SetColor(Color(0.58f, 0.72f, 0.64f, 1.0f));
-        StyleCrispText(casinoHelpText_);
+        // Ряд 1 кнопок: быстрые ставки + фишки + число
+        int r1y = S(42), bh = S(38);
+        casinoQuickRedBtn_    = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(18),  r1y, S(106), bh, "КРАСНОЕ", Color(0.58f, 0.10f, 0.12f, 0.94f), 13));
+        casinoQuickBlackBtn_  = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(130), r1y, S(106), bh, "ЧЁРНОЕ",  Color(0.12f, 0.13f, 0.17f, 0.94f), 13));
+        casinoQuickZeroBtn_   = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(242), r1y, S(86),  bh, "ЗЕРО 0",  Color(0.08f, 0.44f, 0.22f, 0.94f), 13));
+        casinoBetButton_      = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(334), r1y, S(150), bh, "ТИП [Q/E]", Color(0.24f, 0.18f, 0.30f, 0.94f), 13));
+
+        casinoNumMinusBtn_    = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(492), r1y, S(38),  bh, "-",       Color(0.18f, 0.28f, 0.18f, 0.94f), 16));
+        casinoNumberButton_   = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(534), r1y, S(108), bh, "ЧИСЛО [W/S]", Color(0.14f, 0.24f, 0.14f, 0.94f), 12));
+        casinoNumPlusBtn_     = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(646), r1y, S(38),  bh, "+",       Color(0.18f, 0.28f, 0.18f, 0.94f), 16));
+
+        int chipX = botW - S(420);
+        casinoChipMinusBtn_   = SharedPtr<BorderImage>(makeGlassBtn(botBar, chipX,          r1y, S(42),  bh, "- ¤",     Color(0.12f, 0.22f, 0.34f, 0.94f), 14));
+        casinoChipButton_     = SharedPtr<BorderImage>(makeGlassBtn(botBar, chipX + S(48),  r1y, S(162), bh, "ФИШКА [A/D]", Color(0.12f, 0.22f, 0.34f, 0.94f), 13));
+        casinoChipPlusBtn_    = SharedPtr<BorderImage>(makeGlassBtn(botBar, chipX + S(216), r1y, S(42),  bh, "+ ¤",     Color(0.12f, 0.22f, 0.34f, 0.94f), 14));
+        casinoQuickDoubleBtn_ = SharedPtr<BorderImage>(makeGlassBtn(botBar, chipX + S(264), r1y, S(138), bh, "×2 СТАВКА", Color(0.36f, 0.24f, 0.08f, 0.94f), 13));
+
+        // Ряд 2 кнопок: Главная кнопка КРУТИТЬ + Пополнение + История
+        int r2y = S(90);
+        casinoSpinButton_  = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(18), r2y, botW - S(290), S(50), "КРУТИТЬ 3D-РУЛЕТКУ [SPACE]", Color(0.76f, 0.48f, 0.06f, 0.96f), 18));
+        casinoTopupButton_ = SharedPtr<BorderImage>(makeGlassBtn(botBar, botW - S(260), r2y, S(242), S(50), "+5000 ФИШЕК (БЕСПЛАТНО) [T]", Color(0.10f, 0.42f, 0.24f, 0.94f), 13));
+
+        casinoHistoryText_ = botBar->CreateChild<Text>();
+        casinoHistoryText_->SetFont(font_, SF(13));
+        casinoHistoryText_->SetPosition(S(18), S(148));
+        casinoHistoryText_->SetWidth(botW - S(36));
+        casinoHistoryText_->SetColor(Color(0.76f, 0.88f, 0.82f, 0.95f));
+        StyleCrispText(casinoHistoryText_);
+
+        // 5. Стартовый яркий поп-ап «СТОП! ЭТО ЧИСТЫЙ РОФЛ!» поверх живой 3D-сцены
+        casinoDisclaimerBox_ = casinoPanel_->CreateChild<UIElement>("CasinoRoflDisclaimer");
+        casinoDisclaimerBox_->SetSize(sw, sh);
+
+        BorderImage* dim = casinoDisclaimerBox_->CreateChild<BorderImage>();
+        dim->SetSize(sw, sh);
+        dim->SetColor(Color(0.01f, 0.01f, 0.02f, 0.56f));
+
+        int dw = Min(sw - S(64), S(680));
+        int dh = S(380);
+        int dx = (sw - dw) / 2, dy = (sh - dh) / 2;
+        BorderImage* dBorder = casinoDisclaimerBox_->CreateChild<BorderImage>();
+        dBorder->SetPosition(dx - S(3), dy - S(3));
+        dBorder->SetSize(dw + S(6), dh + S(6));
+        dBorder->SetColor(Color(0.95f, 0.72f, 0.18f, 0.95f));
+
+        BorderImage* dCard = casinoDisclaimerBox_->CreateChild<BorderImage>();
+        dCard->SetPosition(dx, dy);
+        dCard->SetSize(dw, dh);
+        dCard->SetColor(Color(0.05f, 0.03f, 0.06f, 0.95f));
+
+        Text* dHead = dCard->CreateChild<Text>();
+        dHead->SetFont(font_, SF(26));
+        dHead->SetText("★  СТОП! ЭТО 100% РОФЛ-КАЗИНО  ★");
+        dHead->SetTextAlignment(HA_CENTER);
+        dHead->SetPosition(S(20), S(24));
+        dHead->SetWidth(dw - S(40));
+        dHead->SetColor(Color(1.0f, 0.84f, 0.24f, 1.0f));
+        StyleCrispText(dHead, true);
+
+        Text* dSub = dCard->CreateChild<Text>();
+        dSub->SetFont(font_, SF(17));
+        dSub->SetText(
+            "ВНИМАНИЕ — ВСЁ В ЭТОМ ЗАЛЕ 100% ПОНАРОШКУ!\n\n"
+            "• Никаких реальных денег, пополнений с карты, ставок и вывода тут НЕТ.\n"
+            "• Все 3D-фишки, золотые слитки, рулетка и слоты 777 — шуточная мини-игра.\n"
+            "• Фишки (¤) не имеют никакой стоимости, а кнопка «+5000 ФИШЕК» бесконечна.\n\n"
+            "Просто кайфуй от 3D 4K-графона и крути с Кочетом-Крупье на здоровье!"
+        );
+        dSub->SetTextAlignment(HA_CENTER);
+        dSub->SetPosition(S(26), S(78));
+        dSub->SetWidth(dw - S(52));
+        dSub->SetColor(Color(0.92f, 0.96f, 0.94f, 1.0f));
+        StyleCrispText(dSub);
+
+        casinoDisclaimerBtn_ = SharedPtr<BorderImage>(makeGlassBtn(dCard, S(80), dh - S(76), dw - S(160), S(52), "ПОНЯЛ, ЭТО РОФЛ — ЗАЛЕТАЕМ В 3D! [ENTER]", Color(0.76f, 0.48f, 0.06f, 0.98f), 16));
 
         casinoPanel_->SetVisible(false);
         UpdateCasinoVisuals();
@@ -10256,6 +11148,10 @@ private:
         casinoFromMenu_ = fromMenu;
         casinoOpen_ = true;
         casinoSpinTimer_ = 0.0f;
+        casinoResultFlash_ = 0.0f;
+        casinoCamModeBlend_ = casinoSlotsMode_ ? 1.0f : 0.0f;
+        if (!casinoDisclaimerAck_) casinoDisclaimerVisible_ = true;
+        CreateCasinoScene3D();
         if (!casinoPanel_) CreateCasinoPanel();
         if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
         if (casinoPanel_) casinoPanel_->SetVisible(true);
@@ -10269,6 +11165,7 @@ private:
     void CloseCasino() {
         if (!casinoOpen_ || casinoSpinTimer_ > 0.0f) return;
         casinoOpen_ = false;
+        casinoDisclaimerVisible_ = false;
         if (casinoPanel_) casinoPanel_->SetVisible(false);
         SaveSettingsFile();
         if (casinoFromMenu_) {
@@ -10282,73 +11179,120 @@ private:
     }
 
     void StartCasinoSpin() {
+        if (casinoDisclaimerVisible_) {
+            casinoDisclaimerVisible_ = false;
+            casinoDisclaimerAck_ = true;
+            PlayCasinoSound(casinoChipSound_, 0.9f);
+            UpdateCasinoVisuals();
+            return;
+        }
         if (casinoSpinTimer_ > 0.0f) return;
         casinoBet_.amount = std::max(1, casinoBet_.amount);
         if (casinoBalance_ < casinoBet_.amount) {
-            casinoResultText_->SetText("Недостаточно фишек. Нажмите «+5000 ФИШЕК».");
-            casinoResultText_->SetColor(Color(1.0f, 0.36f, 0.34f, 1.0f));
+            if (casinoResultText_) {
+                casinoResultText_->SetText("Фишки кончились понарошку! Жмите [+5000 ФИШЕК] или [T].");
+                casinoResultText_->SetColor(Color(1.0f, 0.42f, 0.34f, 1.0f));
+            }
             PlayEmptyClickSound();
             return;
         }
         casinoBalance_ -= casinoBet_.amount;
+        ++casinoSessionSpins_;
+        casinoResultFlash_ = 0.0f;
+
         if (casinoSlotsMode_) {
-            for (int r = 0; r < 3; ++r)
+            for (int r = 0; r < 3; ++r) {
                 slotPendingReels_[r] = rand() % Casino::SYM_COUNT;
-            casinoSpinTimer_ = 1.6f;
+                casinoSlotStartAngle_[r] = casinoSlotAngle_[r];
+                casinoSlotTargetAngle_[r] = (float)slotPendingReels_[r] * 60.0f;
+                casinoSlotStopped_[r] = false;
+            }
+            casinoSpinDur_ = 1.85f;
+            casinoSpinTimer_ = casinoSpinDur_;
+            casinoLeverPull_ = 1.0f;
+            PlayCasinoSound(casinoChipSound_, 0.85f);
         } else {
             casinoPendingResult_ = rand() % 37;
-            casinoSpinTimer_ = 2.8f;
+            casinoBallTargetSector_ = Casino::WheelIndexForNumber(casinoPendingResult_);
+            casinoBallSettled_ = false;
+            casinoSpinDur_ = 2.85f;
+            casinoSpinTimer_ = casinoSpinDur_;
+            PlayCasinoSound(casinoSpinSound_, 0.95f);
         }
-        PlayUISound();
         UpdateCasinoVisuals();
     }
 
     void FinishCasinoSpin() {
         if (casinoSlotsMode_) {
-            for (int r = 0; r < 3; ++r) slotReels_[r] = slotPendingReels_[r];
+            for (int r = 0; r < 3; ++r) {
+                slotReels_[r] = slotPendingReels_[r];
+                casinoSlotAngle_[r] = casinoSlotTargetAngle_[r];
+                casinoSlotStopped_[r] = true;
+            }
             int payout = Casino::SlotsPayout(casinoBet_.amount, slotReels_[0], slotReels_[1], slotReels_[2]);
+            casinoLastPayout_ = payout;
+            casinoResultFlash_ = 2.6f;
             if (payout > 0) {
                 casinoBalance_ += payout;
                 ++casinoWins_;
-                casinoResultText_->SetText(
-                    (slotReels_[0] == Casino::SYM_SEVEN && slotReels_[1] == Casino::SYM_SEVEN && slotReels_[2] == Casino::SYM_SEVEN)
-                        ? ("ДЖЕКПОТ 777!! +" + String(payout) + " ¤")
-                        : ("ПОБЕДА НА СЛОТАХ! +" + String(payout) + " ¤"));
-                casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
+                if (payout > casinoMaxWin_) casinoMaxWin_ = payout;
+                bool is777 = (slotReels_[0] == Casino::SYM_SEVEN && slotReels_[1] == Casino::SYM_SEVEN && slotReels_[2] == Casino::SYM_SEVEN);
+                if (casinoResultText_) {
+                    casinoResultText_->SetText(is777
+                        ? ("ДЖЕКПОТ 777!! +" + String(payout) + " ¤ (всё по-настоящему красиво, но понарошку!)")
+                        : ("ПОБЕДА НА СЛОТАХ! +" + String(payout) + " ¤ (рофл-выигрыш начислен)"));
+                    casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
+                }
+                PlayCasinoSound(casinoJackpotSound_, is777 ? 1.0f : 0.85f);
+                SpawnCasinoJackpotBurst(Vector3(-3.05f, 1.05f, 0.25f), is777 ? 56 : 28, is777);
             } else {
                 ++casinoLosses_;
-                casinoResultText_->SetText("Мимо линии — крути ещё! Всё понарошку");
-                casinoResultText_->SetColor(Color(1.0f, 0.40f, 0.42f, 1.0f));
+                if (casinoResultText_) {
+                    casinoResultText_->SetText("Мимо линии! Хорошо, что это чистый рофл и фантики — крути ещё!");
+                    casinoResultText_->SetColor(Color(1.0f, 0.44f, 0.44f, 1.0f));
+                }
+                PlayUISound();
             }
             SaveSettingsFile();
-            PlayUISound();
             UpdateCasinoVisuals();
             return;
         }
+
         casinoLastResult_ = casinoPendingResult_;
         if (casinoLastResult_ >= 0) {
-            if ((unsigned)casinoHistory_.Size() >= 10u) casinoHistory_.Erase(0);
+            if ((unsigned)casinoHistory_.Size() >= 12u) casinoHistory_.Erase(0);
             casinoHistory_.Push(casinoLastResult_);
         }
         int payout = Casino::Payout(casinoBet_, casinoLastResult_);
+        casinoLastPayout_ = payout;
+        casinoResultFlash_ = 2.6f;
         if (payout > 0) {
             casinoBalance_ += payout;
             ++casinoWins_;
-            casinoResultText_->SetText("ВЫИГРЫШ: +" + String(payout) + " ¤ • " + String(Casino::ColorName(casinoLastResult_)));
-            casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
+            if (payout > casinoMaxWin_) casinoMaxWin_ = payout;
+            bool big = (payout >= casinoBet_.amount * 6);
+            if (casinoResultText_) {
+                casinoResultText_->SetText("ВЫИГРЫШ +" + String(payout) + " ¤  •  Выпало " + String(casinoLastResult_) + " (" + String(Casino::ColorName(casinoLastResult_)) + ") — рофл-касса платит!");
+                casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
+            }
+            PlayCasinoSound(casinoJackpotSound_, big ? 1.0f : 0.85f);
+            SpawnCasinoJackpotBurst(Vector3(-0.32f, 1.15f, -0.05f), big ? 56 : 28, big);
         } else {
             ++casinoLosses_;
-            casinoResultText_->SetText("Ставка сгорела: выпало " + String(casinoLastResult_) + " • всё понарошку");
-            casinoResultText_->SetColor(Color(1.0f, 0.40f, 0.42f, 1.0f));
+            if (casinoResultText_) {
+                casinoResultText_->SetText("Выпало " + String(casinoLastResult_) + " (" + String(Casino::ColorName(casinoLastResult_)) + ") • Сгорело понарошку, реальный кошелёк цел!");
+                casinoResultText_->SetColor(Color(1.0f, 0.42f, 0.44f, 1.0f));
+            }
+            PlayUISound();
         }
         casinoPendingResult_ = -1;
         SaveSettingsFile();
-        PlayUISound();
         UpdateCasinoVisuals();
     }
 
     void UpdateCasino(float dt) {
         if (!casinoOpen_) return;
+        UpdateCasino3DScene(dt);
         if (casinoSpinTimer_ > 0.0f) {
             casinoSpinTimer_ = Max(0.0f, casinoSpinTimer_ - dt);
             UpdateCasinoVisuals();
@@ -10357,28 +11301,37 @@ private:
     }
 
     void HandleCasinoKey(int key) {
+        if (casinoDisclaimerVisible_) {
+            if (key == KEY_RETURN || key == KEY_SPACE || key == KEY_ESCAPE) {
+                casinoDisclaimerVisible_ = false;
+                casinoDisclaimerAck_ = true;
+                PlayCasinoSound(casinoChipSound_, 0.9f);
+                UpdateCasinoVisuals();
+            }
+            return;
+        }
         if (casinoSpinTimer_ > 0.0f) return;
         if (key == KEY_ESCAPE || key == KEY_J) { CloseCasino(); return; }
         if (key == KEY_TAB) {
             casinoSlotsMode_ = !casinoSlotsMode_;
-            PlayUISound();
+            PlayCasinoSound(casinoChipSound_, 0.75f);
             UpdateCasinoVisuals();
             return;
         }
         if (key == KEY_RETURN || key == KEY_SPACE) { StartCasinoSpin(); return; }
         if (key == KEY_Q || key == KEY_LEFT) {
             int t = (static_cast<int>(casinoBet_.type) + Casino::BET_COUNT - 1) % Casino::BET_COUNT;
-            casinoBet_.type = static_cast<Casino::BetType>(t); UpdateCasinoVisuals(); PlayUISound(); return;
+            casinoBet_.type = static_cast<Casino::BetType>(t); UpdateCasinoVisuals(); PlayCasinoSound(casinoChipSound_, 0.7f); return;
         }
         if (key == KEY_E || key == KEY_RIGHT) {
             int t = (static_cast<int>(casinoBet_.type) + 1) % Casino::BET_COUNT;
-            casinoBet_.type = static_cast<Casino::BetType>(t); UpdateCasinoVisuals(); PlayUISound(); return;
+            casinoBet_.type = static_cast<Casino::BetType>(t); UpdateCasinoVisuals(); PlayCasinoSound(casinoChipSound_, 0.7f); return;
         }
         if (key == KEY_A || key == KEY_DOWN) {
-            casinoBet_.amount = Casino::NextChipAmount(casinoBet_.amount, -1); UpdateCasinoVisuals(); PlayUISound(); return;
+            casinoBet_.amount = Casino::NextChipAmount(casinoBet_.amount, -1); UpdateCasinoVisuals(); PlayCasinoSound(casinoChipSound_, 0.75f); return;
         }
         if (key == KEY_D || key == KEY_UP) {
-            casinoBet_.amount = Casino::NextChipAmount(casinoBet_.amount, 1); UpdateCasinoVisuals(); PlayUISound(); return;
+            casinoBet_.amount = Casino::NextChipAmount(casinoBet_.amount, 1); UpdateCasinoVisuals(); PlayCasinoSound(casinoChipSound_, 0.75f); return;
         }
         if (key == KEY_W) {
             casinoBet_.number = Casino::ClampNumber(casinoBet_.number + 1); UpdateCasinoVisuals(); PlayUISound(); return;
@@ -10390,34 +11343,78 @@ private:
             casinoBet_.number = rand() % 37; UpdateCasinoVisuals(); PlayUISound(); return;
         }
         if (key == KEY_T) {
-            casinoBalance_ += 5000; SaveSettingsFile(); UpdateCasinoVisuals(); PlayUISound(); return;
+            casinoBalance_ += 5000; SaveSettingsFile();
+            PlayCasinoSound(casinoJackpotSound_, 0.65f);
+            SpawnCasinoJackpotBurst(casinoSlotsMode_ ? Vector3(-3.05f, 1.05f, 0.25f) : Vector3(1.1f, 1.15f, 0.2f), 24, false);
+            UpdateCasinoVisuals();
+            return;
         }
         if (key >= (int)KEY_0 && key <= (int)KEY_9) {
-            casinoBet_.number = Clamp(key - static_cast<int>(KEY_0), 0, 9); UpdateCasinoVisuals(); return;
+            casinoBet_.number = Clamp(key - static_cast<int>(KEY_0), 0, 9);
+            casinoBet_.type = Casino::BET_NUMBER;
+            UpdateCasinoVisuals(); PlayUISound(); return;
         }
     }
 
     void HandleCasinoClick() {
         auto* input = GetSubsystem<Input>();
-        if (!input || casinoSpinTimer_ > 0.0f) return;
+        if (!input) return;
         IntVector2 mp = input->GetMousePosition();
-        if (HitUIElement(casinoModeButton_.Get(), mp)) {
-            casinoSlotsMode_ = !casinoSlotsMode_;
+        if (casinoDisclaimerVisible_) {
+            casinoDisclaimerVisible_ = false;
+            casinoDisclaimerAck_ = true;
+            PlayCasinoSound(casinoChipSound_, 0.9f);
+            UpdateCasinoVisuals();
+            return;
+        }
+        if (casinoSpinTimer_ > 0.0f) return;
+
+        if (HitUIElement(casinoInfoBtn_.Get(), mp)) {
+            casinoDisclaimerVisible_ = true;
             PlayUISound(); UpdateCasinoVisuals(); return;
         }
+        if (HitUIElement(casinoModeButton_.Get(), mp)) {
+            casinoSlotsMode_ = !casinoSlotsMode_;
+            PlayCasinoSound(casinoChipSound_, 0.8f); UpdateCasinoVisuals(); return;
+        }
         if (HitUIElement(casinoSpinButton_.Get(), mp)) { StartCasinoSpin(); return; }
+        if (HitUIElement(casinoQuickRedBtn_.Get(), mp)) {
+            casinoBet_.type = Casino::BET_RED; PlayCasinoSound(casinoChipSound_, 0.75f); UpdateCasinoVisuals(); return;
+        }
+        if (HitUIElement(casinoQuickBlackBtn_.Get(), mp)) {
+            casinoBet_.type = Casino::BET_BLACK; PlayCasinoSound(casinoChipSound_, 0.75f); UpdateCasinoVisuals(); return;
+        }
+        if (HitUIElement(casinoQuickZeroBtn_.Get(), mp)) {
+            casinoBet_.type = Casino::BET_NUMBER; casinoBet_.number = 0; PlayCasinoSound(casinoChipSound_, 0.75f); UpdateCasinoVisuals(); return;
+        }
         if (HitUIElement(casinoBetButton_.Get(), mp)) {
             int t = (static_cast<int>(casinoBet_.type) + 1) % Casino::BET_COUNT;
-            casinoBet_.type = static_cast<Casino::BetType>(t); UpdateCasinoVisuals(); PlayUISound(); return;
+            casinoBet_.type = static_cast<Casino::BetType>(t); UpdateCasinoVisuals(); PlayCasinoSound(casinoChipSound_, 0.75f); return;
         }
-        if (HitUIElement(casinoChipButton_.Get(), mp)) {
-            casinoBet_.amount = Casino::NextChipAmount(casinoBet_.amount, 1); UpdateCasinoVisuals(); PlayUISound(); return;
+        if (HitUIElement(casinoNumMinusBtn_.Get(), mp)) {
+            casinoBet_.type = Casino::BET_NUMBER;
+            casinoBet_.number = (casinoBet_.number + 36) % 37; UpdateCasinoVisuals(); PlayUISound(); return;
         }
-        if (HitUIElement(casinoNumberButton_.Get(), mp)) {
+        if (HitUIElement(casinoNumPlusBtn_.Get(), mp) || HitUIElement(casinoNumberButton_.Get(), mp)) {
+            casinoBet_.type = Casino::BET_NUMBER;
             casinoBet_.number = (casinoBet_.number + 1) % 37; UpdateCasinoVisuals(); PlayUISound(); return;
         }
+        if (HitUIElement(casinoChipMinusBtn_.Get(), mp)) {
+            casinoBet_.amount = Casino::NextChipAmount(casinoBet_.amount, -1); UpdateCasinoVisuals(); PlayCasinoSound(casinoChipSound_, 0.75f); return;
+        }
+        if (HitUIElement(casinoChipPlusBtn_.Get(), mp) || HitUIElement(casinoChipButton_.Get(), mp)) {
+            casinoBet_.amount = Casino::NextChipAmount(casinoBet_.amount, 1); UpdateCasinoVisuals(); PlayCasinoSound(casinoChipSound_, 0.75f); return;
+        }
+        if (HitUIElement(casinoQuickDoubleBtn_.Get(), mp)) {
+            casinoBet_.amount = Casino::NextChipAmount(casinoBet_.amount, 1);
+            if (casinoBet_.amount < 500) casinoBet_.amount = Casino::NextChipAmount(casinoBet_.amount, 1);
+            UpdateCasinoVisuals(); PlayCasinoSound(casinoChipSound_, 0.85f); return;
+        }
         if (HitUIElement(casinoTopupButton_.Get(), mp)) {
-            casinoBalance_ += 5000; SaveSettingsFile(); UpdateCasinoVisuals(); PlayUISound(); return;
+            casinoBalance_ += 5000; SaveSettingsFile();
+            PlayCasinoSound(casinoJackpotSound_, 0.65f);
+            SpawnCasinoJackpotBurst(casinoSlotsMode_ ? Vector3(-3.05f, 1.05f, 0.25f) : Vector3(1.1f, 1.15f, 0.2f), 24, false);
+            UpdateCasinoVisuals(); return;
         }
         if (HitUIElement(casinoCloseButton_.Get(), mp)) CloseCasino();
     }

@@ -915,7 +915,7 @@ fi
 
 # ---- 4. Синхронизация звуков, шейдеров, материалов и ресурсов ----
 echo "[1/3] Синхронизация звуков, GLSL шейдеров, материалов и ресурсов..."
-if [ ! -f "$ROOT/Data/Sounds/BanyaSteam.wav" ] || [ ! -f "$ROOT/Data/Sounds/Shot_Railgun.wav" ]; then
+if [ ! -f "$ROOT/Data/Sounds/BanyaSteam.wav" ] || [ ! -f "$ROOT/Data/Sounds/CasinoWheelSpin.wav" ] || [ ! -f "$ROOT/Data/Sounds/Shot_Railgun.wav" ]; then
     python3 "$ROOT/tools/gen_sounds.py"
 fi
 
@@ -975,7 +975,7 @@ find "$ROOT/build/Data" -name "*.mat" ! -path "*Materials*" -delete 2>/dev/null 
 find "$ROOT/build/Data" "$ROOT/build/CoreData" -type f -size 0 -delete 2>/dev/null || true
 [ -f "$ROOT/bin/settings.ini" ] && [ ! -f "$ROOT/build/settings.ini" ] && cp "$ROOT/bin/settings.ini" "$ROOT/build/settings.ini" || true
 
-# ---- 5. Валидация и генерация 13 PBR наборов текстур (вкл. банные материалы) ----
+# ---- 5. Валидация и генерация 17 PBR наборов текстур (вкл. банные и VIP-казино материалы) ----
 texture_set_is_valid() {
     local tex_dir="$1"
     python3 - "$tex_dir" <<'PY'
@@ -996,6 +996,10 @@ required = [
     "BanyaStoneDiffuse.png", "BanyaStoneNormal.png", "BanyaStoneRoughMetal.png",
     "BanyaCopperDiffuse.png", "BanyaCopperNormal.png", "BanyaCopperRoughMetal.png",
     "BanyaBirchDiffuse.png", "BanyaBirchNormal.png", "BanyaBirchRoughMetal.png",
+    "CasinoFeltDiffuse.png", "CasinoFeltNormal.png", "CasinoFeltRoughMetal.png",
+    "CasinoGoldDiffuse.png", "CasinoGoldNormal.png", "CasinoGoldRoughMetal.png",
+    "CasinoMarbleDiffuse.png", "CasinoMarbleNormal.png", "CasinoMarbleRoughMetal.png",
+    "CasinoMahoganyDiffuse.png", "CasinoMahoganyNormal.png", "CasinoMahoganyRoughMetal.png",
     "Sky4K_PosX.png", "Sky4K_NegX.png", "Sky4K_PosY.png",
     "Sky4K_NegY.png", "Sky4K_PosZ.png", "Sky4K_NegZ.png",
     "LoadingBg4K.png",
