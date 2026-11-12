@@ -1742,8 +1742,8 @@ private:
             m->SetShaderParameter("MatDiffColor", Variant(col));
             m->SetShaderParameter("Roughness", Variant(extraRough));
             m->SetShaderParameter("Metallic", Variant(0.0f));
-            m->SetShaderParameter("UOffset", Variant(Vector4(3.0f, 0, 0, 0)));
-            m->SetShaderParameter("VOffset", Variant(Vector4(0, 3.0f, 0, 0)));
+            m->SetShaderParameter("UOffset", Variant(Vector4(2.0f, 0, 0, 0)));
+            m->SetShaderParameter("VOffset", Variant(Vector4(0, 2.0f, 0, 0)));
             tintedMatStore_.Push(m);
             return m;
         }
@@ -1862,13 +1862,13 @@ private:
                 m->SetShaderParameter("UOffset", Variant(Vector4(tiles, 0, 0, 0)));
                 m->SetShaderParameter("VOffset", Variant(Vector4(0, tiles, 0, 0)));
             };
-            tileMat(hdStone_, 10.0f);   // 4K бетон/базальт
-            tileMat(hdFloor_, 1.25f);   // у пола уже UV 48x48 в CustomGeometry -> плитка ~35 см в 4K!
-            tileMat(hdPanel_, 6.0f);    // 4K титановые бронепанели
-            tileMat(hdMetal_, 4.0f);    // 4K шлифованная сталь
+            tileMat(hdStone_, 1.5f);    // 4K архитектурный бетон/базальт 2x2 без мыльного перетайлинга
+            tileMat(hdFloor_, 0.90f);   // у пола UV 48x48 в CustomGeometry -> 2x2 сланцевые плиты ~3 м!
+            tileMat(hdPanel_, 1.5f);    // 4K титановые бронепанели с читаемыми жалюзи и лючками
+            tileMat(hdMetal_, 2.0f);    // 4K шлифованная оружейная сталь
             tileMat(hdCrate_, 1.0f);    // 4K дубовые ящики со стальной оковкой
             tileMat(hdHazard_, 1.0f);   // 4K взрывоопасные бочки
-            tileMat(hdBanyaLog_, 2.0f);     // 4K липовый сруб баньки
+            tileMat(hdBanyaLog_, 1.5f);     // 4K липовый сруб баньки
             tileMat(hdBanyaRooster_, 1.5f); // 4K оперение Кочета Смотрящего
         }
 
@@ -1900,7 +1900,17 @@ private:
     void RefreshWeaponMaterials() {
         weaponTintMats_.Clear();
         weaponAccentMat_ = nullptr;
-        weaponDarkMat_ = MakePBR(Color(30, 33, 40), 0.34f, 0.78f); // вороненая оружейная сталь
+        if (hdMetal_) {
+            SharedPtr<Material> dm = hdMetal_->Clone();
+            dm->SetShaderParameter("MatDiffColor", Variant(Color(0.24f, 0.27f, 0.33f, 1.0f)));
+            dm->SetShaderParameter("Roughness", Variant(0.08f));
+            dm->SetShaderParameter("Metallic", Variant(-0.08f));
+            dm->SetShaderParameter("UOffset", Variant(Vector4(2.0f, 0, 0, 0)));
+            dm->SetShaderParameter("VOffset", Variant(Vector4(0, 2.0f, 0, 0)));
+            weaponDarkMat_ = dm;
+        } else {
+            weaponDarkMat_ = MakePBR(Color(30, 33, 40), 0.34f, 0.78f); // вороненая оружейная сталь
+        }
         const SkinDef& skin = SKIN_DEFS[Clamp(currentSkin_, 0, SKIN_COUNT - 1)];
         Color skinCol = NormByteColor(skin.color);
         Color accCol  = NormByteColor(skin.accent);
@@ -1914,11 +1924,21 @@ private:
                     Lerp(base.g_, skinCol.g_, 0.72f),
                     Lerp(base.b_, skinCol.b_, 0.72f), 1.0f);
             Color emi = skin.emissive ? Color(c.r_ * 0.22f, c.g_ * 0.22f, c.b_ * 0.22f) : Color::BLACK;
-            SharedPtr<Material> m = MakePBR(c, skin.roughness, skin.metallic, emi);
-            // Накладываем 4K карту микрошлифовки оружейного металла (normal) при наличии
-            auto* cache = GetSubsystem<ResourceCache>();
-            if (Texture2D* bn = cache->GetResource<Texture2D>("Textures/BrushedMetalNormal.png")) {
-                m->SetTexture(TU_NORMAL, bn);
+            SharedPtr<Material> m;
+            if (hdMetal_) {
+                // Клонируем PBR-материал шлифованной стали: реальный Diff + Normal + RoughMetal в руках!
+                m = hdMetal_->Clone();
+                m->SetShaderParameter("MatDiffColor", Variant(Color(
+                    Clamp(c.r_ * 1.25f, 0.05f, 1.0f),
+                    Clamp(c.g_ * 1.25f, 0.05f, 1.0f),
+                    Clamp(c.b_ * 1.25f, 0.05f, 1.0f), 1.0f)));
+                m->SetShaderParameter("MatEmissiveColor", Variant(emi));
+                m->SetShaderParameter("Roughness", Variant(Clamp(skin.roughness - 0.26f, -0.22f, 0.65f)));
+                m->SetShaderParameter("Metallic", Variant(Clamp(skin.metallic - 0.90f, -0.88f, 0.08f)));
+                m->SetShaderParameter("UOffset", Variant(Vector4(2.0f, 0, 0, 0)));
+                m->SetShaderParameter("VOffset", Variant(Vector4(0, 2.0f, 0, 0)));
+            } else {
+                m = MakePBR(c, skin.roughness, skin.metallic, emi);
             }
             weaponTintMats_.Push(m);
         }
@@ -2523,7 +2543,18 @@ private:
         
         StaticModel* model = wallNode->CreateComponent<StaticModel>();
         model->SetModel(boxModel_);
-        model->SetMaterial(stoneMaterial_);
+        Material* wallMat = stoneMaterial_;
+        if (stoneMaterial_ && Max(scale.x_, scale.z_) > 20.0f) {
+            // Пропорциональный тайлинг для 256-метровых стен без горизонтального растягивания плит
+            SharedPtr<Material> wm = stoneMaterial_->Clone();
+            float len = Max(scale.x_, scale.z_);
+            float uTiles = Max(1.0f, floorf(len / Max(4.0f, scale.y_) + 0.5f));
+            wm->SetShaderParameter("UOffset", Variant(Vector4(uTiles, 0, 0, 0)));
+            wm->SetShaderParameter("VOffset", Variant(Vector4(0, 1.0f, 0, 0)));
+            tintedMatStore_.Push(wm);
+            wallMat = wm.Get();
+        }
+        model->SetMaterial(wallMat);
         
         // Физика: Lite-коллайдер (половина scale = half-extents)
         AddBoxCollider(position, scale * 0.5f);
@@ -2541,14 +2572,28 @@ private:
         SharedPtr<Material> neonPink = MakeTinted(nullptr, nullptr, Color(255, 70, 140));
         SharedPtr<Material> neonGold = MakeHDRGlow(Color(2.2f, 1.65f, 0.25f, 1.0f));
 
-        // Универсальный «блок»: визуал + коллайдер
+        // Универсальный «блок»: визуал (с авто-подгонкой пропорций UV без растяжения!) + коллайдер
         auto block = [this](const Vector3& pos, const Vector3& size, Material* mat, bool collide = true) {
             Node* n = scene_->CreateChild("Block");
             n->SetPosition(pos);
             n->SetScale(size);
             StaticModel* sm = n->CreateComponent<StaticModel>();
             sm->SetModel(boxModel_);
-            sm->SetMaterial(mat ? mat : fallbackMat_);
+            Material* useMat = mat ? mat : fallbackMat_;
+            if (mat && (mat == stoneMaterial_ || mat == metalMaterial_ || mat == hdPanel_)) {
+                float horiz = Max(size.x_, size.z_);
+                if (horiz > size.y_ * 2.2f || size.y_ > horiz * 2.2f) {
+                    float unit = Max(1.6f, Min(horiz, size.y_));
+                    float uT = Clamp(floorf(horiz / unit + 0.5f), 1.0f, 24.0f);
+                    float vT = Clamp(floorf(size.y_ / unit + 0.5f), 1.0f, 12.0f);
+                    SharedPtr<Material> bm = mat->Clone();
+                    bm->SetShaderParameter("UOffset", Variant(Vector4(uT, 0, 0, 0)));
+                    bm->SetShaderParameter("VOffset", Variant(Vector4(0, vT, 0, 0)));
+                    tintedMatStore_.Push(bm);
+                    useMat = bm.Get();
+                }
+            }
+            sm->SetMaterial(useMat);
             sm->SetCastShadows(true);
             if (collide) AddBoxCollider(pos, size * 0.5f);
             return n;

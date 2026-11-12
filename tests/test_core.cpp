@@ -395,7 +395,7 @@ int main(int argc, char** argv) {
 
     std::cout << "[test_core] 10/10 Проверка базовых PBR текстур, материалов баньки и генератора..." << std::endl;
     if (fs::exists("Data/Textures/Skybox4K.xml")) {
-        CheckPngFile("Data/Textures/StoneHDDiffuse.png", 512, 512);
+        CheckPngFile("Data/Textures/StoneHDDiffuse.png", 1024, 1024);
         CheckPngFile("Data/Textures/BanyaLogDiffuse.png", 1024, 1024);
         CheckPngFile("Data/Textures/BanyaLogNormal.png", 1024, 1024);
         CheckPngFile("Data/Textures/BanyaLogRoughMetal.png", 1024, 1024);
