@@ -2,6 +2,11 @@
 # Exercise the actual SDL linked into the game, without requiring a GUI or audio device.
 set -euo pipefail
 exe="$1"
+# CMake's build tree keeps the portable install RPATH. For a selected shared
+# SDK, supply its library directory for this test while retaining caller paths.
+if [ -n "${2:-}" ]; then
+    export LD_LIBRARY_PATH="$2${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 

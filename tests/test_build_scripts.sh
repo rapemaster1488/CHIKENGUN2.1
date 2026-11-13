@@ -6,7 +6,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export HOME="$tmp/home"
-unset URHO3D_HOME URHO_INC IN_NIX_SHELL NIX_CC NIX_CFLAGS_COMPILE NIX_LDFLAGS NIX_PROFILES LD_LIBRARY_PATH || true
+unset URHO3D_HOME URHO_INC URHO3D_ALLOW_HEADLESS IN_NIX_SHELL NIX_CC NIX_CFLAGS_COMPILE NIX_LDFLAGS NIX_PROFILES LD_LIBRARY_PATH SDL_VIDEODRIVER || true
 export AUTO_INSTALL_DEPS=0
 # /usr/bin/env need not exist inside a Nix build sandbox.
 bash_path="$(command -v bash)"
@@ -19,16 +19,20 @@ printf '#!%s\n' "$bash_path" > "$tmp/launcher/build.sh"
 cat >> "$tmp/launcher/build.sh" <<'BUILD'
 set -euo pipefail
 printf '%s\n' "$@" > "$BUILD_TRACE"
-mkdir -p build
+printf '%s\n' "${URHO3D_HOME:-<unset>}" > "$BUILD_SDK_TRACE"
+mkdir -p build/Data/Textures build/CoreData/Shaders
+touch build/Data/Textures/Skybox4K.xml build/Data/Textures/BanyaBirchDiffuse.png
 printf '#!%s\n' "$bash_path" > build/MyShooter
 cat >> build/MyShooter <<'APP'
 printf '%s\n' "$@" > "$APP_TRACE"
 printf '%s\n' "${LD_LIBRARY_PATH:-}" > "$APP_LIBRARY_PATH_TRACE"
+printf '%s\n' "${SDL_VIDEODRIVER:-<unset>}" > "$APP_VIDEO_TRACE"
 APP
 chmod +x build/MyShooter
 BUILD
 chmod +x "$tmp/launcher/build.sh"
-export BUILD_TRACE="$tmp/launcher-build-args" APP_TRACE="$tmp/launcher-app-args" APP_LIBRARY_PATH_TRACE="$tmp/launcher-library-path"
+export BUILD_TRACE="$tmp/launcher-build-args" BUILD_SDK_TRACE="$tmp/launcher-build-sdk" \
+    APP_TRACE="$tmp/launcher-app-args" APP_LIBRARY_PATH_TRACE="$tmp/launcher-library-path" APP_VIDEO_TRACE="$tmp/launcher-video"
 
 "$bash_path" "$tmp/launcher/run.sh" --rebuild-urho3d -j4 --diagnose-sdl -nosound > /dev/null
 printf '%s\n' --rebuild-urho3d -j4 > "$tmp/expected"
@@ -51,6 +55,47 @@ cache_order="$(tr ':' '\n' < "$APP_LIBRARY_PATH_TRACE" | grep -nFx "$tmp/launche
 home_order="$(tr ':' '\n' < "$APP_LIBRARY_PATH_TRACE" | grep -nFx "$HOME/urho3d-local/lib" | cut -d: -f1)"
 [ "$external_order" -lt "$cache_order" ] && [ "$external_order" -lt "$home_order" ]
 tr ':' '\n' < "$APP_LIBRARY_PATH_TRACE" | grep -Fxq "$tmp/user-runtime"
+
+# Remember the actual linked library directory (including multiarch layouts),
+# but never let a stale marker shadow a different SDK explicitly requested now.
+mkdir -p "$tmp/multiarch-runtime/lib/test-linux-gnu/Urho3D"
+printf '%s\n' "$tmp/multiarch-runtime/lib/test-linux-gnu/Urho3D" > "$tmp/launcher/build/.urho_libdir"
+"$bash_path" "$tmp/launcher/run.sh" --diagnose-sdl > /dev/null
+[ "$(cut -d: -f1 "$APP_LIBRARY_PATH_TRACE")" = "$tmp/multiarch-runtime/lib/test-linux-gnu/Urho3D" ]
+URHO3D_HOME="$tmp/external-sdk" "$bash_path" "$tmp/launcher/run.sh" --diagnose-sdl > /dev/null
+[ "$(cut -d: -f1 "$APP_LIBRARY_PATH_TRACE")" = "$tmp/external-sdk/lib" ]
+if tr ':' '\n' < "$APP_LIBRARY_PATH_TRACE" | grep -Fxq "$tmp/multiarch-runtime/lib/test-linux-gnu/Urho3D"; then
+    echo 'A stale runtime marker shadowed an explicitly selected SDK.' >&2
+    exit 1
+fi
+printf '%s\n' "$tmp/external-sdk" > "$tmp/launcher/build/.urho_sdk_home"
+"$bash_path" "$tmp/launcher/run.sh" --rebuild-urho3d --diagnose-sdl > /dev/null
+[ "$(cat "$BUILD_SDK_TRACE")" = '<unset>' ]
+rm -f "$tmp/launcher/build/.urho_sdk_home" "$tmp/launcher/build/.urho_libdir"
+
+if [ "$(uname -s)" = Linux ]; then
+    # Simulate a large nm output: grep must drain the pipe rather than closing
+    # it early and misclassifying the linked SDL under set -o pipefail.
+    mkdir -p "$tmp/launcher-tools"
+    printf '#!%s\n' "$bash_path" > "$tmp/launcher-tools/nm"
+    cat >> "$tmp/launcher-tools/nm" <<'NM'
+printf '00000000 T SDL_Init\n'
+for ((i=0; i<4000; ++i)); do printf '00000000 T symbol_%s\n' "$i"; done
+[ "${MOCK_HEADLESS:-0}" = 1 ] || printf '00000000 D X11_bootstrap\n'
+NM
+    chmod +x "$tmp/launcher-tools/nm"
+    rm -f "$BUILD_TRACE" "$APP_TRACE"
+    env -u DISPLAY -u WAYLAND_DISPLAY PATH="$tmp/launcher-tools:$PATH" SDL_VIDEODRIVER=wayland \
+        "$bash_path" "$tmp/launcher/run.sh" --diagnose-sdl > /dev/null
+    [ ! -e "$BUILD_TRACE" ] && [ -e "$APP_TRACE" ] && [ "$(cat "$APP_VIDEO_TRACE")" = wayland ]
+    rm -f "$BUILD_TRACE" "$APP_TRACE"
+    env -u DISPLAY -u WAYLAND_DISPLAY PATH="$tmp/launcher-tools:$PATH" MOCK_HEADLESS=1 \
+        "$bash_path" "$tmp/launcher/run.sh" --diagnose-sdl > /dev/null
+    [ ! -e "$BUILD_TRACE" ] && [ -e "$APP_TRACE" ] # Diagnose the existing binary.
+    env -u DISPLAY -u WAYLAND_DISPLAY PATH="$tmp/launcher-tools:$PATH" MOCK_HEADLESS=1 \
+        "$bash_path" "$tmp/launcher/run.sh" > /dev/null
+    [ -e "$BUILD_TRACE" ] # Ordinary launches rebuild a known headless binary.
+fi
 
 "$bash_path" "$tmp/launcher/run.sh" --rebuild-urho3d --jobs=5 --diagnose-sdl > /dev/null
 printf '%s\n' --rebuild-urho3d --jobs=5 > "$tmp/expected"
@@ -197,6 +242,7 @@ printf 'external library\n' > "$tmp/external-sdk/lib/Urho3D/libUrho3D.a"
 printf '#!%s\n' "$bash_path" > "$tmp/bin/pkg-config"
 cat >> "$tmp/bin/pkg-config" <<'PC'
 printf '%s\n' "$*" >> "$PKG_TRACE"
+[ "${DISABLE_URHO_PC:-0}" = 1 ] && exit 1
 case "$*" in
     '--exists Urho3D') exit 0 ;;
     '--variable=includedir Urho3D') echo "$TEST_SDK/include" ;;
@@ -250,15 +296,77 @@ for incomplete in headers-only library-only; do
     grep -Fq 'не содержит' "$tmp/incomplete-log"
 done
 
+# An explicit include override must not borrow another SDK's library either.
+rc=0
+URHO_INC="$tmp/headers-only/include" "$bash_path" "$tmp/project/build.sh" -j2 > "$tmp/incomplete-log" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && grep -Fq 'URHO_INC не указывает на полный SDK' "$tmp/incomplete-log"
+rc=0
+URHO3D_HOME="$tmp/external-sdk" URHO_INC="$tmp/headers-only/include" \
+    "$bash_path" "$tmp/project/build.sh" -j2 > "$tmp/incomplete-log" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] && grep -Fq 'нельзя смешивать разные SDK' "$tmp/incomplete-log"
+
+# Automatic discovery must pair headers and libraries from one prefix, not a
+# headers-only cache with a library-only installation elsewhere.
+mkdir -p "$tmp/pair-project/.cache/urho3d-sdk/include/Urho3D/Engine" \
+    "$HOME/urho3d-local/lib/Urho3D" "$HOME/urho3d-build/out/include/Urho3D/Engine" \
+    "$HOME/urho3d-build/out/lib/Urho3D"
+cp "$root/build.sh" "$tmp/pair-project/build.sh"
+printf 'partial headers\n' > "$tmp/pair-project/.cache/urho3d-sdk/include/Urho3D/Engine/Application.h"
+printf 'other partial library\n' > "$HOME/urho3d-local/lib/Urho3D/libUrho3D.a"
+printf 'complete headers\n' > "$HOME/urho3d-build/out/include/Urho3D/Engine/Application.h"
+printf 'complete library\n' > "$HOME/urho3d-build/out/lib/Urho3D/libUrho3D.a"
+rc=0
+DISABLE_URHO_PC=1 "$bash_path" "$tmp/pair-project/build.sh" -j2 > "$tmp/pair-log" 2>&1 || rc=$?
+[ "$rc" -ne 0 ] # No game assets in the fixture.
+grep -Fq "Заголовки:  $HOME/urho3d-build/out/include" "$tmp/pair-log"
+grep -Fq "Библиотеки: $HOME/urho3d-build/out/lib/Urho3D" "$tmp/pair-log"
+
+if [ "$(uname -s)" = Linux ] && command -v nm >/dev/null 2>&1; then
+    # A known headless bundled SDL is skipped for auto-discovery; an explicitly
+    # selected one fails safely unless the user opts in to headless builds.
+    export REAL_NM="$(command -v nm)"
+    printf '#!%s\n' "$bash_path" > "$tmp/bin/nm"
+    cat >> "$tmp/bin/nm" <<'NM'
+if [ "${!#}" = "${MOCK_HEADLESS_ARCHIVE:-}" ]; then
+    printf '00000000 T SDL_Init\n'
+    for ((i=0; i<4000; ++i)); do printf '00000000 T filler_%s\n' "$i"; done
+else
+    exec "$REAL_NM" "$@"
+fi
+NM
+    chmod +x "$tmp/bin/nm"
+    mkdir -p "$tmp/pair-project/.cache/urho3d-sdk/lib/Urho3D"
+    headless_archive="$tmp/pair-project/.cache/urho3d-sdk/lib/Urho3D/libUrho3D.a"
+    printf 'headless library\n' > "$headless_archive"
+    rc=0
+    MOCK_HEADLESS_ARCHIVE="$headless_archive" DISABLE_URHO_PC=1 \
+        "$bash_path" "$tmp/pair-project/build.sh" -j2 > "$tmp/pair-log" 2>&1 || rc=$?
+    [ "$rc" -ne 0 ]
+    grep -Fq 'SDL без X11/Wayland/KMSDRM; пропускаю' "$tmp/pair-log"
+    grep -Fq "Библиотеки: $HOME/urho3d-build/out/lib/Urho3D" "$tmp/pair-log"
+    rm -f "$CMAKE_TRACE"
+    rc=0
+    MOCK_HEADLESS_ARCHIVE="$headless_archive" URHO3D_HOME="$tmp/pair-project/.cache/urho3d-sdk" \
+        "$bash_path" "$tmp/pair-project/build.sh" -j2 > "$tmp/headless-log" 2>&1 || rc=$?
+    [ "$rc" -ne 0 ] && [ ! -e "$CMAKE_TRACE" ]
+    grep -Fq 'выбранный SDK содержит SDL без видеодрайвера' "$tmp/headless-log"
+    rc=0
+    MOCK_HEADLESS_ARCHIVE="$headless_archive" URHO3D_ALLOW_HEADLESS=1 URHO3D_HOME="$tmp/pair-project/.cache/urho3d-sdk" \
+        "$bash_path" "$tmp/pair-project/build.sh" -j2 > "$tmp/headless-log" 2>&1 || rc=$?
+    [ "$rc" -ne 0 ] # No game assets in the fixture.
+    grep -Fq "Библиотеки: $(dirname "$headless_archive")" "$tmp/headless-log"
+fi
+
 # Capture the game compiler's arguments for an SDK path containing spaces.
 # Fake Python marks the already-stamped texture set valid; no real assets or
 # compiler are needed and no files outside the throwaway project are touched.
 spaced_sdk="$tmp/SDK with spaces"
 mkdir -p "$spaced_sdk/include/Urho3D/Engine" "$spaced_sdk/include/Urho3D/ThirdParty/SDL" \
     "$spaced_sdk/include/Urho3D/ThirdParty/Bullet/LinearMath" "$spaced_sdk/lib/Urho3D" \
-    "$tmp/project/build/Data/Textures"
+    "$spaced_sdk/Source/ThirdParty/SDL/include/generated" "$tmp/project/build/Data/Textures"
 printf 'headers\n' > "$spaced_sdk/include/Urho3D/Engine/Application.h"
 printf 'SDL\n' > "$spaced_sdk/include/Urho3D/ThirdParty/SDL/SDL_joystick.h"
+printf 'generated config\n' > "$spaced_sdk/Source/ThirdParty/SDL/include/generated/SDL_config.h"
 printf 'Bullet\n' > "$spaced_sdk/include/Urho3D/ThirdParty/Bullet/LinearMath/btIDebugDraw.h"
 printf 'library\n' > "$spaced_sdk/lib/Urho3D/libUrho3D.a"
 printf '1024\n' > "$tmp/project/build/Data/Textures/.4k_pbr_stamp"
@@ -272,5 +380,9 @@ URHO3D_HOME="$spaced_sdk" "$bash_path" "$tmp/project/build.sh" -j2 > "$tmp/space
 # One occurrence is the normal SDK include; the second is the SDL include.
 [ "$(grep -Fxc -- "$spaced_sdk/include/Urho3D/ThirdParty" "$GAME_CXX_TRACE")" -eq 2 ]
 grep -Fxq -- "$spaced_sdk/include/Urho3D/ThirdParty/Bullet" "$GAME_CXX_TRACE"
+grep -Fxq -- "$spaced_sdk/Source/ThirdParty/SDL/include/generated" "$GAME_CXX_TRACE"
+grep -Fxq -- "$spaced_sdk/include/Urho3D/ThirdParty/SDL" "$GAME_CXX_TRACE"
+[ "$(cat "$tmp/project/build/.urho_sdk_home")" = "$spaced_sdk" ]
+[ "$(cat "$tmp/project/build/.urho_libdir")" = "$spaced_sdk/lib/Urho3D" ]
 
-echo 'Launcher/build flags, SDK rollback, and SDK selection passed.'
+echo 'Launcher/build flags, diagnostics, SDK pairing, headless detection, and rollback passed.'

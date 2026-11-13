@@ -268,8 +268,13 @@ if(BUILD_GAME)
 
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             if(BASH_EXECUTABLE)
+                set(_sdl_test_urho_libdir "")
+                if(NOT _URHO_IS_FETCHED AND URHO3D_LIBRARY)
+                    get_filename_component(_sdl_test_urho_libdir "${URHO3D_LIBRARY}" DIRECTORY)
+                endif()
                 add_test(NAME SDLStartupDiagnostics
-                    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sdl_startup.sh" $<TARGET_FILE:MyShooter>)
+                    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sdl_startup.sh"
+                            $<TARGET_FILE:MyShooter> "${_sdl_test_urho_libdir}")
                 set_tests_properties(SDLStartupDiagnostics PROPERTIES TIMEOUT 30)
             endif()
         endif()
@@ -300,6 +305,8 @@ if(BUILD_GAME)
             target_include_directories(MyShooter SYSTEM PRIVATE
                 "${urho3d_fc_BINARY_DIR}/include"
                 "${urho3d_fc_BINARY_DIR}/include/Urho3D/ThirdParty"
+                "${urho3d_fc_BINARY_DIR}/Source/ThirdParty/SDL/include/generated"
+                "${urho3d_fc_BINARY_DIR}/include/Urho3D/ThirdParty/SDL"
                 "${urho3d_fc_SOURCE_DIR}/Source/ThirdParty/Bullet/src"
             )
             if(TARGET Urho3D)
@@ -315,6 +322,25 @@ if(BUILD_GAME)
                 "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/Bullet"
                 "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/Bullet/src"
             )
+            if(EXISTS "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL/SDL_joystick.h"
+               AND NOT EXISTS "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL/SDL_config.h")
+                if(EXISTS "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include/generated/SDL_config.h")
+                    target_include_directories(MyShooter SYSTEM PRIVATE
+                        "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include/generated"
+                        "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL"
+                    )
+                elseif(EXISTS "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include/SDL_config.h")
+                    target_include_directories(MyShooter SYSTEM PRIVATE
+                        "${URHO3D_INCLUDE_DIR}/../Source/ThirdParty/SDL/include"
+                        "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL"
+                    )
+                elseif(SDL2_INCLUDE_DIRS)
+                    target_include_directories(MyShooter SYSTEM PRIVATE
+                        ${SDL2_INCLUDE_DIRS}
+                        "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL"
+                    )
+                endif()
+            endif()
             target_link_libraries(MyShooter PRIVATE "${URHO3D_LIBRARY}")
             if(URHO3D_LIBRARY MATCHES "\\.a$" OR URHO3D_LIBRARY MATCHES "Urho3D(_d)?\\.lib$")
                 target_compile_definitions(MyShooter PRIVATE URHO3D_STATIC_DEFINE)

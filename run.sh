@@ -12,6 +12,7 @@
 #   -nosound         Запустить без звука
 #   -j N / --jobs N  Ограничить число потоков при пересборке
 # ============================================================================
+if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -31,6 +32,9 @@ fi
 
 FORCE_BUILD=0
 INSTALL_DEPS=0
+REBUILD_URHO3D=0
+DIAGNOSE_SDL=0
+USER_URHO_HOME="${URHO3D_HOME:-}"
 BUILD_ARGS=()
 APP_ARGS=()
 
@@ -54,6 +58,12 @@ while [ "$#" -gt 0 ]; do
         --rebuild-urho3d)
             BUILD_ARGS+=("$1")
             FORCE_BUILD=1
+            REBUILD_URHO3D=1
+            shift
+            ;;
+        --diagnose-sdl)
+            APP_ARGS+=("$1")
+            DIAGNOSE_SDL=1
             shift
             ;;
         -j|--jobs)
@@ -85,13 +95,38 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+# A remembered external SDK must not prevent an explicit local SDK rebuild.
+if [ -z "${URHO3D_HOME:-}" ] && [ "$REBUILD_URHO3D" -eq 0 ] && [ -f "$ROOT/build/.urho_sdk_home" ]; then
+    saved_urho_home="$(cat "$ROOT/build/.urho_sdk_home" 2>/dev/null || true)"
+    [ -n "$saved_urho_home" ] && [ -d "$saved_urho_home" ] && export URHO3D_HOME="$saved_urho_home"
+fi
+
 TARGET_BIN="$ROOT/build/MyShooter${EXE_EXT}"
 if [ ! -x "$TARGET_BIN" ] && [ -x "$ROOT/build/Release/MyShooter${EXE_EXT}" ]; then
     TARGET_BIN="$ROOT/build/Release/MyShooter${EXE_EXT}"
 fi
 
+bin_missing_video_driver() {
+    local bin="$1"
+    [ "$OS_NAME" = "Linux" ] && [ -x "$bin" ] && [ "${URHO3D_ALLOW_HEADLESS:-0}" != "1" ] || return 1
+    if command -v nm >/dev/null 2>&1; then
+        # Read all of nm's output: grep -q with pipefail can SIGPIPE nm.
+        # Only a positively identified static, bundled SDL can be checked here.
+        if nm -g --defined-only "$bin" 2>/dev/null | grep -E ' [TW] _?SDL_Init$' >/dev/null; then
+            if ! nm -g --defined-only "$bin" 2>/dev/null | grep -E ' [A-Za-z] _?(X11_bootstrap|Wayland_bootstrap|KMSDRM_bootstrap)$' >/dev/null; then
+                return 0
+            fi
+        fi
+    fi
+    return 1
+}
+
 NEED_BUILD="$FORCE_BUILD"
-if [ ! -x "$TARGET_BIN" ] || [ ! -f "$ROOT/build/Data/Textures/Skybox4K.xml" ] || [ ! -d "$ROOT/build/CoreData/Shaders" ]; then
+if [ ! -x "$TARGET_BIN" ] || [ ! -f "$ROOT/build/Data/Textures/Skybox4K.xml" ] || [ ! -f "$ROOT/build/Data/Textures/BanyaBirchDiffuse.png" ] || [ ! -d "$ROOT/build/CoreData/Shaders" ]; then
+    NEED_BUILD=1
+elif [ "$DIAGNOSE_SDL" -eq 0 ] && bin_missing_video_driver "$TARGET_BIN"; then
+    echo "[CHIKENGUN 2.5] Обнаружен бинарник, собранный с headless-сборкой Urho3D (без X11/Wayland видеодрайверов)."
+    echo "                 Запускаю пересборку с полноценным Urho3D SDK..."
     NEED_BUILD=1
 else
     for f in "$ROOT/src/"*; do
@@ -137,6 +172,19 @@ append_runtime_dir() {
         RUNTIME_PATHS="${RUNTIME_PATHS:+$RUNTIME_PATHS:}$dir"
     fi
 }
+# Prefer the exact library directory recorded by the successful build, unless
+# the user has since explicitly selected a different SDK.
+if [ -f "$ROOT/build/.urho_libdir" ]; then
+    saved_libdir="$(cat "$ROOT/build/.urho_libdir" 2>/dev/null || true)"
+    if [ -z "$USER_URHO_HOME" ]; then
+        append_runtime_dir "$saved_libdir"
+    else
+        user_home_real="$(cd "$USER_URHO_HOME" 2>/dev/null && pwd -P || true)"
+        if [ -n "$user_home_real" ]; then
+            case "$saved_libdir/" in "$user_home_real"/*) append_runtime_dir "$saved_libdir" ;; esac
+        fi
+    fi
+fi
 if [ "$OS_NAME" = "Linux" ]; then
     # Драйверы OpenGL/Vulkan на NixOS живут в /run/opengl-driver/lib + локальные профили Nix
     for ld in \
@@ -145,7 +193,16 @@ if [ "$OS_NAME" = "Linux" ]; then
         "${URHO3D_HOME:+$URHO3D_HOME/lib64}" \
         "${URHO3D_HOME:+$URHO3D_HOME/lib64/Urho3D}" \
         "${URHO3D_HOME:+$URHO3D_HOME/build/lib}" \
-        "${URHO3D_HOME:+$URHO3D_HOME/build/lib/Urho3D}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/build/lib/Urho3D}"
+    do
+        append_runtime_dir "$ld"
+    done
+    if [ -n "${URHO3D_HOME:-}" ]; then
+        for ld in "$URHO3D_HOME"/lib/*-linux-* "$URHO3D_HOME"/lib/*-linux-*/Urho3D; do
+            append_runtime_dir "$ld"
+        done
+    fi
+    for ld in \
         "$ROOT/.cache/urho3d-sdk/lib" \
         "$ROOT/.cache/urho3d-sdk/lib/Urho3D" \
         "$ROOT/.cache/urho3d-sdk/lib64" \
@@ -188,6 +245,9 @@ fi
 
 export CHIKENGUN_DATA_DIR="${CHIKENGUN_DATA_DIR:-$ROOT/build/Data}"
 export CHIKENGUN_COREDATA_DIR="${CHIKENGUN_COREDATA_DIR:-$ROOT/build/CoreData}"
+
+# The client performs SDL diagnostics, including when no display is present.
+# Preserve any SDL_VIDEODRIVER explicitly selected by the user.
 
 cd "$(dirname "$TARGET_BIN")"
 exec "$TARGET_BIN" ${APP_ARGS[@]+"${APP_ARGS[@]}"}

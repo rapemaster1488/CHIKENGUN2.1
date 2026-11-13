@@ -170,7 +170,7 @@ int main(int argc, char** argv) {
         assert(remap[0] == 0 && remap[1] == -1 && remap[2] == 1 && remap[4] == 2);
     }
 
-    std::cout << "[test_core] 6/11 Проверка XML-парсера и наличия 27 WAV-эффектов (вкл. баню)..." << std::endl;
+    std::cout << "[test_core] 6/11 Проверка XML-парсера и WAV-эффектов (вкл. баню и VIP-казино)..." << std::endl;
     {
         assert(ParseXmlIntAttr("true", 0) == 1);
         assert(ParseXmlIntAttr("ON", 0) == 1);
@@ -344,6 +344,24 @@ int main(int argc, char** argv) {
         assert(Casino::SlotsMultiplier(Casino::SYM_DIAMOND, Casino::SYM_CHERRY, Casino::SYM_DIAMOND) == 2);
         assert(Casino::SlotsPayout(50, Casino::SYM_CHERRY, Casino::SYM_ROOSTER, Casino::SYM_STAR) == 0);
         assert(std::string(Casino::SlotLabel(Casino::SYM_SEVEN)) == "[ 777 ]");
+
+        // Проверка порядка 37 секторов европейской рулетки и рофл-дисклеймера
+        bool seenSector[37] = {};
+        for (int i = 0; i < 37; ++i) {
+            int n = Casino::kEuropeanWheelOrder[i];
+            assert(n >= 0 && n <= 36 && !seenSector[n]);
+            seenSector[n] = true;
+            assert(Casino::WheelIndexForNumber(n) == i);
+        }
+        assert(Casino::WheelSectorAngleDeg(0) == 0.0f);
+        assert(std::string(Casino::RoflDisclaimerShort()).find("ПОНАРОШКУ") != std::string::npos);
+        assert(std::string(Casino::RoflStatusTitle(0)).find("Банкрот") != std::string::npos);
+        if (fs::exists(dataDir / "Sounds")) {
+            assert(fs::exists(dataDir / "Sounds/CasinoWheelSpin.wav") && fs::file_size(dataDir / "Sounds/CasinoWheelSpin.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/CasinoChipClick.wav") && fs::file_size(dataDir / "Sounds/CasinoChipClick.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/CasinoSlotStop.wav") && fs::file_size(dataDir / "Sounds/CasinoSlotStop.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/CasinoJackpot.wav") && fs::file_size(dataDir / "Sounds/CasinoJackpot.wav") > 1000);
+        }
     }
 
     std::cout << "[test_core] 9/11 Проверка Pixel Arcade (src/ArcadeGames.h: все 6 игр вкл. Flappy и Тетрис)..." << std::endl;
@@ -400,7 +418,7 @@ int main(int argc, char** argv) {
         assert(sim.tetLines >= 2 && sim.score >= 300 && !sim.BuildDrawRects().empty());
     }
 
-    std::cout << "[test_core] 10/11 Проверка базовых PBR текстур, материалов баньки и генератора..." << std::endl;
+    std::cout << "[test_core] 10/11 Проверка PBR текстур, материалов баньки и VIP-казино и генератора..." << std::endl;
     if (fs::exists(dataDir / "Textures/Skybox4K.xml")) {
         CheckPngFile(dataDir / "Textures/StoneHDDiffuse.png", 1024, 1024);
         CheckPngFile(dataDir / "Textures/BanyaLogDiffuse.png", 1024, 1024);
@@ -413,6 +431,10 @@ int main(int argc, char** argv) {
         CheckPngFile(dataDir / "Textures/BanyaStoneDiffuse.png", 1024, 1024);
         CheckPngFile(dataDir / "Textures/BanyaCopperDiffuse.png", 1024, 1024);
         CheckPngFile(dataDir / "Textures/BanyaBirchDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoFeltDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoGoldDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoMarbleDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoMahoganyDiffuse.png", 1024, 1024);
         CheckPngFile(dataDir / "Textures/Sky4K_PosZ.png", 1024, 1024);
         CheckPngFile(dataDir / "Textures/LoadingBg4K.png", 1920, 1080);
         assert(fs::exists(dataDir / "Materials/Game/BanyaLog.xml"));
@@ -421,6 +443,10 @@ int main(int argc, char** argv) {
         assert(fs::exists(dataDir / "Materials/Game/BanyaStone.xml"));
         assert(fs::exists(dataDir / "Materials/Game/BanyaCopper.xml"));
         assert(fs::exists(dataDir / "Materials/Game/BanyaBirch.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoFelt.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoGold.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoMarble.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoMahogany.xml"));
     }
     if (argc > 1 && fs::exists(argv[1])) {
         // Separate concurrent runs (e.g. CTest and build.sh) so they do not
@@ -454,6 +480,12 @@ int main(int argc, char** argv) {
         CheckPngFile(tmpOut / "BanyaStoneDiffuse.png", 256, 256);
         CheckPngFile(tmpOut / "BanyaCopperDiffuse.png", 256, 256);
         CheckPngFile(tmpOut / "BanyaBirchDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoFeltDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoGoldDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoGoldNormal.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoGoldRoughMetal.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoMarbleDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoMahoganyDiffuse.png", 256, 256);
         assert(fs::exists(tmpOut / "Skybox4K.xml"));
         fs::remove_all(tmpOut);
     }

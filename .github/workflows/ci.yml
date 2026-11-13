@@ -148,8 +148,19 @@ jobs:
 
       - name: Build full client on macOS
         if: matrix.os == 'macos-latest'
+        shell: bash
         run: |
-          TEX_SIZE=512 ./build.sh -j4
+          set -o pipefail
+          if ! TEX_SIZE=512 ./build.sh -j4 2>&1 | tee "$RUNNER_TEMP/chikengun-macos-build.log"; then
+            # Surface useful compiler diagnostics in the check annotations too.
+            details="$(grep -iE 'fatal error:|error:|undefined symbols|^ld:|^clang:|CMake Error|^make(\\[|:)|^ninja:' "$RUNNER_TEMP/chikengun-macos-build.log" | tail -35 || true)"
+            details+=$'\n--- Last build log lines ---\n'"$(tail -25 "$RUNNER_TEMP/chikengun-macos-build.log")"
+            details="${details//'%'/'%25'}"
+            details="${details//$'\r'/'%0D'}"
+            details="${details//$'\n'/'%0A'}"
+            printf '::error title=macOS client build failed::%s\n' "$details"
+            exit 1
+          fi
           test -x build/MyShooter
 
       - name: Build full client on Windows (MSVC + OpenGL Urho3D)

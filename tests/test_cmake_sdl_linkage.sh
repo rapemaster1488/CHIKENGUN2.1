@@ -118,6 +118,15 @@ grep -Eq '(^|[[:space:]])-lSDL2([[:space:]]|$)' "$link" || {
     exit 1
 }
 
+# An uninstalled Urho build has its config in generated/, while SDL_platform.h
+# is beside SDL_joystick.h. Both directories must reach the compiler.
+mkdir -p "$tmp/bundled-sdk/Source/ThirdParty/SDL/include/generated"
+: > "$tmp/bundled-sdk/Source/ThirdParty/SDL/include/generated/SDL_config.h"
+configure generated-config "$tmp/bundled-sdk"
+flags="$tmp/generated-config/CMakeFiles/MyShooter.dir/flags.make"
+grep -Fq "$tmp/bundled-sdk/include/../Source/ThirdParty/SDL/include/generated" "$flags"
+grep -Fq "$tmp/bundled-sdk/include/Urho3D/ThirdParty/SDL" "$flags"
+
 # Explicit SDKs must take precedence even when CMAKE_PREFIX_PATH points to a
 # different SDK. Check both the CMake variable and environment form.
 configure explicit "$tmp/bundled-sdk" "-DCMAKE_PREFIX_PATH=$tmp/wrong-sdk"
