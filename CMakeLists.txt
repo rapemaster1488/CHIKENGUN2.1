@@ -31,6 +31,12 @@ set_tests_properties(CorePhysicsAndAssets PROPERTIES
     ENVIRONMENT "CHIKENGUN_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Data"
 )
 
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    add_test(NAME UrhoAppleCpuPatch
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_urho_apple_cpu_patch.py")
+endif()
+
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Test all startup decisions without SDL, a display server or sound hardware.
     add_executable(test_sdl_policy tests/test_sdl_policy.cpp)
@@ -420,6 +426,9 @@ if(BUILD_GAME)
                 "-framework CoreVideo"
                 "-framework QuartzCore"
                 "-framework CoreFoundation"
+                "-framework SystemConfiguration"
+                "-framework CoreBluetooth"
+                "-framework CoreServices"
                 "-framework ForceFeedback"
                 "-framework Carbon"
                 "-framework Metal"

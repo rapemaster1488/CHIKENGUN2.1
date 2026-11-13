@@ -677,6 +677,15 @@ if fc.exists():
 (root / ".chikengun_apple_patched_v4").write_text("1\n")
 PYPATCH
     fi
+    # This patch is independent of the earlier Apple SDK patch marker: a cached
+    # source tree patched by an older build must receive the CPU fix as well.
+    if [ "$OS_NAME" = "Darwin" ]; then
+        if ! command -v python3 >/dev/null 2>&1; then
+            echo "ОШИБКА: Для сборки Urho3D на macOS нужен Python 3."
+            exit 1
+        fi
+        python3 "$ROOT/tools/patch_urho_apple_cpu.py" "$URHO_SRC"
+    fi
     rm -rf "$URHO_BLD"
 
     CMAKE_EXTRA_ARGS=(
@@ -1021,7 +1030,7 @@ if [ "$OS_NAME" = "Linux" ]; then
     fi
 elif [ "$OS_NAME" = "Darwin" ]; then
     RPATH_FLAGS+=("-Wl,-rpath,$URHO_LIBDIR" "-Wl,-rpath,@executable_path/lib")
-    for fw in OpenGL Cocoa IOKit CoreAudio AudioUnit AudioToolbox CoreVideo QuartzCore CoreFoundation ForceFeedback Carbon Metal GameController; do
+    for fw in OpenGL Cocoa IOKit CoreAudio AudioUnit AudioToolbox CoreVideo QuartzCore CoreFoundation SystemConfiguration CoreBluetooth CoreServices ForceFeedback Carbon Metal GameController; do
         if can_link_framework "$fw"; then
             EXTRA_SYS_LIBS+=("-framework" "$fw")
         fi

@@ -51,6 +51,10 @@ let
       AudioToolbox
       CoreVideo
       QuartzCore
+      CoreFoundation
+      SystemConfiguration
+      CoreBluetooth
+      CoreServices
       ForceFeedback
       Carbon
       OpenGL

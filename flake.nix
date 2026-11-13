@@ -77,6 +77,10 @@
               AudioToolbox
               CoreVideo
               QuartzCore
+              CoreFoundation
+              SystemConfiguration
+              CoreBluetooth
+              CoreServices
               ForceFeedback
               Carbon
               OpenGL
@@ -103,6 +107,7 @@
               substituteInPlace cmake/Modules/UrhoCommon.cmake \
                 --replace-warn 'if (ARM AND CMAKE_SYSTEM_NAME STREQUAL Linux)' 'if (ARM AND (CMAKE_SYSTEM_NAME STREQUAL Linux OR CMAKE_SYSTEM_NAME STREQUAL Darwin))'
               ${lib.optionalString stdenv.isDarwin ''
+                python3 ${./tools/patch_urho_apple_cpu.py} "$PWD"
                 substituteInPlace cmake/Modules/UrhoCommon.cmake \
                   --replace-warn 'set (ARM_CFLAGS "''${ARM_CFLAGS} -march=armv8-a")' 'set (ARM_CFLAGS "''${ARM_CFLAGS}")' \
                   --replace-warn 'if (ARM)' 'if (IOS OR TVOS)'
