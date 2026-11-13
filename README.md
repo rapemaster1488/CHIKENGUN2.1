@@ -22,8 +22,12 @@ cd CHIKENGUN2.1
 ```bash
 ./run.sh                   # мгновенный запуск (пересобирает только при изменении src/*)
 ./run.sh --4k              # собрать полный 4K UHD набор PBR-текстур (4096×4096) и запустить
+./run.sh --diagnose-sdl    # Linux: проверить встроенный SDL, дисплей, OpenGL и аудио
+./run.sh -nosound          # запустить без звука
 ./tools/package_linux.sh   # упаковать автономный .tar.gz для запуска на другом Linux без компилятора
 ```
+
+Если окно не открывается, запускайте игру из графической X11/Wayland-сессии: без доступного дисплея подставной видеодрайвер не создаёт игровое окно. При отсутствии аудиоустройства Linux-клиент продолжит работу без звука. Диагностика и пересборка SDL описаны в [руководстве](docs/DESKTOP_BUILD.md#диагностика-sdl-на-linux).
 
 ### Windows (PowerShell / Visual Studio / MSVC)
 ```powershell
@@ -32,14 +36,14 @@ cd CHIKENGUN2.1
 .\build.ps1 -TestsOnly     # быстрые C++17 модульные тесты
 ```
 
-Подробнее о флагах и сборке через CMake (`AUTO_FETCH_URHO3D=ON`) — в [`docs/DESKTOP_BUILD.md`](docs/DESKTOP_BUILD.md).
+Подробнее о флагах и сборке через CMake с локальным Urho3D SDK — в [`docs/DESKTOP_BUILD.md`](docs/DESKTOP_BUILD.md).
 
 ---
 
 ## Что внутри нативного клиента CHIKENGUN 2.5 / 2.5.6
 
-### 1. Кинематографичное интро 2.5.6 (`koch.studios` → `powered by fall.os` → `CHICHKENCUM 2.1`)
-- Выплывание глифов без перецентровки (`SplashGlow.png` + `SplashSheen.png`), неоновая линия, наезд заголовка `96 → 76 pt`, оригинальная осенняя тема `Data/Music/KochSplashTheme.wav` ([подробнее](docs/SPLASH_INTRO.md)). Скип: клик / `Space` / `Enter` / `Esc`.
+### 1. Кинематографичное интро (`koch.studios` → `powered by fall.os` → `CHICKENCUM 2.1`)
+- Медленное посимвольное появление, золотые ореолы, световая волна, частицы и плавный переход к загрузке и меню. Заставка длится около 15,5 с под оригинальную осеннюю тему `Data/Music/KochSplashTheme.wav` ([подробнее](docs/SPLASH_INTRO.md)). Скип: клик / `Space` / `Enter` / `Esc`.
 
 ### 2. Боевая 3D-арена 256×256 «ПЕРО СУДЬБЫ»
 - **Архитектура карты**: центральный ритуальный круг (циан + золото) с 4 взлётными световыми полосами, 4 диагональных hazard-ежа с коллайдерами, 2 неоновые арки-ворота (`z = ±40`), технический балкон, магистральные трубы с вентилями, 4 гравитационных джамп-пада и 3D-сруб **«Банька Смотрящего»**.
@@ -83,6 +87,6 @@ cd CHIKENGUN2.1
 ## Проверка и тесты
 
 ```bash
-./build.sh --tests-only   # быстро: 10 наборов C++17 тестов (LitePhysics, CyberSystems, BanyaSim, Casino+Slots777, 6 Arcade игр, PNG 4K)
+./build.sh --tests-only   # 11 наборов C++17 тестов, включая тайминг интро и пропуск
 ./tools/syntax_check.sh   # проверка C++17 / Urho3D типов (-Wall -Wextra -Werror)
 ```

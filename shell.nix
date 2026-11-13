@@ -37,6 +37,8 @@ let
     (pkgs.udev or pkgs.systemdLibs or pkgs.systemd)
     pkgs.dbus
     pkgs.libxkbcommon
+    pkgs.wayland
+    pkgs.wayland-protocols
   ] ++ x11Libs);
 
   darwinLibs = lib.optionals stdenv.isDarwin (
@@ -49,6 +51,10 @@ let
       AudioToolbox
       CoreVideo
       QuartzCore
+      CoreFoundation
+      SystemConfiguration
+      CoreBluetooth
+      CoreServices
       ForceFeedback
       Carbon
       OpenGL
@@ -67,7 +73,7 @@ pkgs.mkShell {
     pkgs.pkg-config
     pkgs.git
     pkgs.python3
-  ];
+  ] ++ lib.optionals stdenv.isLinux [ (pkgs.wayland-scanner or pkgs.wayland) ];
 
   buildInputs = runtimeLibs ++ darwinLibs;
 

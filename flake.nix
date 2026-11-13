@@ -62,6 +62,7 @@
             (pkgs.udev or pkgs.systemdLibs or pkgs.systemd)
             pkgs.dbus
             pkgs.libxkbcommon
+            pkgs.wayland
           ];
 
           sdlPkg = pkgs.SDL2 or pkgs.sdl2-compat;
@@ -76,6 +77,10 @@
               AudioToolbox
               CoreVideo
               QuartzCore
+              CoreFoundation
+              SystemConfiguration
+              CoreBluetooth
+              CoreServices
               ForceFeedback
               Carbon
               OpenGL
@@ -102,6 +107,7 @@
               substituteInPlace cmake/Modules/UrhoCommon.cmake \
                 --replace-warn 'if (ARM AND CMAKE_SYSTEM_NAME STREQUAL Linux)' 'if (ARM AND (CMAKE_SYSTEM_NAME STREQUAL Linux OR CMAKE_SYSTEM_NAME STREQUAL Darwin))'
               ${lib.optionalString stdenv.isDarwin ''
+                python3 ${./tools/patch_urho_apple_cpu.py} "$PWD"
                 substituteInPlace cmake/Modules/UrhoCommon.cmake \
                   --replace-warn 'set (ARM_CFLAGS "''${ARM_CFLAGS} -march=armv8-a")' 'set (ARM_CFLAGS "''${ARM_CFLAGS}")' \
                   --replace-warn 'if (ARM)' 'if (IOS OR TVOS)'
@@ -125,10 +131,10 @@
               pkgs.pkg-config
               pkgs.git
               pkgs.python3
-            ];
+            ] ++ lib.optionals stdenv.isLinux [ (pkgs.wayland-scanner or pkgs.wayland) ];
 
             buildInputs =
-              (if stdenv.isLinux then commonRuntimeLibs else darwinLibs);
+              (if stdenv.isLinux then commonRuntimeLibs ++ [ pkgs.wayland-protocols ] else darwinLibs);
 
             # Старый код ThirdParty в Urho3D 1.9.0 может триггерить -Wformat-security в Nix hardening
             hardeningDisable = [ "format" ];
@@ -163,6 +169,24 @@
                 "-DCMAKE_C_FLAGS=-std=gnu11 -Wno-error -Wno-implicit-function-declaration -Wno-incompatible-pointer-types"
                 "-DCMAKE_CXX_FLAGS=-include cstdint -Wno-error"
               )
+              ${lib.optionalString stdenv.isLinux ''
+                # Urho3D 1.9 searches /usr/share, not Nix store protocol paths.
+                cmakeFlagsArray+=("-DWAYLAND_CORE_PROTOCOL_DIR=$src/Source/ThirdParty/SDL/wayland-protocols")
+                protocols="$(pkg-config --variable=pkgdatadir wayland-protocols)"
+                cmakeFlagsArray+=("-DWAYLAND_PROTOCOLS_DIR=$protocols")
+              ''}
+            '';
+
+            postConfigure = lib.optionalString stdenv.isLinux ''
+              config=include/Urho3D/ThirdParty/SDL/SDL_config.h
+              if ! grep -Eq '^#define SDL_VIDEO_DRIVER_(X11|WAYLAND) 1' "$config"; then
+                echo "Urho3D SDL has neither an X11 nor a Wayland backend" >&2
+                exit 1
+              fi
+              if ! grep -Eq '^#define SDL_AUDIO_DRIVER_(ALSA|PULSEAUDIO) 1' "$config"; then
+                echo "Urho3D SDL has neither an ALSA nor a PulseAudio backend" >&2
+                exit 1
+              fi
             '';
 
             meta = with lib; {
@@ -218,7 +242,10 @@
 
               cp MyShooter "$out/libexec/chikengun/MyShooter"
               cp gen_textures_4k "$out/bin/chikengun-gen-textures"
-              cp test_core "$out/bin/chikengun-test-core"
+              cp test_core "$out/libexec/chikengun/test_core"
+              # The installed test checks the installed assets regardless of cwd.
+              makeWrapper "$out/libexec/chikengun/test_core" "$out/bin/chikengun-test-core" \
+                --set-default CHIKENGUN_DATA_DIR "$out/share/chikengun/Data"
 
               # Сначала базовая CoreData из Urho3D (если есть), поверх — наша пропатченная CoreData (Cinema4K.glsl, SSAO4K.glsl и т.д.)
               for cdir in "${urho3d}/share/Urho3D/Resources/CoreData" "${urho3d}/share/Urho3D/CoreData" "$src/CoreData"; do
@@ -316,6 +343,7 @@
             (pkgs.udev or pkgs.systemdLibs or pkgs.systemd)
             pkgs.dbus
             pkgs.libxkbcommon
+            pkgs.wayland
           ] ++ x11Libs);
         in
         {
@@ -325,7 +353,7 @@
               pkgs.ninja
               pkgs.gnumake
               pkgs.git
-            ];
+            ] ++ lib.optionals stdenv.isLinux [ (pkgs.wayland-scanner or pkgs.wayland) pkgs.wayland-protocols ];
 
             URHO3D_HOME = "${urho3d}";
             CMAKE_PREFIX_PATH = "${urho3d}";

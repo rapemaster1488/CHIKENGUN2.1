@@ -7,6 +7,7 @@
 // ============================================================================
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -23,6 +24,8 @@
 #include "../src/BanyaSim.h"
 #include "../src/CasinoSim.h"
 #include "../src/ArcadeGames.h"
+#include "../src/SplashIntro.h"
+#include "../src/SettingsParsing.h"
 
 namespace fs = std::filesystem;
 
@@ -69,7 +72,11 @@ static void CheckPngFile(const fs::path& p, uint32_t expectW, uint32_t expectH) 
 }
 
 int main(int argc, char** argv) {
-    std::cout << "[test_core] 1/10 Проверка Lite::RayBoxT и HitNormalBoxT (src/LitePhysics.h)..." << std::endl;
+    // Installed tests can run from any directory while still checking the
+    // shipped assets; CTest and the shell builder point this at the source tree.
+    const char* dataEnv = std::getenv("CHIKENGUN_DATA_DIR");
+    const fs::path dataDir = dataEnv && *dataEnv ? fs::path(dataEnv) : fs::path("Data");
+    std::cout << "[test_core] 1/11 Проверка Lite::RayBoxT и HitNormalBoxT (src/LitePhysics.h)..." << std::endl;
     {
         float t = Lite::RayBoxT<TestVec3>({0, 1, -5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1});
         assert(std::fabs(t - 4.0f) < 1e-4f);
@@ -88,7 +95,7 @@ int main(int argc, char** argv) {
         assert(std::fabs(Lite::RayBoxT<TestVec3>({1, 1, 0}, {-1, 0, 0}, {0, 1, 0}, {1, 1, 1})) < 1e-4f);
     }
 
-    std::cout << "[test_core] 2/10 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
+    std::cout << "[test_core] 2/11 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
     {
         float t1 = Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {0, 1, 10}, 1.0f);
         float t2 = Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {0, 1, 22}, 1.0f);
@@ -104,7 +111,7 @@ int main(int argc, char** argv) {
         assert(Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 0}, {0, 1, 10}, 1.0f) < 0.0f);
     }
 
-    std::cout << "[test_core] 3/10 Проверка кинематики Грэппл-крюка [Z] и FNV-1a кэша материалов..." << std::endl;
+    std::cout << "[test_core] 3/11 Проверка кинематики Грэппл-крюка [Z] и FNV-1a кэша материалов..." << std::endl;
     {
         bool rel = false;
         TestVec3 pull = Lite::ComputeGrapplePullT<TestVec3>({0, 2, 0}, {0, 2, 20}, 28.0f, 2.0f, rel);
@@ -122,7 +129,7 @@ int main(int argc, char** argv) {
         assert(h1 == h2 && h1 != h3);
     }
 
-    std::cout << "[test_core] 4/10 Проверка систем CyberSystems.h (мутаторы, Орбита [X], перки, 14 достижений)..." << std::endl;
+    std::cout << "[test_core] 4/11 Проверка систем CyberSystems.h (мутаторы, Орбита [X], перки, 14 достижений)..." << std::endl;
     {
         assert(Cyber::PickWaveMutator(1, 42) == Cyber::MUT_STANDARD);
         assert(Cyber::PickWaveMutator(5, 17) == Cyber::MUT_GOLDRUSH);
@@ -142,7 +149,7 @@ int main(int argc, char** argv) {
         assert(Cyber::CountUnlockedAchievements(Cyber::ALL_ACHIEVEMENTS_MASK) == 14);
     }
 
-    std::cout << "[test_core] 5/10 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
+    std::cout << "[test_core] 5/11 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
     {
         TestVec3 orig(0, 2, 0);
         TestVec3 dir = TestVec3(0, -1, 1).Normalized();
@@ -163,26 +170,26 @@ int main(int argc, char** argv) {
         assert(remap[0] == 0 && remap[1] == -1 && remap[2] == 1 && remap[4] == 2);
     }
 
-    std::cout << "[test_core] 6/10 Проверка XML-парсера и наличия 31 WAV-эффектов (вкл. баню и VIP-казино)..." << std::endl;
+    std::cout << "[test_core] 6/11 Проверка XML-парсера и WAV-эффектов (вкл. баню и VIP-казино)..." << std::endl;
     {
         assert(ParseXmlIntAttr("true", 0) == 1);
         assert(ParseXmlIntAttr("ON", 0) == 1);
         assert(ParseXmlIntAttr("false", 1) == 0);
         assert(ParseXmlIntAttr("16", 1) == 16);
         assert(ParseXmlIntAttr("", 3) == 3);
-        if (fs::exists("Data/Sounds")) {
-            assert(fs::exists("Data/Sounds/Grapple.wav") && fs::file_size("Data/Sounds/Grapple.wav") > 1000);
-            assert(fs::exists("Data/Sounds/OrbitalStrike.wav") && fs::file_size("Data/Sounds/OrbitalStrike.wav") > 1000);
-            assert(fs::exists("Data/Sounds/Shot_Railgun.wav"));
-            assert(fs::exists("Data/Sounds/Shot_Plasma.wav"));
-            assert(fs::exists("Data/Sounds/BanyaSteam.wav") && fs::file_size("Data/Sounds/BanyaSteam.wav") > 1000);
-            assert(fs::exists("Data/Sounds/BanyaVenik.wav") && fs::file_size("Data/Sounds/BanyaVenik.wav") > 1000);
-            assert(fs::exists("Data/Sounds/BanyaSplash.wav") && fs::file_size("Data/Sounds/BanyaSplash.wav") > 1000);
-            assert(fs::exists("Data/Sounds/BanyaDoor.wav") && fs::file_size("Data/Sounds/BanyaDoor.wav") > 1000);
+        if (fs::exists(dataDir / "Sounds")) {
+            assert(fs::exists(dataDir / "Sounds/Grapple.wav") && fs::file_size(dataDir / "Sounds/Grapple.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/OrbitalStrike.wav") && fs::file_size(dataDir / "Sounds/OrbitalStrike.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/Shot_Railgun.wav"));
+            assert(fs::exists(dataDir / "Sounds/Shot_Plasma.wav"));
+            assert(fs::exists(dataDir / "Sounds/BanyaSteam.wav") && fs::file_size(dataDir / "Sounds/BanyaSteam.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/BanyaVenik.wav") && fs::file_size(dataDir / "Sounds/BanyaVenik.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/BanyaSplash.wav") && fs::file_size(dataDir / "Sounds/BanyaSplash.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/BanyaDoor.wav") && fs::file_size(dataDir / "Sounds/BanyaDoor.wav") > 1000);
         }
     }
 
-    std::cout << "[test_core] 7/10 Проверка симулятора «Кочет в баньке» (src/BanyaSim.h: 14 концовок + 57 загадок)..." << std::endl;
+    std::cout << "[test_core] 7/11 Проверка симулятора «Кочет в баньке» (src/BanyaSim.h: 14 концовок + 57 загадок)..." << std::endl;
     {
         // 57 уникальных загадок без повторов внутри пула и с перемешиванием вариантов
         Banya::Simulator sim(12345u);
@@ -295,7 +302,7 @@ int main(int argc, char** argv) {
         assert(Banya::ComputeCreditsReward(sim.CurrentScore(), Banya::END_STEWARD) > 200);
     }
 
-    std::cout << "[test_core] 8/10 Проверка нативного казино (src/CasinoSim.h: Рулетка + Слоты 777)..." << std::endl;
+    std::cout << "[test_core] 8/11 Проверка нативного казино (src/CasinoSim.h: Рулетка + Слоты 777)..." << std::endl;
     {
         Casino::Bet red{Casino::BET_RED, 25, 7};
         assert(Casino::Wins(red, 19));
@@ -349,15 +356,15 @@ int main(int argc, char** argv) {
         assert(Casino::WheelSectorAngleDeg(0) == 0.0f);
         assert(std::string(Casino::RoflDisclaimerShort()).find("ПОНАРОШКУ") != std::string::npos);
         assert(std::string(Casino::RoflStatusTitle(0)).find("Банкрот") != std::string::npos);
-        if (fs::exists("Data/Sounds")) {
-            assert(fs::exists("Data/Sounds/CasinoWheelSpin.wav") && fs::file_size("Data/Sounds/CasinoWheelSpin.wav") > 1000);
-            assert(fs::exists("Data/Sounds/CasinoChipClick.wav") && fs::file_size("Data/Sounds/CasinoChipClick.wav") > 1000);
-            assert(fs::exists("Data/Sounds/CasinoSlotStop.wav") && fs::file_size("Data/Sounds/CasinoSlotStop.wav") > 1000);
-            assert(fs::exists("Data/Sounds/CasinoJackpot.wav") && fs::file_size("Data/Sounds/CasinoJackpot.wav") > 1000);
+        if (fs::exists(dataDir / "Sounds")) {
+            assert(fs::exists(dataDir / "Sounds/CasinoWheelSpin.wav") && fs::file_size(dataDir / "Sounds/CasinoWheelSpin.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/CasinoChipClick.wav") && fs::file_size(dataDir / "Sounds/CasinoChipClick.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/CasinoSlotStop.wav") && fs::file_size(dataDir / "Sounds/CasinoSlotStop.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/CasinoJackpot.wav") && fs::file_size(dataDir / "Sounds/CasinoJackpot.wav") > 1000);
         }
     }
 
-    std::cout << "[test_core] 9/10 Проверка Pixel Arcade (src/ArcadeGames.h: все 6 игр вкл. Flappy и Тетрис)..." << std::endl;
+    std::cout << "[test_core] 9/11 Проверка Pixel Arcade (src/ArcadeGames.h: все 6 игр вкл. Flappy и Тетрис)..." << std::endl;
     {
         Arcade::PixelArcadeSim sim;
         sim.Reset(Arcade::GAME_SNAKE);
@@ -411,39 +418,49 @@ int main(int argc, char** argv) {
         assert(sim.tetLines >= 2 && sim.score >= 300 && !sim.BuildDrawRects().empty());
     }
 
-    std::cout << "[test_core] 10/10 Проверка PBR текстур, материалов баньки и VIP-казино и генератора..." << std::endl;
-    if (fs::exists("Data/Textures/Skybox4K.xml")) {
-        CheckPngFile("Data/Textures/StoneHDDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaLogDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaLogNormal.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaLogRoughMetal.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaRoosterDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaRoosterNormal.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaRoosterRoughMetal.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaPlankDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaStoneDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaCopperDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/BanyaBirchDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/CasinoFeltDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/CasinoGoldDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/CasinoMarbleDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/CasinoMahoganyDiffuse.png", 1024, 1024);
-        CheckPngFile("Data/Textures/Sky4K_PosZ.png", 1024, 1024);
-        CheckPngFile("Data/Textures/LoadingBg4K.png", 1920, 1080);
-        assert(fs::exists("Data/Materials/Game/BanyaLog.xml"));
-        assert(fs::exists("Data/Materials/Game/BanyaRooster.xml"));
-        assert(fs::exists("Data/Materials/Game/BanyaPlank.xml"));
-        assert(fs::exists("Data/Materials/Game/BanyaStone.xml"));
-        assert(fs::exists("Data/Materials/Game/BanyaCopper.xml"));
-        assert(fs::exists("Data/Materials/Game/BanyaBirch.xml"));
-        assert(fs::exists("Data/Materials/Game/CasinoFelt.xml"));
-        assert(fs::exists("Data/Materials/Game/CasinoGold.xml"));
-        assert(fs::exists("Data/Materials/Game/CasinoMarble.xml"));
-        assert(fs::exists("Data/Materials/Game/CasinoMahogany.xml"));
+    std::cout << "[test_core] 10/11 Проверка PBR текстур, материалов баньки и VIP-казино и генератора..." << std::endl;
+    if (fs::exists(dataDir / "Textures/Skybox4K.xml")) {
+        CheckPngFile(dataDir / "Textures/StoneHDDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaLogDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaLogNormal.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaLogRoughMetal.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaRoosterDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaRoosterNormal.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaRoosterRoughMetal.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaPlankDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaStoneDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaCopperDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaBirchDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoFeltDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoGoldDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoMarbleDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoMahoganyDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/Sky4K_PosZ.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/LoadingBg4K.png", 1920, 1080);
+        assert(fs::exists(dataDir / "Materials/Game/BanyaLog.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaRooster.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaPlank.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaStone.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaCopper.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaBirch.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoFelt.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoGold.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoMarble.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoMahogany.xml"));
     }
     if (argc > 1 && fs::exists(argv[1])) {
-        fs::path tmpOut = fs::temp_directory_path() / "chikengun_test_tex";
-        fs::remove_all(tmpOut);
+        // Separate concurrent runs (e.g. CTest and build.sh) so they do not
+        // overwrite or delete each other's generated textures.
+        fs::path tmpOut;
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (unsigned attempt = 0; attempt < 100; ++attempt) {
+            const fs::path candidate = fs::temp_directory_path() /
+                ("chikengun_test_tex_" + std::to_string(stamp) + "_" + std::to_string(attempt));
+            std::error_code error;
+            if (fs::create_directory(candidate, error)) { tmpOut = candidate; break; }
+            if (error) break;
+        }
+        assert(!tmpOut.empty() && "Не удалось создать временный каталог для текстур");
 #ifdef _WIN32
         std::string cmd = std::string("\"\"") + argv[1] + "\" \"" + tmpOut.string() + "\" 256 > NUL\"";
 #else
@@ -473,6 +490,107 @@ int main(int argc, char** argv) {
         fs::remove_all(tmpOut);
     }
 
-    std::cout << "[test_core] ВСЕ 10 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
+    std::cout << "[test_core] 11/11 Проверка медленного интро, затухания и пропуска..." << std::endl;
+    {
+        // Saved zero music/SFX levels must remain zero, including when the
+        // XML attribute is represented by a temporary string.
+        assert(SettingsParsing::Float(std::string("0").c_str(), 0.35f, 0.0f, 1.0f) == 0.0f);
+        assert(std::fabs(SettingsParsing::Float("0.35", 0.8f, 0.0f, 1.0f) - 0.35f) < 0.0001f);
+        assert(SettingsParsing::Float("2", 0.8f, 0.0f, 1.0f) == 1.0f);
+        assert(SettingsParsing::Float("-2", 0.8f, 0.0f, 1.0f) == 0.0f);
+        assert(SettingsParsing::Float("invalid", 0.8f, 0.0f, 1.0f) == 0.8f);
+        assert(SettingsParsing::Float("nan", 0.8f, 0.0f, 1.0f) == 0.8f);
+        assert(SettingsParsing::Float(nullptr, 0.8f, 0.0f, 1.0f) == 0.8f);
+
+        using namespace SplashIntro;
+        assert(std::string(kStages[1].text) == "powered by fall.os");
+        assert(std::string(kStages[2].text) == "CHICKENCUM 2.1");
+        float fullDuration = kExitDuration;
+        for (int stage = 0; stage < kStageCount; ++stage) {
+            const Stage& s = kStages[stage];
+            const int last = static_cast<int>(std::strlen(s.text)) - 1;
+            const float revealEnd = s.glyphDelay + last * s.glyphStagger + s.glyphDuration;
+            assert(s.duration >= 3.5f);
+            assert(s.fadeOutAt - revealEnd >= 0.5f); // the whole line is legible before fading
+            assert(GlyphProgress(stage, 0, 0.0f) == 0.0f);
+            assert(GlyphProgress(stage, last, revealEnd + 0.001f) == 1.0f);
+            assert(StageVisibility(stage, s.fadeOutAt) == 1.0f);
+            assert(StageVisibility(stage, s.duration) == 0.0f);
+            assert(s.sweepAt >= s.glyphDelay && s.sweepAt + s.sweepDuration <= s.fadeOutAt + 0.1f);
+            float previousFade = 1.0f, previousGlyph = 0.0f;
+            for (int sample = 0; sample <= 200; ++sample) {
+                const float time = s.duration * sample / 200.0f;
+                const float fade = StageVisibility(stage, time);
+                const float glyph = GlyphProgress(stage, last, time);
+                assert(fade <= previousFade && fade >= 0.0f);
+                assert(glyph >= previousGlyph && glyph <= 1.0f);
+                previousFade = fade;
+                previousGlyph = glyph;
+            }
+            fullDuration += s.duration;
+        }
+        assert(fullDuration > 15.0f);
+        // Movement covers less distance in each successive equal time interval.
+        assert(EaseOut(0.33f) > EaseOut(0.66f) - EaseOut(0.33f));
+        assert(EaseOut(0.66f) - EaseOut(0.33f) > 1.0f - EaseOut(0.66f));
+
+        Timeline clock;
+        assert(!clock.Advance(kStages[0].duration - 0.01f).stageChanged);
+        const auto next = clock.Advance(0.025f);
+        assert(next.stageChanged && clock.CurrentStage() == 1);
+        assert(std::fabs(clock.StageTime() - 0.015f) < 0.001f); // no lost frame at the boundary
+        clock.Advance(kStages[1].duration - clock.StageTime() + 0.02f);
+        assert(clock.CurrentStage() == 2 && std::fabs(clock.StageTime() - 0.02f) < 0.001f);
+        clock.Advance(kStages[2].duration - clock.StageTime() + 0.20f);
+        assert(clock.IsExiting() && clock.OverlayOpacity() > 0.0f && clock.OverlayOpacity() < 1.0f);
+        const float beforeSkip = clock.OverlayOpacity();
+        clock.Advance(0.0f, true); // skipping the natural fade must not jump
+        assert(std::fabs(clock.OverlayOpacity() - beforeSkip) < 0.0001f);
+        assert(!clock.Advance(kSkipDuration * 0.5f).finished);
+        assert(clock.OverlayOpacity() < beforeSkip);
+        assert(clock.Advance(kSkipDuration * 0.5f + 0.001f).finished);
+
+        for (int stage = 0; stage < kStageCount; ++stage) {
+            Timeline skipped;
+            float start = 0.5f;
+            for (int prev = 0; prev < stage; ++prev) start += kStages[prev].duration;
+            skipped.Advance(start);
+            assert(skipped.CurrentStage() == stage);
+            assert(!skipped.Advance(0.0f, true).finished);
+            assert(skipped.IsExiting() && skipped.OverlayOpacity() == 1.0f);
+            const float beforeMove = skipped.StageTime();
+            assert(!skipped.Advance(0.1f).finished);
+            assert(skipped.StageTime() > beforeMove && skipped.CurrentStage() == stage);
+            assert(skipped.Advance(kSkipDuration + 0.001f).finished);
+        }
+        Timeline skipAtBoundary;
+        skipAtBoundary.Advance(kStages[0].duration - 0.05f);
+        skipAtBoundary.Advance(0.1f, true);
+        assert(skipAtBoundary.CurrentStage() == 0 && skipAtBoundary.StageTime() == kStages[0].duration);
+        assert(skipAtBoundary.Advance(kSkipDuration).finished);
+        Timeline oversizedStep;
+        assert(oversizedStep.Advance(fullDuration + 0.1f).finished);
+        Timeline invalidTime;
+        invalidTime.Advance(-1.0f);
+        invalidTime.Advance(std::nanf(""));
+        assert(invalidTime.StageTime() == 0.0f && invalidTime.Elapsed() == 0.0f);
+        for (float fps : {30.0f, 60.0f, 144.0f}) {
+            Timeline sampled;
+            int changes = 0;
+            bool finished = false;
+            while (!finished && sampled.Elapsed() < fullDuration + 1.0f) {
+                const auto frame = sampled.Advance(1.0f / fps);
+                changes += frame.stageChanged ? 1 : 0;
+                finished = frame.finished;
+            }
+            assert(finished && changes == kStageCount - 1);
+            assert(std::fabs(sampled.Elapsed() - fullDuration) <= 1.0f / fps + 0.002f);
+        }
+        CheckPngFile(dataDir / "Textures/SplashGlow.png", 512, 512);
+        CheckPngFile(dataDir / "Textures/SplashSheen.png", 256, 64);
+        assert(fs::exists(dataDir / "Fonts/BlueHighway.ttf"));
+    }
+
+    std::cout << "[test_core] ВСЕ 11 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
     return 0;
 }

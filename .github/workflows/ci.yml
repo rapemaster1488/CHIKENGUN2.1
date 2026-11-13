@@ -37,6 +37,7 @@ jobs:
       - name: Validate native launchers, XML materials, particle effects & sounds
         run: |
           bash -n build.sh run.sh tools/syntax_check.sh tools/package_linux.sh
+          CHIKENGUN_URHO_TEST_SOURCE=/tmp/urho_ci/1.9.0 python3 tests/test_urho_apple_cpu_patch.py
           python3 tools/gen_sounds.py
           python3 -c '
           import glob, os, xml.etree.ElementTree as ET
@@ -120,8 +121,9 @@ jobs:
         run: |
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y -o Acquire::Retries=3 build-essential cmake git pkg-config python3 \
-            libsdl2-dev libgl-dev libglu1-mesa-dev libx11-dev libxrandr-dev \
-            libxi-dev libxext-dev libxcb1-dev libasound2-dev libpulse-dev libudev-dev
+            libsdl2-dev libgl-dev libegl-dev libglu1-mesa-dev libx11-dev libxrandr-dev \
+            libxi-dev libxext-dev libxcb1-dev libwayland-dev wayland-protocols libxkbcommon-dev \
+            libasound2-dev libpulse-dev libudev-dev
 
       - name: Install macOS dependencies
         if: matrix.os == 'macos-latest'
@@ -131,19 +133,35 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/urho3d-sdk
-          key: urho3d-1.9.0-ci-${{ runner.os }}-${{ runner.arch }}-v2
+          key: urho3d-1.9.0-ci-${{ runner.os }}-${{ runner.arch }}-v3
 
       - name: Build full client on Linux & package tarball
         if: matrix.os == 'ubuntu-latest'
         run: |
           TEX_SIZE=512 ./build.sh -j4
+          config=.cache/urho3d-sdk/include/Urho3D/ThirdParty/SDL/SDL_config.h
+          for driver in VIDEO_DRIVER_X11 VIDEO_DRIVER_WAYLAND AUDIO_DRIVER_ALSA AUDIO_DRIVER_PULSEAUDIO; do
+            grep -Eq "^#define SDL_${driver} 1" "$config"
+          done
+          ./tests/test_sdl_startup.sh "$PWD/build/MyShooter"
           ./tools/package_linux.sh
           test -x build/MyShooter
 
       - name: Build full client on macOS
         if: matrix.os == 'macos-latest'
+        shell: bash
         run: |
-          TEX_SIZE=512 ./build.sh -j4
+          set -o pipefail
+          if ! TEX_SIZE=512 ./build.sh -j4 2>&1 | tee "$RUNNER_TEMP/chikengun-macos-build.log"; then
+            # Surface useful compiler diagnostics in the check annotations too.
+            details="$(grep -iE 'fatal error:|error:|undefined symbols|^ld:|^clang:|CMake Error|Error [0-9]+|ninja:.*failed' "$RUNNER_TEMP/chikengun-macos-build.log" | tail -35 || true)"
+            details+=$'\n--- Last build log lines ---\n'"$(tail -25 "$RUNNER_TEMP/chikengun-macos-build.log")"
+            details="${details//%/%25}"
+            details="${details//$'\r'/%0D}"
+            details="${details//$'\n'/%0A}"
+            printf '::error title=macOS client build failed::%s\n' "$details"
+            exit 1
+          fi
           test -x build/MyShooter
 
       - name: Build full client on Windows (MSVC + OpenGL Urho3D)

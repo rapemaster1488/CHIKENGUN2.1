@@ -24,6 +24,8 @@ nix develop -c ./run.sh
 nix-shell --run ./run.sh
 ```
 
+> В рабочем Git-дереве Flakes видит изменённые файлы, но не новые неотслеживаемые. Перед локальной проверкой Flake добавьте новые исходники и тесты в индекс Git; после обычного коммита это не требуется.
+
 > На NixOS скрипты `run.sh`, `build.sh` и `flake.nix` автоматически добавляют `/run/opengl-driver/lib`, `/run/opengl-driver-32/lib`, SDL2, X11, Mesa, ALSA, PulseAudio и udev в `LD_LIBRARY_PATH` и пробрасывают `CHIKENGUN_DATA_DIR` / `CHIKENGUN_COREDATA_DIR`.
 
 ---
@@ -47,12 +49,36 @@ cd CHIKENGUN2.1
 ./run.sh
 ```
 
+### Диагностика SDL на Linux
+
+```bash
+./run.sh --diagnose-sdl
+# Для Flakes та же проверка в установленном клиенте:
+nix run . -- --diagnose-sdl
+```
+
+Проверка показывает версию и **скомпилированные в используемый Urho3D SDL** видео- и аудиодрайверы, значения `DISPLAY`, `WAYLAND_DISPLAY`, `XDG_RUNTIME_DIR`, `SDL_VIDEODRIVER`, `SDL_AUDIODRIVER`, затем пробует подключиться к дисплею, создать небольшое скрытое окно с OpenGL и открыть приостановленное аудиоустройство. Если выбран драйвер `disk`, аудиофайл не открывается и не перезаписывается при проверке. Успех этой минимальной OpenGL-проверки не гарантирует поддержку всех графических настроек игры. Код возврата ненулевой при ошибке дисплея/OpenGL; отсутствие звука не препятствует запуску окна.
+
+- При `No available video device` проверьте, что игра запущена **в вашей X11/Wayland-сессии**, доступен соответствующий сокет и авторизация X11 (`XAUTHORITY`), а для Wayland доступны `XDG_RUNTIME_DIR` и библиотеки клиента. В SSH нужен настроенный X11 forwarding, в WSL — работающий WSLg, в контейнере — корректно проброшенный графический сеанс и OpenGL. Если `DISPLAY`/`WAYLAND_DISPLAY` отсутствуют, сами по себе переменные не создадут дисплей. Игра не включает dummy/offscreen-видеодрайвер вместо окна.
+- Если SDL не содержит `x11` или `wayland`, либо не содержит `alsa`/`pulseaudio`, установите dev-пакеты и **пересоберите ранее закэшированный** локальный SDK (обычный `--rebuild` пересобирает только игру):
+
+  ```bash
+  ./run.sh --install-deps --rebuild-urho3d
+  ```
+
+  Для внешнего SDK (`URHO3D_HOME` или системного пакета) используйте его способ пересборки; локальный флаг внешний SDK не заменяет. Nix Flake собирает свой SDK в store; классический `nix-shell` содержит зависимости для сборки локального кэша. Для намеренной сборки без аудиозаголовков можно использовать `CHIKENGUN_ALLOW_SILENT_BUILD=1`, но звук в таком SDL может отсутствовать.
+- Если backend скомпилирован, но недоступен сервер звука, устройство или runtime-библиотека, Linux-клиент сообщает об этом и продолжает без звука. Для намеренно тихого запуска используйте `./run.sh -nosound`; при неудаче инициализации SDL может использовать **только** dummy-аудиодрайвер, если он был собран.
+- Заранее выставленные `SDL_VIDEODRIVER` / `SDL_AUDIODRIVER` ограничивают выбор SDL. Если значения устарели, попробуйте `env -u SDL_VIDEODRIVER -u SDL_AUDIODRIVER ./run.sh --diagnose-sdl`. Принудительный `SDL_VIDEODRIVER=x11` имеет смысл только при рабочем X11/XWayland и скомпилированном `x11`; `wayland` — при работающем Wayland и скомпилированном backend.
+
 ### Полезные флаги (`./build.sh` и `./run.sh`)
 
 - `./run.sh --4k` / `./build.sh --4k` — генерация полного 4096×4096 набора PBR-текстур + 3840×2160 `LoadingBg4K.png` (по умолчанию `TEX_SIZE=1024`).
-- `./build.sh --install-deps` — автоустановка системных пакетов сборки.
-- `./build.sh --tests-only` — сборка и прогон модульных C++17 тестов (`test_core`) без Urho3D.
-- `URHO3D_HOME=/путь/к/sdk ./build.sh` — использовать уже установленный Urho3D SDK.
+- `./build.sh --install-deps` — автоустановка системных пакетов сборки, включая рекомендованные ALSA/PulseAudio и Wayland headers.
+- `./run.sh --rebuild-urho3d` — пересобрать **локальный** кэшированный Urho3D SDK после установки недостающих драйверов и затем клиент; внешний `URHO3D_HOME` эта команда не меняет. Для ограничения параллелизма можно добавить `--jobs 4`.
+- `./run.sh --diagnose-sdl` — проверить привязанный к клиенту SDL и реальное подключение к дисплею (Linux).
+- `./run.sh -nosound` — отключить звук; на Linux также не пытается открыть физическое устройство.
+- `./build.sh --tests-only` — сборка и прогон модульных C++17 тестов (`test_core` и Linux SDL-policy) без Urho3D.
+- `URHO3D_HOME=/путь/к/sdk ./build.sh` — использовать уже установленный Urho3D SDK. Если в указанном SDK отсутствуют заголовки или библиотека, сборка остановится, а не смешает его с другим SDK.
 - `./tools/package_linux.sh` — собрать автономный переносимый архив `build/release/CHIKENGUN-2.5-Linux-<arch>.tar.gz`.
 
 ---
@@ -82,10 +108,14 @@ cd CHIKENGUN2.1
 
 ## 4. Универсальная сборка через CMake (Linux / NixOS / macOS / Windows)
 
+Сначала установите Urho3D SDK или соберите локальный через `./build.sh` (в Windows — `build.ps1`). Затем укажите путь к SDK:
+
 ```bash
-cmake -S . -B build-desktop -DBUILD_GAME=ON -DAUTO_FETCH_URHO3D=ON
+cmake -S . -B build-desktop -DBUILD_GAME=ON -DAUTO_FETCH_URHO3D=OFF -DURHO3D_HOME="$PWD/.cache/urho3d-sdk"
 cmake --build build-desktop --config Release -j
 ```
+
+В PowerShell используйте `-DURHO3D_HOME="$PWD/.cache/urho3d-sdk"` или путь к вашему SDK. При переходе на другой SDK используйте новый каталог сборки: CMake кэширует найденные пути к заголовкам и библиотеке. Urho3D 1.9.0 ожидает отдельную сборку из собственного корня; существующий путь `AUTO_FETCH_URHO3D=ON` через `FetchContent` может не сконфигурироваться (в частности, с ошибкой `UrhoCommon`). Локальный SDK, скрипты и Flake собирают Urho3D отдельно.
 
 Только headless-тесты (без OpenGL/SDL2/Urho3D):
 
@@ -99,7 +129,7 @@ ctest --test-dir build-tests -C Release --output-on-failure
 
 ## Что проверять вручную в клиенте
 
-1. **Интро 2.5.6**: `koch.studios` → `powered by fall.os` → `CHICHKENCUM 2.1` под `KochSplashTheme.wav` (скип: клик / `Space` / `Enter` / `Esc`).
+1. **Интро**: `koch.studios` → `powered by fall.os` → `CHICKENCUM 2.1` под `KochSplashTheme.wav` (около 15,5 с; скип: клик / `Space` / `Enter` / `Esc`). Проверь плавное свечение и ресайз окна на каждой стадии.
 2. **Меню**: `W/S` выбирают пункт, `Enter` запускает, `Esc` выходит.
 3. **Полигон и Арена 2.5 «ПЕРО СУДЬБЫ»**:
    - Неоновый ритуальный круг с взлётными полосами в центре, 4 hazard-ежа, 2 северные/южные арки, вентили на трубах.

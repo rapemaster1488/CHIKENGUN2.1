@@ -7,6 +7,10 @@
 #   --install-deps   Поставить системные пакеты / войти в Nix shell
 #   --4k             Пересобрать PBR текстуры в 4096x4096
 #   --rebuild        Принудительно пересобрать клиент
+#   --rebuild-urho3d Пересобрать кэшированный локальный Urho3D SDK и клиент
+#   --diagnose-sdl   Проверить SDL-драйверы, дисплей, OpenGL и аудио (Linux)
+#   -nosound         Запустить без звука
+#   -j N / --jobs N  Ограничить число потоков при пересборке
 # ============================================================================
 if [ -z "${BASH_VERSION:-}" ]; then exec bash "$0" "$@"; fi
 set -euo pipefail
@@ -28,6 +32,9 @@ fi
 
 FORCE_BUILD=0
 INSTALL_DEPS=0
+REBUILD_URHO3D=0
+DIAGNOSE_SDL=0
+USER_URHO_HOME="${URHO3D_HOME:-}"
 BUILD_ARGS=()
 APP_ARGS=()
 
@@ -48,6 +55,39 @@ while [ "$#" -gt 0 ]; do
             FORCE_BUILD=1
             shift
             ;;
+        --rebuild-urho3d)
+            BUILD_ARGS+=("$1")
+            FORCE_BUILD=1
+            REBUILD_URHO3D=1
+            shift
+            ;;
+        --diagnose-sdl)
+            APP_ARGS+=("$1")
+            DIAGNOSE_SDL=1
+            shift
+            ;;
+        -j|--jobs)
+            if [[ ! "${2:-}" =~ ^[1-9][0-9]*$ ]]; then
+                echo "ОШИБКА: $1 требует положительное число потоков." >&2
+                exit 2
+            fi
+            BUILD_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        -j?*|--jobs=*)
+            JOBS_VALUE="${1#-j}"
+            if [[ "$1" == --jobs=* ]]; then JOBS_VALUE="${1#--jobs=}"; fi
+            if [[ ! "$JOBS_VALUE" =~ ^[1-9][0-9]*$ ]]; then
+                echo "ОШИБКА: $1 требует положительное число потоков." >&2
+                exit 2
+            fi
+            BUILD_ARGS+=("$1")
+            shift
+            ;;
+        -h|--help)
+            sed -n '2,14p' "$0" | sed 's/^# \?//'
+            exit 0
+            ;;
         *)
             APP_ARGS+=("$1")
             shift
@@ -55,7 +95,8 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
-if [ -z "${URHO3D_HOME:-}" ] && [ -f "$ROOT/build/.urho_sdk_home" ]; then
+# A remembered external SDK must not prevent an explicit local SDK rebuild.
+if [ -z "${URHO3D_HOME:-}" ] && [ "$REBUILD_URHO3D" -eq 0 ] && [ -f "$ROOT/build/.urho_sdk_home" ]; then
     saved_urho_home="$(cat "$ROOT/build/.urho_sdk_home" 2>/dev/null || true)"
     [ -n "$saved_urho_home" ] && [ -d "$saved_urho_home" ] && export URHO3D_HOME="$saved_urho_home"
 fi
@@ -69,9 +110,10 @@ bin_missing_video_driver() {
     local bin="$1"
     [ "$OS_NAME" = "Linux" ] && [ -x "$bin" ] && [ "${URHO3D_ALLOW_HEADLESS:-0}" != "1" ] || return 1
     if command -v nm >/dev/null 2>&1; then
-        # Если в бинарник вшит статический SDL_Init, но нет ни одного видеодрайвера (X11/Wayland/KMSDRM) — сборка битая.
-        if nm -g --defined-only "$bin" 2>/dev/null | grep -qE ' T _?SDL_Init$'; then
-            if ! nm -g --defined-only "$bin" 2>/dev/null | grep -qE ' [A-Za-z] _?(X11_bootstrap|Wayland_bootstrap|KMSDRM_bootstrap)$'; then
+        # Read all of nm's output: grep -q with pipefail can SIGPIPE nm.
+        # Only a positively identified static, bundled SDL can be checked here.
+        if nm -g --defined-only "$bin" 2>/dev/null | grep -E ' [TW] _?SDL_Init$' >/dev/null; then
+            if ! nm -g --defined-only "$bin" 2>/dev/null | grep -E ' [A-Za-z] _?(X11_bootstrap|Wayland_bootstrap|KMSDRM_bootstrap)$' >/dev/null; then
                 return 0
             fi
         fi
@@ -82,7 +124,7 @@ bin_missing_video_driver() {
 NEED_BUILD="$FORCE_BUILD"
 if [ ! -x "$TARGET_BIN" ] || [ ! -f "$ROOT/build/Data/Textures/Skybox4K.xml" ] || [ ! -f "$ROOT/build/Data/Textures/BanyaBirchDiffuse.png" ] || [ ! -d "$ROOT/build/CoreData/Shaders" ]; then
     NEED_BUILD=1
-elif bin_missing_video_driver "$TARGET_BIN"; then
+elif [ "$DIAGNOSE_SDL" -eq 0 ] && bin_missing_video_driver "$TARGET_BIN"; then
     echo "[CHIKENGUN 2.5] Обнаружен бинарник, собранный с headless-сборкой Urho3D (без X11/Wayland видеодрайверов)."
     echo "                 Запускаю пересборку с полноценным Urho3D SDK..."
     NEED_BUILD=1
@@ -121,16 +163,52 @@ if [ "$NEED_BUILD" -eq 1 ]; then
     TARGET_BIN="$ROOT/build/MyShooter${EXE_EXT}"
 fi
 
+# Keep the declared order: an explicitly selected SDK must not be shadowed by
+# another copy with the same shared-library name in a cache or home directory.
+RUNTIME_PATHS=""
+append_runtime_dir() {
+    local dir="$1"
+    if [ -n "$dir" ] && [ -d "$dir" ]; then
+        RUNTIME_PATHS="${RUNTIME_PATHS:+$RUNTIME_PATHS:}$dir"
+    fi
+}
+# Prefer the exact library directory recorded by the successful build, unless
+# the user has since explicitly selected a different SDK.
+if [ -f "$ROOT/build/.urho_libdir" ]; then
+    saved_libdir="$(cat "$ROOT/build/.urho_libdir" 2>/dev/null || true)"
+    if [ -z "$USER_URHO_HOME" ]; then
+        append_runtime_dir "$saved_libdir"
+    else
+        user_home_real="$(cd "$USER_URHO_HOME" 2>/dev/null && pwd -P || true)"
+        if [ -n "$user_home_real" ]; then
+            case "$saved_libdir/" in "$user_home_real"/*) append_runtime_dir "$saved_libdir" ;; esac
+        fi
+    fi
+fi
 if [ "$OS_NAME" = "Linux" ]; then
     # Драйверы OpenGL/Vulkan на NixOS живут в /run/opengl-driver/lib + локальные профили Nix
     for ld in \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib/Urho3D}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib64}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib64/Urho3D}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/build/lib}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/build/lib/Urho3D}"
+    do
+        append_runtime_dir "$ld"
+    done
+    if [ -n "${URHO3D_HOME:-}" ]; then
+        for ld in "$URHO3D_HOME"/lib/*-linux-* "$URHO3D_HOME"/lib/*-linux-*/Urho3D; do
+            append_runtime_dir "$ld"
+        done
+    fi
+    for ld in \
+        "$ROOT/.cache/urho3d-sdk/lib" \
+        "$ROOT/.cache/urho3d-sdk/lib/Urho3D" \
+        "$ROOT/.cache/urho3d-sdk/lib64" \
+        "$ROOT/.cache/urho3d-sdk/lib64/Urho3D" \
         "/run/opengl-driver/lib" \
         "/run/opengl-driver-32/lib" \
-        "$ROOT/.cache/urho3d-sdk/lib" \
-        "$ROOT/.cache/urho3d-sdk/lib64" \
-        "${URHO3D_HOME:-}/lib" \
-        "${URHO3D_HOME:-}/lib64" \
-        "${URHO3D_HOME:-}/build/lib" \
         "$HOME/urho3d-build/out/lib" \
         "$HOME/urho3d-build/lib" \
         "$HOME/urho3d/build/lib" \
@@ -141,44 +219,35 @@ if [ "$OS_NAME" = "Linux" ]; then
         "$HOME/.nix-profile/lib" \
         "/run/current-system/sw/lib"
     do
-        [ -n "$ld" ] && [ -d "$ld" ] && export LD_LIBRARY_PATH="${ld}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        append_runtime_dir "$ld"
     done
+    if [ -n "$RUNTIME_PATHS" ]; then
+        export LD_LIBRARY_PATH="${RUNTIME_PATHS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
 elif [ "$OS_NAME" = "Darwin" ]; then
     for ld in \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib/Urho3D}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/build/lib}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/build/lib/Urho3D}" \
         "$ROOT/.cache/urho3d-sdk/lib" \
-        "${URHO3D_HOME:-}/lib" \
-        "${URHO3D_HOME:-}/build/lib" \
+        "$ROOT/.cache/urho3d-sdk/lib/Urho3D" \
         "$HOME/urho3d/build/lib" \
         "/opt/homebrew/lib" \
         "/usr/local/lib"
     do
-        [ -n "$ld" ] && [ -d "$ld" ] && export DYLD_LIBRARY_PATH="${ld}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+        append_runtime_dir "$ld"
     done
+    if [ -n "$RUNTIME_PATHS" ]; then
+        export DYLD_LIBRARY_PATH="${RUNTIME_PATHS}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    fi
 fi
 
 export CHIKENGUN_DATA_DIR="${CHIKENGUN_DATA_DIR:-$ROOT/build/Data}"
 export CHIKENGUN_COREDATA_DIR="${CHIKENGUN_COREDATA_DIR:-$ROOT/build/CoreData}"
 
-if [ "$OS_NAME" = "Linux" ]; then
-    if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ] && [ "${SDL_VIDEODRIVER:-}" != "dummy" ]; then
-        echo "[CHIKENGUN 2.5] ОШИБКА: не найдена графическая сессия (переменные DISPLAY и WAYLAND_DISPLAY пусты)."
-        echo "  Запустите игру из графического терминала рабочего стола или укажите DISPLAY=:0 ./run.sh"
-        exit 1
-    fi
-    if [ -x "$TARGET_BIN" ] && command -v nm >/dev/null 2>&1; then
-        if nm -g --defined-only "$TARGET_BIN" 2>/dev/null | grep -qE ' T _?SDL_Init$'; then
-            has_x11=0; has_wl=0
-            nm -g --defined-only "$TARGET_BIN" 2>/dev/null | grep -qE ' [A-Za-z] _?X11_bootstrap$' && has_x11=1
-            nm -g --defined-only "$TARGET_BIN" 2>/dev/null | grep -qE ' [A-Za-z] _?Wayland_bootstrap$' && has_wl=1
-            if [ "${SDL_VIDEODRIVER:-}" = "wayland" ] && [ "$has_wl" -eq 0 ] && [ "$has_x11" -eq 1 ] && [ -n "${DISPLAY:-}" ]; then
-                echo "[CHIKENGUN 2.5] SDL собран без Wayland-драйвера — переключаю SDL_VIDEODRIVER=x11 (через XWayland)."
-                export SDL_VIDEODRIVER=x11
-            elif [ -z "${SDL_VIDEODRIVER:-}" ] && [ -n "${WAYLAND_DISPLAY:-}" ] && [ -z "${DISPLAY:-}" ] && [ "$has_wl" -eq 1 ]; then
-                export SDL_VIDEODRIVER=wayland
-            fi
-        fi
-    fi
-fi
+# The client performs SDL diagnostics, including when no display is present.
+# Preserve any SDL_VIDEODRIVER explicitly selected by the user.
 
 cd "$(dirname "$TARGET_BIN")"
 exec "$TARGET_BIN" ${APP_ARGS[@]+"${APP_ARGS[@]}"}
