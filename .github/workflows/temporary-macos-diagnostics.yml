@@ -1,0 +1,25 @@
+name: Temporary macOS build diagnostics
+on:
+  push:
+    branches: [arena/0ef611e0-chikengun2-1]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect the previous macOS compilation error
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! gh api "repos/${GITHUB_REPOSITORY}/actions/jobs/132098080427/logs" > "$RUNNER_TEMP/prior-macos.log" 2>/dev/null; then
+            echo '::error::Could not retrieve the previous macOS job log.'
+            exit 1
+          fi
+          details="$(grep -i -E -B 2 -A 3 'fatal error:|error:|undefined symbols|CMake Error' "$RUNNER_TEMP/prior-macos.log" | tail -70 || true)"
+          details="${details:-No compiler error matched.}"
+          details="${details//%/%25}"
+          details="${details//$'\r'/%0D}"
+          details="${details//$'\n'/%0A}"
+          printf '::warning title=Previous macOS build error::%s\n' "$details"
