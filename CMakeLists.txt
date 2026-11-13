@@ -26,6 +26,33 @@ else()
     target_compile_options(test_core PRIVATE -O2 -Wall -Wextra -UNDEBUG)
 endif()
 add_test(NAME CorePhysicsAndAssets COMMAND test_core $<TARGET_FILE:gen_textures_4k>)
+set_tests_properties(CorePhysicsAndAssets PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    ENVIRONMENT "CHIKENGUN_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Data"
+)
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # Test all startup decisions without SDL, a display server or sound hardware.
+    add_executable(test_sdl_policy tests/test_sdl_policy.cpp)
+    target_include_directories(test_sdl_policy PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/tests/fake")
+    target_compile_options(test_sdl_policy PRIVATE -O2 -Wall -Wextra -UNDEBUG)
+    add_test(NAME SDLStartupPolicy COMMAND test_sdl_policy)
+
+    find_program(BASH_EXECUTABLE bash)
+    if(BASH_EXECUTABLE)
+        add_test(NAME BuildScriptSafety
+            COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_build_scripts.sh")
+        set_tests_properties(BuildScriptSafety PROPERTIES TIMEOUT 60)
+
+        find_program(PKG_CONFIG_FOR_LINK_TEST pkg-config)
+        if(PKG_CONFIG_FOR_LINK_TEST)
+            add_test(NAME CMakeSDLLinkage
+                COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cmake_sdl_linkage.sh"
+                        "${CMAKE_COMMAND}" "${CMAKE_CXX_COMPILER}" "${PKG_CONFIG_FOR_LINK_TEST}" "${CMAKE_AR}")
+            set_tests_properties(CMakeSDLLinkage PROPERTIES TIMEOUT 90)
+        endif()
+    endif()
+endif()
 
 # 3. Цель генерации PBR текстур (1024 быстро по умолчанию, 4096 для 4K ULTRA)
 set(TEX_SIZE "1024" CACHE STRING "Разрешение процедурных PBR текстур (1024..4096)")
@@ -44,8 +71,8 @@ set(URHO3D_HOME "" CACHE PATH "Путь к установленному Urho3D S
 if(BUILD_GAME)
     set(URHO_HINTS
         "${URHO3D_HOME}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/.cache/urho3d-sdk"
         "$ENV{URHO3D_HOME}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/.cache/urho3d-sdk"
         "$ENV{HOME}/urho3d/build"
         "$ENV{HOME}/urho3d-build/out"
         "$ENV{HOME}/urho3d-build"
@@ -57,6 +84,35 @@ if(BUILD_GAME)
         "/usr"
     )
 
+    set(_urho_lib_suffixes lib lib/Urho3D lib64 lib64/Urho3D build/lib build/lib/Urho3D)
+    if(CMAKE_LIBRARY_ARCHITECTURE)
+        list(APPEND _urho_lib_suffixes "lib/${CMAKE_LIBRARY_ARCHITECTURE}" "lib/${CMAKE_LIBRARY_ARCHITECTURE}/Urho3D")
+    endif()
+
+    # A user-selected SDK should win over CMAKE_PREFIX_PATH and cached SDKs.
+    # Respect explicit URHO3D_INCLUDE_DIR / URHO3D_LIBRARY cache overrides.
+    set(_explicit_urho_home "${URHO3D_HOME}")
+    if(NOT _explicit_urho_home AND DEFINED ENV{URHO3D_HOME})
+        set(_explicit_urho_home "$ENV{URHO3D_HOME}")
+    endif()
+    if(_explicit_urho_home)
+        find_path(URHO3D_INCLUDE_DIR
+            NAMES Urho3D/Engine/Application.h
+            HINTS "${_explicit_urho_home}"
+            PATH_SUFFIXES include build/include include/Urho3D
+            NO_DEFAULT_PATH
+        )
+        find_library(URHO3D_LIBRARY
+            NAMES Urho3D Urho3D_d
+            HINTS "${_explicit_urho_home}"
+            PATH_SUFFIXES ${_urho_lib_suffixes}
+            NO_DEFAULT_PATH
+        )
+        if(NOT URHO3D_INCLUDE_DIR OR NOT URHO3D_LIBRARY)
+            message(FATAL_ERROR "URHO3D_HOME does not contain both Urho3D headers and a library: ${_explicit_urho_home}. Fix the SDK path or specify URHO3D_INCLUDE_DIR and URHO3D_LIBRARY explicitly.")
+        endif()
+    endif()
+
     find_path(URHO3D_INCLUDE_DIR
         NAMES Urho3D/Engine/Application.h
         HINTS ${URHO_HINTS}
@@ -66,7 +122,7 @@ if(BUILD_GAME)
     find_library(URHO3D_LIBRARY
         NAMES Urho3D Urho3D_d
         HINTS ${URHO_HINTS}
-        PATH_SUFFIXES lib lib/Urho3D lib64 lib64/Urho3D build/lib build/lib/Urho3D
+        PATH_SUFFIXES ${_urho_lib_suffixes}
     )
 
     find_package(PkgConfig QUIET)
@@ -75,6 +131,9 @@ if(BUILD_GAME)
         set(_extra_pc_dirs "")
         if(URHO3D_HOME)
             list(APPEND _extra_pc_dirs "${URHO3D_HOME}/lib/pkgconfig" "${URHO3D_HOME}/lib64/pkgconfig")
+        endif()
+        if(DEFINED ENV{URHO3D_HOME} AND NOT "$ENV{URHO3D_HOME}" STREQUAL "")
+            list(APPEND _extra_pc_dirs "$ENV{URHO3D_HOME}/lib/pkgconfig" "$ENV{URHO3D_HOME}/lib64/pkgconfig")
         endif()
         list(APPEND _extra_pc_dirs
             "${CMAKE_CURRENT_SOURCE_DIR}/.cache/urho3d-sdk/lib/pkgconfig"
@@ -86,14 +145,30 @@ if(BUILD_GAME)
             "$ENV{HOME}/.nix-profile/lib/pkgconfig"
             "/run/current-system/sw/lib/pkgconfig"
         )
+        # Preserve priority: an explicitly selected SDK must precede the
+        # repository cache, not be reversed by repeated prepends.
+        set(_existing_pc_dirs "")
         foreach(_pcd IN LISTS _extra_pc_dirs)
             if(EXISTS "${_pcd}")
-                set(ENV{PKG_CONFIG_PATH} "${_pcd}:$ENV{PKG_CONFIG_PATH}")
+                list(APPEND _existing_pc_dirs "${_pcd}")
             endif()
         endforeach()
+        if(_existing_pc_dirs)
+            list(JOIN _existing_pc_dirs ":" _extra_pc_path)
+            set(ENV{PKG_CONFIG_PATH} "${_extra_pc_path}:$ENV{PKG_CONFIG_PATH}")
+        endif()
         pkg_check_modules(URHO3D_PC QUIET Urho3D)
         if(URHO3D_PC_FOUND AND NOT URHO3D_INCLUDE_DIR)
             find_path(URHO3D_INCLUDE_DIR NAMES Urho3D/Engine/Application.h HINTS ${URHO3D_PC_INCLUDE_DIRS})
+        endif()
+        if(URHO3D_PC_FOUND AND URHO3D_LIBRARY AND URHO3D_PC_LIBDIR)
+            get_filename_component(_selected_lib_dir "${URHO3D_LIBRARY}" DIRECTORY)
+            get_filename_component(_selected_lib_dir "${_selected_lib_dir}" REALPATH)
+            get_filename_component(_pc_lib_dir "${URHO3D_PC_LIBDIR}" REALPATH)
+            if(NOT _selected_lib_dir STREQUAL _pc_lib_dir)
+                message(STATUS "Ignoring Urho3D.pc from ${_pc_lib_dir}: selected library is in ${_selected_lib_dir}")
+                set(URHO3D_PC_FOUND FALSE)
+            endif()
         endif()
     endif()
 
@@ -191,6 +266,14 @@ if(BUILD_GAME)
             add_executable(MyShooter src/MyApp.cpp)
         endif()
 
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            if(BASH_EXECUTABLE)
+                add_test(NAME SDLStartupDiagnostics
+                    COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_sdl_startup.sh" $<TARGET_FILE:MyShooter>)
+                set_tests_properties(SDLStartupDiagnostics PROPERTIES TIMEOUT 30)
+            endif()
+        endif()
+
         if(MSVC)
             target_compile_options(MyShooter PRIVATE /O2 /W3 /EHsc /bigobj /MP /D_CRT_SECURE_NO_WARNINGS)
         else()
@@ -250,6 +333,34 @@ if(BUILD_GAME)
         if(NOT _URHO_IS_FETCHED AND SDL2_LIBRARIES)
             if(NOT EXISTS "${URHO3D_INCLUDE_DIR}/Urho3D/ThirdParty/SDL/SDL_joystick.h")
                 set(_NEED_SYS_SDL2 TRUE)
+            elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+                # Official SDKs embed SDL, but some ship the same headers while
+                # linking SDL separately. Inspect the actual library so that
+                # preflight uses Urho3D's instance rather than a second SDL.
+                set(_urho_symbols_known FALSE)
+                set(_urho_exports_sdl FALSE)
+                if(CMAKE_NM)
+                    if(URHO3D_LIBRARY MATCHES "\\.a$")
+                        set(_nm_args -g --defined-only)
+                    else()
+                        set(_nm_args -D --defined-only)
+                    endif()
+                    execute_process(
+                        COMMAND "${CMAKE_NM}" ${_nm_args} "${URHO3D_LIBRARY}"
+                        RESULT_VARIABLE _nm_status OUTPUT_VARIABLE _urho_symbols ERROR_QUIET
+                    )
+                    if(_nm_status EQUAL 0)
+                        set(_urho_symbols_known TRUE)
+                        if(_urho_symbols MATCHES "[ \t][TW] _?SDL_Init(@[^ \r\n]*)?([\r\n]|$)")
+                            set(_urho_exports_sdl TRUE)
+                        endif()
+                    endif()
+                    unset(_urho_symbols)
+                endif()
+                if((_urho_symbols_known AND NOT _urho_exports_sdl) OR
+                   (NOT _urho_symbols_known AND NOT URHO3D_LIBRARY MATCHES "\\.a$"))
+                    set(_NEED_SYS_SDL2 TRUE)
+                endif()
             endif()
         endif()
         if(_NEED_SYS_SDL2 AND SDL2_INCLUDE_DIRS)
@@ -261,6 +372,9 @@ if(BUILD_GAME)
             Threads::Threads
         )
         if(_NEED_SYS_SDL2)
+            if(SDL2_LIBRARY_DIRS)
+                target_link_directories(MyShooter PRIVATE ${SDL2_LIBRARY_DIRS})
+            endif()
             target_link_libraries(MyShooter PRIVATE ${SDL2_LIBRARIES})
         endif()
 

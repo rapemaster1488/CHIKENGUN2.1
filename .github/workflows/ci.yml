@@ -120,8 +120,9 @@ jobs:
         run: |
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y -o Acquire::Retries=3 build-essential cmake git pkg-config python3 \
-            libsdl2-dev libgl-dev libglu1-mesa-dev libx11-dev libxrandr-dev \
-            libxi-dev libxext-dev libxcb1-dev libasound2-dev libpulse-dev libudev-dev
+            libsdl2-dev libgl-dev libegl-dev libglu1-mesa-dev libx11-dev libxrandr-dev \
+            libxi-dev libxext-dev libxcb1-dev libwayland-dev wayland-protocols libxkbcommon-dev \
+            libasound2-dev libpulse-dev libudev-dev
 
       - name: Install macOS dependencies
         if: matrix.os == 'macos-latest'
@@ -131,12 +132,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/urho3d-sdk
-          key: urho3d-1.9.0-ci-${{ runner.os }}-${{ runner.arch }}-v2
+          key: urho3d-1.9.0-ci-${{ runner.os }}-${{ runner.arch }}-v3
 
       - name: Build full client on Linux & package tarball
         if: matrix.os == 'ubuntu-latest'
         run: |
           TEX_SIZE=512 ./build.sh -j4
+          config=.cache/urho3d-sdk/include/Urho3D/ThirdParty/SDL/SDL_config.h
+          for driver in VIDEO_DRIVER_X11 VIDEO_DRIVER_WAYLAND AUDIO_DRIVER_ALSA AUDIO_DRIVER_PULSEAUDIO; do
+            grep -Eq "^#define SDL_${driver} 1" "$config"
+          done
+          ./tests/test_sdl_startup.sh "$PWD/build/MyShooter"
           ./tools/package_linux.sh
           test -x build/MyShooter
 

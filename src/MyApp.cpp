@@ -108,6 +108,9 @@
 #include "BanyaSim.h"
 #include "CasinoSim.h"
 #include "ArcadeGames.h"
+#include "SplashIntro.h"
+#include "SDLStartup.h"
+#include "SettingsParsing.h"
 
 #include <Urho3D/IO/Log.h>
 #include <Urho3D/IO/File.h>
@@ -679,6 +682,7 @@ private:
     Vector<Texture*> anisoTextures_;
     float sfxVolume_ = 0.8f;
     float musicVolume_ = 0.35f;
+    bool disableStartupAudio_ = false; // SDL preflight found no usable output device
     SharedPtr<UIElement> mainMenuPanel_;
     Vector<SharedPtr<Text>> mainMenuItems_;
     // Элементы меню для анимации (заголовок, подзаголовок, плашка, подсказка, частицы)
@@ -697,6 +701,7 @@ private:
     IntVector2 goBasePos_;   bool goBasePosSet_ = false;   // база для пульсации GAME OVER
     IntVector2 menuTitleBase_, menuPlateBase_, menuBarBase_;
     bool menuBasesSet_ = false;                              // базы параллакса меню
+    float menuIntroTimer_ = 2.0f;                           // мягкое появление после загрузки
     Vector<UIElement*> menuRows_;                            // подложки строк меню (MenuRow0..3)
     SharedPtr<UIElement> settingsPanel_;
     Vector<SharedPtr<Text>> settingsItems_;
@@ -1173,24 +1178,39 @@ private:
     Vector<SharedPtr<Text>> loadingCheckRows_;
     Vector<String> loadSteps_;
 
-    // === 2.5.6 SPLASH INTRO: koch.studios -> powered by fall.os -> CHICHKENCUM 2.1 ===
+    // === Кинематографичное вступление: koch.studios -> fall.os -> CHICKENCUM 2.1 ===
     bool splashActive_ = false;
-    int splashStage_ = 0;
-    float splashTimer_ = 0.0f;
+    SplashIntro::Timeline splashTimeline_;
     SharedPtr<UIElement> splashPanel_;
-    SharedPtr<Text> splashText_;
+    SharedPtr<UIElement> splashGlyphGlowLayer_;
+    SharedPtr<UIElement> splashGlyphLayer_;
+    SharedPtr<BorderImage> splashBackground_;
+    SharedPtr<BorderImage> splashGlow_;
+    SharedPtr<BorderImage> splashCoreGlow_;
+    SharedPtr<BorderImage> splashSheen_;
+    SharedPtr<BorderImage> splashLineGlow_;
     SharedPtr<BorderImage> splashLine_;
+    SharedPtr<Text> splashMeasure_;
+    SharedPtr<Text> splashHint_;
+    SharedPtr<Texture2D> splashGlowTexture_;
+    Font* splashTitleFont_ = nullptr;       // ресурс принадлежит ResourceCache
     SharedPtr<Scene> splashScene_;
     SharedPtr<Node> kochMusicNode_;
     SoundSource* kochThemeSrc_ = nullptr;   // компонент временной сцены — владеется нодой
     SoundSource* splashSfxSrc_ = nullptr;
-    SharedPtr<BorderImage> splashGlow_;
-    SharedPtr<BorderImage> splashSheen_;
-    String splashFullText_;                 // полный текст стадии (посимвольное открытие)
-    SharedPtr<Text> splashMeasure_;         // скрытый измеритель ширины строки
-    Vector<SharedPtr<Text>> splashGlyphs_;  // посимвольно: ни одного скачка
-    Vector<Vector2> splashGlyphBase_;       // абсолютные базовые позиции глифов
-    Vector<int> splashGlyphIndex_;          // исходные индексы глифов (волна задержки)
+    String splashFullText_;
+    Vector<SharedPtr<Text>> splashGlyphs_;
+    Vector<SharedPtr<BorderImage>> splashGlyphHalos_;
+    Vector<Vector2> splashGlyphBase_;
+    Vector<float> splashGlyphWidths_;
+    Vector<int> splashGlyphIndex_;
+    Vector<SharedPtr<BorderImage>> splashMotes_;
+    float splashTextLeft_ = 0.0f;
+    float splashTextWidth_ = 0.0f;
+    int splashTextY_ = 0;
+    int splashTextHeight_ = 0;
+    int splashFontSize_ = 0;
+    int splashLineY_ = 0;
 
     // Быстрый загрузочный оверлей десантирования при входе в режим (АРЕНА / ТИР)
     bool deployActive_ = false;
@@ -1204,7 +1224,8 @@ private:
     SharedPtr<Text> deployTipText_;
 
 public:
-    MyApp(Context* context) : Application(context) {}
+    MyApp(Context* context, bool disableStartupAudio = false)
+        : Application(context), disableStartupAudio_(disableStartupAudio) {}
 
     // Ограничители временных FX. Взрывная волна или длинная очередь могут
     // породить сотни узлов за секунду; старые эффекты удаляем сразу, чтобы
@@ -1349,7 +1370,10 @@ public:
         engineParameters_[EP_MONITOR] = Max(0, gfxMonitorIdx_);
         engineParameters_[EP_TRIPLE_BUFFER] = true;
         engineParameters_[EP_VSYNC] = gfxVsync_;
-        engineParameters_[EP_SOUND] = true;
+        // Preserve the engine's -nosound flag; a failed SDL audio preflight is
+        // also nonfatal and disables sound rather than preventing the window.
+        if (disableStartupAudio_) engineParameters_[EP_SOUND] = false;
+        else if (!engineParameters_.Contains(EP_SOUND)) engineParameters_[EP_SOUND] = true;
 
         static const int kMsaaTable[4] = { 1, 2, 4, 8 };
         static const int kAnisoTable[3] = { 1, 4, 16 };
@@ -1397,6 +1421,13 @@ public:
         t->SetEffectColor(Color(0.0f, 0.01f, 0.03f, 0.88f));
         if (stroke) t->SetEffectStrokeThickness(Max(1, S(1.4f)));
         else t->SetEffectShadowOffset(IntVector2(Max(1, S(2.0f)), Max(1, S(2.0f))));
+    }
+
+    void StyleFadingText(Text* t, bool stroke = false) {
+        if (!t) return;
+        // Urho3D Text ignores parent opacity by default, unlike BorderImage.
+        t->SetUseDerivedOpacity(true);
+        StyleCrispText(t, stroke);
     }
 
     void Start() override {
@@ -1502,7 +1533,7 @@ public:
         loadTargetProgress_ = 0.12f;
         bootStageTimer_ = 0.0f;
 
-        // 2.5.6: эпичная интро-заставка koch.studios -> powered by fall.os -> CHICHKENCUM 2.1
+        // Медленная интро-заставка koch.studios -> powered by fall.os -> CHICKENCUM 2.1
         CreateSplashIntro();
     }
 
@@ -5105,8 +5136,15 @@ private:
 
         // Пошаговая 4K-загрузка игры с живой отрисовкой прогресс-бара на GPU
         if (loadingScreenActive_) {
+            RebuildLoadingScreenIfResized();
             if (splashActive_) UpdateSplashIntro(dt);
-            else               UpdateBootLoading(dt);
+            else {
+                UpdateBootLoading(dt);
+                // Wait until the loading lettering has nearly disappeared;
+                // otherwise its title collides with the emerging menu text.
+                if (!loadingScreenActive_ || (loadingPanel_ && loadingPanel_->GetOpacity() < 0.08f))
+                    AnimateMainMenu(dt);
+            }
             return;
         }
 
@@ -7284,7 +7322,7 @@ private:
     // ПОЛНОЦЕННЫЙ 4K ЗАГРУЗОЧНЫЙ ЭКРАН (многокадровый GPU-конвейер + арт 4K)
     // =========================================================================
 
-    void CreateLoadingScreen() {
+    void CreateLoadingScreen(bool preserveTip = false) {
         RefreshUIScale();
         auto* cache = GetSubsystem<ResourceCache>();
         if (!font_) {
@@ -7315,7 +7353,7 @@ private:
             "СОВЕТ: V — удар кибер-крылом вблизи, L — 3D лазер, G — граната-клёцка.",
             "СОВЕТ: F8 переключает атмосферу 4K — от золотого заката до кровавого затмения."
         };
-        loadingTipIdx_ = rand() % 6;
+        if (!preserveTip) loadingTipIdx_ = rand() % 6;
 
         loadingPanel_ = root->CreateChild<UIElement>("LoadingPanel");
         loadingPanel_->SetSize(sw, sh);
@@ -7369,7 +7407,7 @@ private:
         sysTag->SetPosition(sw / 2 - S(500), S(28));
         sysTag->SetWidth(S(1000));
         sysTag->SetColor(Color(0.45f, 0.90f, 1.0f, 0.92f));
-        StyleCrispText(sysTag);
+        StyleFadingText(sysTag);
 
         // Кибер-эмблема (геометрический значок куриного гребня/прицела)
         BorderImage* embOuter = loadingPanel_->CreateChild<BorderImage>();
@@ -7384,7 +7422,7 @@ private:
         loadingTitleText_->SetPosition(sw / 2 - S(410), sh / 2 - S(198));
         loadingTitleText_->SetWidth(S(820));
         loadingTitleText_->SetColor(Color(1.0f, 0.86f, 0.25f, 1.0f));
-        StyleCrispText(loadingTitleText_, true);
+        StyleFadingText(loadingTitleText_, true);
 
         loadingSubText_ = loadingPanel_->CreateChild<Text>();
         loadingSubText_->SetFont(font_, SF(19));
@@ -7393,7 +7431,7 @@ private:
         loadingSubText_->SetPosition(sw / 2 - S(410), sh / 2 - S(124));
         loadingSubText_->SetWidth(S(820));
         loadingSubText_->SetColor(Color(0.42f, 0.88f, 1.0f, 0.95f));
-        StyleCrispText(loadingSubText_);
+        StyleFadingText(loadingSubText_);
 
         // Чек-лист инициализации подсистем
         loadingSpecText_ = loadingPanel_->CreateChild<Text>();
@@ -7401,7 +7439,7 @@ private:
         loadingSpecText_->SetPosition(sw / 2 - S(360), sh / 2 - S(82));
         loadingSpecText_->SetWidth(S(720));
         loadingSpecText_->SetColor(Color(0.82f, 0.93f, 0.98f, 0.95f));
-        StyleCrispText(loadingSpecText_);
+        StyleFadingText(loadingSpecText_);
 
         // Полоса загрузки в нижней консоли (ширина 760 масштабируемых пикселей)
         int barW = S(760), barH = S(16);
@@ -7422,13 +7460,13 @@ private:
         loadingBarShimmer_->SetPosition(barX, barY - S(3));
         loadingBarShimmer_->SetSize(S(24), barH + S(6));
         loadingBarShimmer_->SetColor(Color(0.65f, 1.0f, 0.95f, 0.90f));
-        loadingBarShimmer_->SetBlendMode(BLEND_ADD);
+        loadingBarShimmer_->SetBlendMode(BLEND_ADDALPHA); // respects the loading-panel dissolve
 
         loadingStageText_ = loadingPanel_->CreateChild<Text>();
         loadingStageText_->SetFont(font_, SF(16));
         loadingStageText_->SetPosition(barX, barY - S(28));
         loadingStageText_->SetColor(Color(0.88f, 0.95f, 1.0f, 0.96f));
-        StyleCrispText(loadingStageText_);
+        StyleFadingText(loadingStageText_);
 
         loadingPctText_ = loadingPanel_->CreateChild<Text>();
         loadingPctText_->SetFont(font_, SF(18));
@@ -7436,7 +7474,7 @@ private:
         loadingPctText_->SetPosition(barX + barW - S(120), barY - S(30));
         loadingPctText_->SetWidth(S(120));
         loadingPctText_->SetColor(Color(1.0f, 0.88f, 0.28f, 1.0f));
-        StyleCrispText(loadingPctText_);
+        StyleFadingText(loadingPctText_);
 
         loadingTipText_ = loadingPanel_->CreateChild<Text>();
         loadingTipText_->SetFont(font_, SF(15));
@@ -7445,9 +7483,24 @@ private:
         loadingTipText_->SetPosition(sw / 2 - S(480), sh - S(62));
         loadingTipText_->SetWidth(S(960));
         loadingTipText_->SetColor(Color(0.75f, 0.86f, 0.96f, 0.92f));
-        StyleCrispText(loadingTipText_);
+        StyleFadingText(loadingTipText_);
 
         UpdateLoadingVisuals(0.04f, 0);
+    }
+
+    void RebuildLoadingScreenIfResized() {
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!gfx || !loadingPanel_ || gfx->GetWidth() <= 0 || gfx->GetHeight() <= 0) return;
+        if (loadingPanel_->GetWidth() == gfx->GetWidth() && loadingPanel_->GetHeight() == gfx->GetHeight()) return;
+        // The loading panel is already underneath the intro. Rebuild it as well,
+        // so a resize during the long intro does not reveal a cropped screen.
+        const float progress = loadProgress_;
+        const float opacity = loadingPanel_->GetOpacity();
+        loadingPanel_->Remove();
+        loadingPanel_ = nullptr;
+        CreateLoadingScreen(true); // keep the same tip while the window is resized
+        if (loadingPanel_) loadingPanel_->SetOpacity(opacity);
+        UpdateLoadingVisuals(progress, Clamp(loadStepIndex_, 0, 6));
     }
 
     void UpdateLoadingVisuals(float progress, int activeStage) {
@@ -7501,11 +7554,12 @@ private:
     void UpdateBootLoading(float dt) {
         bootStageTimer_ += dt;
         if (loadingTitleText_) {
-            float p = 0.86f + 0.14f * sinf(timeAcc_ * 3.5f);
+            float p = 0.90f + 0.10f * sinf(timeAcc_ * 1.1f);
             loadingTitleText_->SetColor(Color(1.0f, 0.86f * p, 0.25f * p, 1.0f));
         }
 
         const float kMinStepHold = 0.11f;
+        const float kLoadingFadeDuration = 1.05f;
         if (loadStepIndex_ < 7) {
             if (bootStageTimer_ < kMinStepHold && loadStepIndex_ > 0) return;
             bootStageTimer_ = 0.0f;
@@ -7542,7 +7596,7 @@ private:
                 ShowMainMenu(true);
                 if (loadingPanel_) loadingPanel_->BringToFront();
                 UpdateLoadingVisuals(1.0f, 6);
-                loadingFadeAlpha_ = 0.42f;
+                loadingFadeAlpha_ = kLoadingFadeDuration;
                 break;
             case 6:
                 break;
@@ -7553,9 +7607,9 @@ private:
 
         if (loadingFadeAlpha_ > 0.0f) {
             loadingFadeAlpha_ -= dt;
-            float a = Clamp(loadingFadeAlpha_ / 0.42f, 0.0f, 1.0f);
-            if (kochThemeSrc_) kochThemeSrc_->SetGain(musicVolume_ * a * a);
-            if (loadingPanel_) loadingPanel_->SetOpacity(a * a);
+            const float a = SplashIntro::Smooth(loadingFadeAlpha_ / kLoadingFadeDuration);
+            if (kochThemeSrc_) kochThemeSrc_->SetGain(musicVolume_ * a);
+            if (loadingPanel_) loadingPanel_->SetOpacity(a);
             if (loadingFadeAlpha_ <= 0.0f) {
                 HideLoadingScreen();
             }
@@ -7591,28 +7645,10 @@ private:
     }
 
     // =========================================================================
-    // 2.5.6 SPLASH INTRO — «koch.studios» -> «powered by fall.os» -> «CHICHKENCUM 2.1»
-    // Посимвольный выплывающий рендер без перецентровки (скрытый измеритель +
-    // отдельный Text на каждую букву), неоновый ореол, блик и наезд 96->76 pt.
+    // SPLASH INTRO — медленная световая волна и посимвольное появление.
+    // Тайминг вынесен в SplashIntro.h; финал мягко растворяется в загрузке.
     // Скип: клик / Space / Enter / Esc.
     // =========================================================================
-    int SplashLineY(int stage) const {
-        int sh = GetSubsystem<Graphics>()->GetHeight();
-        return sh / 2 + (stage == 2 ? S(46) : (stage == 1 ? S(16) : S(20)));
-    }
-    int SplashTextY(int stage) const {
-        int sh = GetSubsystem<Graphics>()->GetHeight();
-        return sh / 2 - S(stage == 2 ? 62 : (stage == 1 ? 40 : 44));
-    }
-    static float EaseOutCubic(float t) {
-        float f = 1.0f - Clamp(t, 0.0f, 1.0f);
-        return 1.0f - f * f * f;
-    }
-    static float EaseOutExpo(float t) {
-        t = Clamp(t, 0.0f, 1.0f);
-        return t >= 1.0f ? 1.0f : 1.0f - powf(2.0f, -10.0f * t);
-    }
-
     void SplashEnterStage(int stage) {
         auto* cache = GetSubsystem<ResourceCache>();
         if (!cache || !splashSfxSrc_) return;
@@ -7623,76 +7659,124 @@ private:
         if (!s && stage == 2) s = cache->GetResource<Sound>("Sounds/RoosterBoss.wav");
         if (s) {
             splashSfxSrc_->Stop();
-            splashSfxSrc_->SetGain(stage == 2 ? 0.9f : 0.7f);
+            splashSfxSrc_->SetGain(SfxGain(stage == 2 ? 0.9f : 0.7f));
             splashSfxSrc_->Play(s);
         }
     }
 
-    void ClearSplashGlyphs() {
-        for (unsigned i = 0; i < (unsigned)splashGlyphs_.Size(); ++i) {
-            if (splashGlyphs_[i]) splashGlyphs_[i]->Remove();
+    BorderImage* CreateSplashLight(UIElement* parent, Texture2D* texture) {
+        BorderImage* image = parent->CreateChild<BorderImage>();
+        // BLEND_ADD ignores alpha in Urho3D: transparent pixels of the glow
+        // texture would become a solid rectangle and fades would not work.
+        image->SetBlendMode(BLEND_ADDALPHA);
+        image->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
+        if (texture) {
+            image->SetTexture(texture);
+            image->SetFullImageRect();
+        } else {
+            image->SetVisible(false); // no untextured white rectangle on missing assets
         }
+        return image;
+    }
+
+    void ClearSplashGlyphs() {
+        if (splashGlyphLayer_) splashGlyphLayer_->RemoveAllChildren();
+        if (splashGlyphGlowLayer_) splashGlyphGlowLayer_->RemoveAllChildren();
         splashGlyphs_.Clear();
+        splashGlyphHalos_.Clear();
         splashGlyphBase_.Clear();
+        splashGlyphWidths_.Clear();
         splashGlyphIndex_.Clear();
     }
 
-    void BuildSplashGlyphs(int stage, int sw) {
+    void BuildSplashGlyphs(int stage, int sw, int sh) {
         ClearSplashGlyphs();
-        if (!splashMeasure_ || !splashPanel_) return;
-        const int fs = stage == 0 ? SF(36) : SF(27);
-        splashMeasure_->SetFont(font_, fs);
-        splashMeasure_->SetText(splashFullText_);
+        if (!splashMeasure_ || !splashGlyphLayer_ || !splashGlyphGlowLayer_) return;
+        Font* stageFont = stage == 2 && splashTitleFont_ ? splashTitleFont_ : font_;
+        if (!stageFont) return;
+
         const int n = (int)splashFullText_.Length();
         if (n <= 0) return;
-        const Vector2 lastPos = splashMeasure_->GetCharPosition(n - 1);
-        const Vector2 lastSize = splashMeasure_->GetCharSize(n - 1);
-        const float totalW = lastPos.x_ + lastSize.x_;
-        const float x0 = sw * 0.5f - totalW * 0.5f;
-        const float baseY = (float)SplashTextY(stage);
+        const int baseSizes[3] = { 44, 72, 142 };
+        int fs = SF(baseSizes[stage]);
+        float tracking = (stage == 2 ? 2.0f : 0.0f) * uiScale_;
+        splashMeasure_->SetTextAlignment(HA_LEFT);
+        splashMeasure_->SetFont(stageFont, fs);
+        splashMeasure_->SetText(splashFullText_);
+        auto measureWidth = [&]() {
+            const Vector2 pos = splashMeasure_->GetCharPosition(n - 1);
+            const Vector2 size = splashMeasure_->GetCharSize(n - 1);
+            return Max(1.0f, pos.x_ + size.x_ + tracking * (n - 1));
+        };
+        float totalW = measureWidth();
+        // Leave room for the initial outward drift, including on small windows.
+        const float maxWidth = Max(1.0f, sw * 0.82f);
+        if (totalW > maxWidth) {
+            const float fit = maxWidth / totalW;
+            fs = Max(9, (int)(fs * fit));
+            tracking *= fit;
+            splashMeasure_->SetFont(stageFont, fs);
+            totalW = measureWidth();
+        }
+
+        splashFontSize_ = fs;
+        splashTextWidth_ = totalW;
+        splashTextLeft_ = (sw - totalW) * 0.5f;
+        splashTextHeight_ = Max(1, splashMeasure_->GetHeight());
+        splashTextY_ = sh / 2 - splashTextHeight_ / 2 - S(5);
+        splashLineY_ = splashTextY_ + splashTextHeight_ + S(stage == 2 ? 20 : 16);
+
         for (int i = 0; i < n; ++i) {
-            const char c = splashFullText_[i];
-            if (c == ' ') continue;
-            SharedPtr<Text> glyph(splashPanel_->CreateChild<Text>());
-            glyph->SetFont(font_, fs);
+            if (splashFullText_[i] == ' ') continue;
+            const Vector2 pos = splashMeasure_->GetCharPosition(i);
+            const Vector2 charSize = splashMeasure_->GetCharSize(i);
+            const float x = splashTextLeft_ + pos.x_ + tracking * i;
+            const float width = Max(1.0f, charSize.x_);
+
+            BorderImage* halo = CreateSplashLight(splashGlyphGlowLayer_, splashGlowTexture_);
+            halo->SetSize(1, 1);
+            splashGlyphHalos_.Push(SharedPtr<BorderImage>(halo));
+
+            Text* glyph = splashGlyphLayer_->CreateChild<Text>();
+            glyph->SetUseDerivedOpacity(true); // includes the final/skip overlay dissolve
+            glyph->SetFont(stageFont, fs);
             glyph->SetTextAlignment(HA_LEFT);
             glyph->SetText(splashFullText_.Substring(i, 1));
-            glyph->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
-            const Vector2 pos = splashMeasure_->GetCharPosition(i);
-            glyph->SetPosition((int)(x0 + pos.x_), (int)baseY);
-            StyleCrispText(glyph, true);
-            splashGlyphs_.Push(glyph);
-            splashGlyphBase_.Push(Vector2(x0 + pos.x_, baseY));
+            glyph->SetPosition((int)x, splashTextY_);
+            glyph->SetOpacity(0.0f); // also fades the text effect, not just the glyph
+            glyph->SetTextEffect(TE_STROKE);
+            glyph->SetEffectStrokeThickness(Max(1, S(stage == 2 ? 2.0f : 1.0f)));
+            glyph->SetEffectColor(stage == 0 ? Color(0.10f, 0.52f, 0.86f, 0.22f)
+                                  : Color(1.0f, 0.48f, 0.12f, stage == 2 ? 0.32f : 0.22f));
+            splashGlyphs_.Push(SharedPtr<Text>(glyph));
+            splashGlyphBase_.Push(Vector2(x, (float)splashTextY_));
+            splashGlyphWidths_.Push(width);
             splashGlyphIndex_.Push(i);
         }
     }
 
     void ConfigureSplashStage(int stage) {
-        if (!splashLine_) return;
-        const int sw = GetSubsystem<Graphics>()->GetWidth();
-        splashLine_->SetPosition(sw / 2, SplashLineY(stage));
-        splashLine_->SetSize(0, Max(2, S(stage == 2 ? 4.0f : 3.0f)));
-        if (stage == 0) {
-            splashFullText_ = "k o c h . s t u d i o s";
-            if (splashText_) splashText_->SetVisible(false);
-            BuildSplashGlyphs(0, sw);
-        } else if (stage == 1) {
-            splashFullText_ = "powered by fall.os";
-            if (splashText_) splashText_->SetVisible(false);
-            BuildSplashGlyphs(1, sw);
-        } else {
-            splashFullText_ = "CHICHKENCUM 2.1";
-            ClearSplashGlyphs();
-            if (splashText_) {
-                splashText_->SetVisible(true);
-                splashText_->SetFont(font_, SF(96));
-                splashText_->SetTextAlignment(HA_CENTER);
-                splashText_->SetText(splashFullText_);
-                splashText_->SetPosition(0, SplashTextY(2) + S(14));
-                splashText_->SetWidth(sw);
-                splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
-            }
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!gfx) return;
+        splashFullText_ = SplashIntro::kStages[stage].text;
+        BuildSplashGlyphs(stage, gfx->GetWidth(), gfx->GetHeight());
+    }
+
+    void LayoutSplashIntro() {
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!gfx || !splashPanel_) return;
+        const int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+        RefreshUIScale();
+        splashPanel_->SetSize(sw, sh);
+        if (splashBackground_) splashBackground_->SetSize(sw, sh);
+        if (splashGlyphGlowLayer_) splashGlyphGlowLayer_->SetSize(sw, sh);
+        if (splashGlyphLayer_) splashGlyphLayer_->SetSize(sw, sh);
+        if (splashHint_) {
+            splashHint_->SetFont(font_, SF(14));
+            splashHint_->SetWidth(sw);
+            splashHint_->SetPosition(0, sh - S(66));
         }
+        ConfigureSplashStage(splashTimeline_.CurrentStage());
     }
 
     void CreateSplashIntro() {
@@ -7704,62 +7788,47 @@ private:
             font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
             if (!font_) font_ = cache->GetResource<Font>("Fonts/DejaVuSans.ttf");
+            if (!font_) font_ = cache->GetResource<Font>("Fonts/Anonymous Pro.sdf");
         }
-        const int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+        if (!font_) {
+            URHO3D_LOGWARNING("Шрифт интро не найден: переход к загрузке без заставки.");
+            return;
+        }
+        splashTitleFont_ = cache->GetResource<Font>("Fonts/BlueHighway.ttf");
+        splashGlowTexture_ = cache->GetResource<Texture2D>("Textures/SplashGlow.png");
+        Texture2D* sheenTexture = cache->GetResource<Texture2D>("Textures/SplashSheen.png");
+        if (splashGlowTexture_) splashGlowTexture_->SetFilterMode(FILTER_TRILINEAR);
+        if (sheenTexture) sheenTexture->SetFilterMode(FILTER_TRILINEAR);
 
         splashPanel_ = ui->GetRoot()->CreateChild<UIElement>("KochSplashIntro");
-        splashPanel_->SetSize(sw, sh);
-        splashPanel_->SetPriority(1200);   // поверх загрузочного экрана (1000)
+        splashPanel_->SetPriority(1200); // above the loading screen
+        splashPanel_->SetTraversalMode(TM_DEPTH_FIRST); // keep light/text layers in the intended order
+        splashBackground_ = splashPanel_->CreateChild<BorderImage>();
+        splashBackground_->SetColor(Color(0.002f, 0.004f, 0.008f, 1.0f));
 
-        BorderImage* bg = splashPanel_->CreateChild<BorderImage>();
-        bg->SetSize(sw, sh);
-        bg->SetColor(Color(0.0f, 0.0f, 0.0f, 1.0f));
+        // Layers are intentionally ordered: atmosphere, motes, glyph halos,
+        // line, lettering, then a delicate moving glint in front of the text.
+        splashGlow_ = CreateSplashLight(splashPanel_, splashGlowTexture_);
+        splashCoreGlow_ = CreateSplashLight(splashPanel_, splashGlowTexture_);
+        splashMotes_.Clear();
+        for (int i = 0; i < 32; ++i)
+            splashMotes_.Push(SharedPtr<BorderImage>(CreateSplashLight(splashPanel_, splashGlowTexture_)));
+        splashGlyphGlowLayer_ = splashPanel_->CreateChild<UIElement>();
+        splashLineGlow_ = CreateSplashLight(splashPanel_, sheenTexture);
+        splashLine_ = splashPanel_->CreateChild<BorderImage>();
+        splashLine_->SetColor(Color(1.0f, 0.8f, 0.3f, 0.0f));
+        splashGlyphLayer_ = splashPanel_->CreateChild<UIElement>();
+        splashSheen_ = CreateSplashLight(splashPanel_, sheenTexture);
 
-        // Неоновое свечение за надписью
-        splashGlow_ = splashPanel_->CreateChild<BorderImage>();
-        if (Texture2D* glowTex = cache->GetResource<Texture2D>("Textures/SplashGlow.png")) {
-            glowTex->SetFilterMode(FILTER_TRILINEAR);
-            splashGlow_->SetTexture(glowTex);
-        }
-        splashGlow_->SetBlendMode(BLEND_ADD);
-        splashGlow_->SetColor(Color(0.18f, 0.82f, 1.0f, 0.0f));
-        {
-            const int g0 = S(880);
-            splashGlow_->SetSize(g0, g0);
-            splashGlow_->SetPosition(sw / 2 - g0 / 2, sh / 2 - g0 / 2);
-        }
-
-        // Пробегающая световая волна
-        splashSheen_ = splashPanel_->CreateChild<BorderImage>();
-        if (Texture2D* sheenTex = cache->GetResource<Texture2D>("Textures/SplashSheen.png")) {
-            sheenTex->SetFilterMode(FILTER_TRILINEAR);
-            splashSheen_->SetTexture(sheenTex);
-        }
-        splashSheen_->SetBlendMode(BLEND_ADD);
-        splashSheen_->SetColor(Color(1.0f, 0.94f, 0.78f, 0.0f));
-        splashSheen_->SetSize(S(190), S(46));
-        splashSheen_->SetPosition(-S(400), sh / 2 - S(24));
-
-        // Скрытый измеритель ширины
         splashMeasure_ = splashPanel_->CreateChild<Text>();
         splashMeasure_->SetVisible(false);
-        splashMeasure_->SetFont(font_, SF(36));
-        splashMeasure_->SetTextAlignment(HA_LEFT);
         splashMeasure_->SetPosition(0, -S(500));
-
-        splashText_ = splashPanel_->CreateChild<Text>();
-        splashText_->SetFont(font_, SF(96));
-        splashText_->SetTextAlignment(HA_CENTER);
-        splashText_->SetPosition(0, sh / 2 - S(62));
-        splashText_->SetWidth(sw);
-        splashText_->SetColor(Color(1.0f, 1.0f, 1.0f, 0.0f));
-        splashText_->SetVisible(false);
-        StyleCrispText(splashText_, true);
-
-        splashLine_ = splashPanel_->CreateChild<BorderImage>();
-        splashLine_->SetPosition(sw / 2, sh / 2 + S(20));
-        splashLine_->SetSize(0, Max(2, S(3.0f)));
-        splashLine_->SetColor(Color(0.20f, 0.92f, 1.0f, 0.0f));
+        splashHint_ = splashPanel_->CreateChild<Text>();
+        splashHint_->SetText("CLICK / SPACE / ENTER / ESC  —  SKIP");
+        splashHint_->SetTextAlignment(HA_CENTER);
+        splashHint_->SetColor(Color(0.64f, 0.71f, 0.75f, 1.0f));
+        splashHint_->SetOpacity(0.0f);
+        StyleFadingText(splashHint_);
 
         splashScene_ = SharedPtr<Scene>(new Scene(context_));
         kochMusicNode_ = SharedPtr<Node>(splashScene_->CreateChild("KochTheme"));
@@ -7777,137 +7846,177 @@ private:
             }
         }
 
-        splashStage_ = 0;
-        splashTimer_ = 0.0f;
+        splashTimeline_ = SplashIntro::Timeline();
         splashActive_ = true;
-        ConfigureSplashStage(0);
+        LayoutSplashIntro();
+        UpdateSplashVisuals();
         SplashEnterStage(0);
     }
 
     void EndSplashIntro() {
+        if (splashSfxSrc_) splashSfxSrc_->Stop();
         if (splashPanel_) { splashPanel_->Remove(); splashPanel_ = nullptr; }
-        splashText_ = nullptr;
-        splashMeasure_ = nullptr;
-        splashGlyphs_.Clear();
-        splashGlyphBase_.Clear();
-        splashGlyphIndex_.Clear();
-        splashLine_ = nullptr;
+        splashBackground_ = nullptr;
         splashGlow_ = nullptr;
+        splashCoreGlow_ = nullptr;
         splashSheen_ = nullptr;
+        splashLineGlow_ = nullptr;
+        splashLine_ = nullptr;
+        splashMeasure_ = nullptr;
+        splashHint_ = nullptr;
+        splashGlyphGlowLayer_ = nullptr;
+        splashGlyphLayer_ = nullptr;
+        splashGlyphs_.Clear();
+        splashGlyphHalos_.Clear();
+        splashGlyphBase_.Clear();
+        splashGlyphWidths_.Clear();
+        splashGlyphIndex_.Clear();
+        splashMotes_.Clear();
+        splashGlowTexture_ = nullptr;
+        splashTitleFont_ = nullptr;
         splashFullText_ = String();
         splashActive_ = false;
-        splashTimer_ = 0.0f;
-        splashStage_ = 0;
+    }
+
+    void UpdateSplashVisuals() {
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!gfx || !splashPanel_) return;
+        const int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+        const int stage = splashTimeline_.CurrentStage();
+        const float t = splashTimeline_.StageTime();
+        const float visibility = SplashIntro::StageVisibility(stage, t);
+        const float atmosphere = SplashIntro::Smooth(t / 1.25f) * visibility;
+        const float breathe = sinf(t * 0.85f) * uiScale_ * 1.5f * SplashIntro::Smooth((t - 1.4f) / 1.5f);
+        const float pulse = 0.86f + 0.14f * sinf(t * 0.9f + stage * 0.7f);
+        const Color light = stage == 0 ? Color(0.15f, 0.66f, 1.0f, 1.0f)
+                          : stage == 1 ? Color(1.0f, 0.43f, 0.16f, 1.0f)
+                                       : Color(1.0f, 0.54f, 0.12f, 1.0f);
+
+        if (splashGlow_) {
+            const int w = S(stage == 2 ? 1600 : 1300);
+            const int h = S(stage == 2 ? 650 : 560);
+            splashGlow_->SetSize(w, h);
+            splashGlow_->SetPosition(sw / 2 - w / 2, sh / 2 - h / 2 + (int)breathe);
+            Color c = light; c.a_ = atmosphere * pulse * (stage == 2 ? 0.25f : 0.18f);
+            splashGlow_->SetColor(c);
+        }
+        if (splashCoreGlow_) {
+            const int w = (int)splashTextWidth_ + S(stage == 2 ? 360 : 260);
+            const int h = Max(S(180), splashTextHeight_ * 3);
+            splashCoreGlow_->SetSize(w, h);
+            splashCoreGlow_->SetPosition(sw / 2 - w / 2, splashTextY_ + splashTextHeight_ / 2 - h / 2 + (int)breathe);
+            const float swell = SplashIntro::Smooth((t - 0.2f) / 0.9f) *
+                                (1.0f - SplashIntro::Smooth((t - 1.7f) / 1.5f));
+            Color c = light;
+            c.a_ = atmosphere * (stage == 2 ? 0.18f + 0.08f * swell : 0.13f + 0.05f * swell) * pulse;
+            splashCoreGlow_->SetColor(c);
+        }
+
+        for (unsigned i = 0; i < (unsigned)splashMotes_.Size(); ++i) {
+            BorderImage* mote = splashMotes_[i].Get();
+            if (!mote) continue;
+            const float fx = (float)((i * 73u + 19u) % 101u) / 100.0f;
+            const float fy = (float)((i * 47u + 31u) % 97u) / 96.0f;
+            const int size = S(5.0f + (float)(i % 5u) * 2.0f);
+            const float x = sw * (0.08f + 0.84f * fx) + sinf(t * 0.42f + i * 1.7f) * uiScale_ * 14.0f;
+            const float y = sh * (0.18f + 0.64f * fy) - t * uiScale_ * (3.5f + (i % 4u) * 1.3f);
+            mote->SetSize(size, size);
+            mote->SetPosition((int)x - size / 2, (int)y - size / 2);
+            const float shimmer = 0.68f + 0.32f * (0.5f + 0.5f * sinf(t * 1.0f + i * 2.1f));
+            Color c = light; c.a_ = atmosphere * shimmer * (i % 7u == 0u ? 0.55f : 0.28f);
+            mote->SetColor(c);
+        }
+
+        const float sweep = SplashIntro::SweepProgress(stage, t);
+        const float sweepEnvelope = sweep > 0.0f && sweep < 1.0f ? sinf(3.14159265f * sweep) : 0.0f;
+        const int sheenW = Max(S(80), Min(S(stage == 2 ? 260 : 190), (int)(splashTextWidth_ * 0.45f)));
+        const int sheenH = Max(S(48), (int)(splashTextHeight_ * 0.80f));
+        const float sheenX = Lerp(splashTextLeft_ - sheenW, splashTextLeft_ + splashTextWidth_, SplashIntro::Smooth(sweep));
+        const float sheenCenter = sheenX + sheenW * 0.5f;
+        if (splashSheen_) {
+            splashSheen_->SetSize(sheenW, sheenH);
+            splashSheen_->SetPosition((int)sheenX, splashTextY_ + splashTextHeight_ / 2 - sheenH / 2 + (int)breathe);
+            splashSheen_->SetColor(Color(1.0f, 0.83f, 0.52f, sweepEnvelope * visibility * (stage == 2 ? 0.38f : 0.25f)));
+        }
+
+        for (unsigned i = 0; i < (unsigned)splashGlyphs_.Size(); ++i) {
+            Text* glyph = splashGlyphs_[i].Get();
+            BorderImage* halo = splashGlyphHalos_[i].Get();
+            if (!glyph) continue;
+            const int index = splashGlyphIndex_[i];
+            const float progress = SplashIntro::GlyphProgress(stage, index, t);
+            const float move = SplashIntro::EaseOut(progress);
+            const float alpha = SplashIntro::Smooth(progress) * visibility;
+            const float spread = stage == 2 ? 0.08f : (stage == 1 ? 0.035f : 0.0f);
+            const float center = splashGlyphBase_[i].x_ + splashGlyphWidths_[i] * 0.5f;
+            const float x = splashGlyphBase_[i].x_ + (center - sw * 0.5f) * spread * (1.0f - move);
+            const float rise = (stage == 2 ? 34.0f : 28.0f) * uiScale_;
+            const float y = splashGlyphBase_[i].y_ + rise * (1.0f - move) + breathe;
+            glyph->SetPosition((int)roundf(x), (int)roundf(y));
+            glyph->SetOpacity(alpha);
+
+            const bool fallWord = stage == 1 && index >= 11;
+            Color top = stage == 0 ? Color(0.91f, 0.98f, 1.0f)
+                      : stage == 1 && !fallWord ? Color(0.82f, 0.88f, 0.92f)
+                                                : Color(1.0f, 0.95f, 0.76f);
+            Color bottom = stage == 0 ? Color(0.48f, 0.78f, 0.94f)
+                         : stage == 1 && !fallWord ? Color(0.56f, 0.65f, 0.72f)
+                                                   : Color(0.92f, 0.57f, 0.19f);
+            const float distance = fabsf((x + splashGlyphWidths_[i] * 0.5f) - sheenCenter);
+            const float hit = sweepEnvelope * (1.0f - SplashIntro::Smooth(distance / Max(1.0f, sheenW * 0.65f)));
+            const float flash = Clamp((1.0f - SplashIntro::Smooth(progress)) * 0.28f + hit * 0.55f, 0.0f, 0.72f);
+            top = top.Lerp(Color::WHITE, flash);
+            bottom = bottom.Lerp(Color(1.0f, 0.88f, 0.65f), flash);
+            glyph->SetColor(C_TOPLEFT, top);
+            glyph->SetColor(C_TOPRIGHT, top);
+            glyph->SetColor(C_BOTTOMLEFT, bottom);
+            glyph->SetColor(C_BOTTOMRIGHT, bottom);
+
+            if (halo) {
+                const int size = Max(1, (int)(splashFontSize_ * (stage == 2 ? 1.55f : 1.65f)));
+                halo->SetSize(size, size);
+                halo->SetPosition((int)(x + splashGlyphWidths_[i] * 0.5f) - size / 2,
+                                  (int)(y + splashTextHeight_ * 0.5f) - size / 2);
+                Color c = light;
+                c.a_ = alpha * (stage == 2 ? 0.18f : (fallWord ? 0.16f : 0.09f)) * (0.85f + 0.15f * pulse + hit * 0.5f);
+                halo->SetColor(c);
+            }
+        }
+
+        const float lineIn = SplashIntro::EaseOut((t - 0.35f) / 1.9f);
+        const int lineW = Max(0, (int)(splashTextWidth_ * (stage == 2 ? 0.92f : 0.84f) * lineIn));
+        const float lineAlpha = SplashIntro::Smooth((t - 0.25f) / 1.0f) * visibility;
+        if (splashLineGlow_) {
+            const int w = lineW + S(100), h = S(36);
+            splashLineGlow_->SetSize(w, h);
+            splashLineGlow_->SetPosition(sw / 2 - w / 2, splashLineY_ - h / 2);
+            Color c = light; c.a_ = lineAlpha * 0.35f;
+            splashLineGlow_->SetColor(c);
+        }
+        if (splashLine_) {
+            splashLine_->SetPosition(sw / 2 - lineW / 2, splashLineY_);
+            splashLine_->SetSize(lineW, Max(1, S(1.5f)));
+            Color c = light; c.a_ = lineAlpha * (stage == 2 ? 0.78f : 0.58f);
+            splashLine_->SetColor(c);
+        }
+        if (splashHint_) splashHint_->SetOpacity(0.32f * SplashIntro::Smooth(splashTimeline_.Elapsed() / 1.8f));
+        splashPanel_->SetOpacity(splashTimeline_.OverlayOpacity());
     }
 
     void UpdateSplashIntro(float dt) {
         auto* input = GetSubsystem<Input>();
-        if (input) {
-            if (input->GetMouseButtonDown(MOUSEB_LEFT) || input->GetMouseButtonDown(MOUSEB_RIGHT) ||
-                input->GetKeyPress(KEY_SPACE) || input->GetKeyPress(KEY_RETURN) ||
-                input->GetKeyPress(KEY_ESCAPE)) {
-                EndSplashIntro();
-                return;
-            }
-        }
-        splashTimer_ += dt;
-        const int sw = GetSubsystem<Graphics>()->GetWidth();
-        const int sh = GetSubsystem<Graphics>()->GetHeight();
-
-        static const float kDur[3]   = { 1.15f, 1.10f, 2.30f };
-        static const float kOutAt[3] = { 0.88f, 0.84f, 2.00f };
-        static const int   kLineW[3] = { 300, 210, 840 };
-
-        const int stage = splashStage_;
-        const float t = splashTimer_;
-        const float outT = Clamp((t - kOutAt[stage]) / (kDur[stage] - kOutAt[stage]), 0.0f, 1.0f);
-        const float fadeOut = 1.0f - EaseOutCubic(outT);
-        const float globalAlpha = Clamp(fadeOut, 0.0f, 1.0f);
-
-        const float floatAmp = (float)S(stage == 2 ? 12 : 46);
-        const float floatOff = (1.0f - EaseOutExpo(Clamp(t / 1.00f, 0.0f, 1.0f))) * floatAmp;
-        const float breathe  = sinf(t * 1.7f + stage * 1.7f) * (float)S(2.0f)
-                             * Clamp((t - 0.85f) / 0.5f, 0.0f, 1.0f);
-
-        Color base = stage == 0 ? Color(0.90f, 0.96f, 1.0f, 1.0f)
-                   : stage == 1 ? Color(0.74f, 0.80f, 0.92f, 1.0f)
-                                : Color(1.0f, 0.78f, 0.16f, 1.0f);
-        if (stage == 2) {
-            const float flash = EaseOutCubic(Clamp(t / 0.60f, 0.0f, 1.0f));
-            base = Color(1.0f, Lerp(1.0f, 0.78f, flash), Lerp(1.0f, 0.16f, flash), 1.0f);
-        }
-
-        if (stage < 2) {
-            const float fsFloat = (float)S(stage == 0 ? 30 : 24);
-            for (unsigned i = 0; i < (unsigned)splashGlyphs_.Size(); ++i) {
-                SharedPtr<Text>& glyph = splashGlyphs_[i];
-                if (!glyph) continue;
-                const float delay = 0.10f + splashGlyphIndex_[i] * 0.042f;
-                const float lt = Clamp((t - delay) / 0.55f, 0.0f, 1.0f);
-                const float ease = EaseOutCubic(lt);
-                Color gc = base; gc.a_ = ease * globalAlpha;
-                glyph->SetColor(gc);
-                glyph->SetPosition((int)splashGlyphBase_[i].x_,
-                                   (int)(splashGlyphBase_[i].y_ + (1.0f - EaseOutExpo(lt)) * fsFloat + breathe));
-            }
-        } else if (splashText_) {
-            const float punch = 1.0f - EaseOutExpo(Clamp(t / 0.30f, 0.0f, 1.0f));
-            splashText_->SetFont(font_, SF((int)(76.0f + 20.0f * punch)));
-            Color sc = base; sc.a_ = globalAlpha;
-            splashText_->SetColor(sc);
-            splashText_->SetPosition(0, SplashTextY(2) + S(14) + (int)floatOff + (int)breathe);
-        }
-
-        if (splashGlow_) {
-            static const Color kGlow[3] = {
-                Color(0.16f, 0.80f, 1.00f, 1.0f),
-                Color(0.95f, 0.52f, 0.16f, 1.0f),
-                Color(1.00f, 0.58f, 0.12f, 1.0f)
-            };
-            const float glowIn = EaseOutCubic(Clamp(t / 0.7f, 0.0f, 1.0f));
-            const float pulse = 0.78f + 0.22f * sinf(t * 1.9f + stage * 2.3f);
-            const int gsize = S(stage == 2 ? 1150 : 840);
-            Color gc = kGlow[stage];
-            gc.a_ = glowIn * globalAlpha * 0.46f * pulse;
-            splashGlow_->SetSize(gsize, gsize);
-            splashGlow_->SetPosition(sw / 2 - gsize / 2, sh / 2 - gsize / 2 + (int)floatOff + (int)breathe);
-            splashGlow_->SetColor(gc);
-        }
-
-        if (splashSheen_) {
-            const float sweep = t - 0.55f;
-            if (sweep > 0.0f && sweep < 0.80f) {
-                const float k = sweep / 0.80f;
-                const float easeK = k < 0.5f ? 2.0f * k * k : 1.0f - powf(-2.0f * k + 2.0f, 2.0f) / 2.0f;
-                splashSheen_->SetPosition((int)Lerp(sw * 0.5f - S(460), sw * 0.5f + S(300), easeK),
-                                          SplashTextY(stage) + (int)floatOff - S(2));
-                Color sc(1.0f, 0.93f, 0.78f, 0.52f * globalAlpha * sinf(3.14159265f * k));
-                splashSheen_->SetColor(sc);
-            } else {
-                splashSheen_->SetColor(Color(1.0f, 0.93f, 0.78f, 0.0f));
-            }
-        }
-
-        float lineT = Clamp((t - 0.14f) / 0.55f, 0.0f, 1.0f);
-        lineT = 1.0f - (1.0f - lineT) * (1.0f - lineT);
-        const int w = (int)(S(kLineW[stage]) * lineT);
-        if (splashLine_) {
-            splashLine_->SetPosition(sw / 2 - w / 2, SplashLineY(stage));
-            splashLine_->SetSize(Max(0, w), Max(2, S(stage == 2 ? 4.0f : 3.0f)));
-            Color lc = stage == 0 ? Color(0.20f, 0.92f, 1.00f, 1.0f)
-                     : stage == 1 ? Color(1.00f, 0.58f, 0.18f, 1.0f)
-                                  : Color(1.00f, 0.72f, 0.22f, 1.0f);
-            lc.a_ = 0.92f * EaseOutCubic(Clamp(t / 0.45f, 0.0f, 1.0f)) * globalAlpha;
-            splashLine_->SetColor(lc);
-        }
-
-        if (t >= kDur[stage]) {
-            splashTimer_ = 0.0f;
-            ++splashStage_;
-            if (splashStage_ > 2) { EndSplashIntro(); return; }
-            ConfigureSplashStage(splashStage_);
-            SplashEnterStage(splashStage_);
-        }
+        const bool skip = input && (input->GetMouseButtonPress(MOUSEB_LEFT) || input->GetMouseButtonPress(MOUSEB_RIGHT) ||
+                                    input->GetKeyPress(KEY_SPACE) || input->GetKeyPress(KEY_RETURN) ||
+                                    input->GetKeyPress(KEY_ESCAPE));
+        const SplashIntro::Timeline::Result result = splashTimeline_.Advance(dt, skip);
+        if (result.finished) { EndSplashIntro(); return; }
+        auto* gfx = GetSubsystem<Graphics>();
+        const bool resized = gfx && splashPanel_ &&
+                             (splashPanel_->GetWidth() != gfx->GetWidth() || splashPanel_->GetHeight() != gfx->GetHeight());
+        if (resized) LayoutSplashIntro();
+        else if (result.stageChanged) ConfigureSplashStage(splashTimeline_.CurrentStage());
+        if (result.stageChanged) SplashEnterStage(splashTimeline_.CurrentStage());
+        UpdateSplashVisuals();
     }
 
     // Короткий тактический экран высадки при старте миссии («ТИР» / «АРЕНА»)
@@ -8239,11 +8348,10 @@ private:
     }
     static float XmlGetFloat(const XMLElement& el, const char* name, float def, float lo, float hi) {
         if (!el || !el.HasAttribute(name)) return def;
-        const char* raw = el.GetAttribute(name).CString();
-        char* end = nullptr;
-        float value = strtof(raw, &end);
-        if (end == raw || !std::isfinite(value)) return def;
-        return Clamp(value, lo, hi);
+        // GetAttribute returns a temporary String; keep it alive while strtof
+        // reads its buffer so saved music/SFX levels are not silently lost.
+        const String attribute = el.GetAttribute(name);
+        return SettingsParsing::Float(attribute.CString(), def, lo, hi);
     }
 
     String LegacySettingsPath() const {
@@ -8566,7 +8674,7 @@ private:
             menuParticles_.Push(SharedPtr<BorderImage>(p));
             menuParticlePhase_.Push(rand() % 1000 / 1000.0f * 6.283f);
             menuParticleX_.Push(float(rand() % Max(1, sw)));
-            menuParticleSpeed_.Push((18.0f + rand() % 42) * uiScale_);
+            menuParticleSpeed_.Push((9.0f + rand() % 20) * uiScale_);
         }
 
         int plateW = S(740), plateH = S(620);
@@ -8597,7 +8705,7 @@ private:
         title->SetPosition(sw / 2 - S(420), sh / 2 - S(284));
         title->SetWidth(S(840));
         title->SetColor(Color(1.0f, 0.85f, 0.25f, 1.0f));
-        StyleCrispText(title, true);
+        StyleFadingText(title, true);
         menuTitle_ = SharedPtr<Text>(title);
 
         menuAccentBar_ = mainMenuPanel_->CreateChild<BorderImage>();
@@ -8612,7 +8720,7 @@ private:
         sub->SetPosition(sw / 2 - S(440), sh / 2 - S(190));
         sub->SetWidth(S(880));
         sub->SetColor(Color(0.48f, 0.86f, 1.0f, 0.95f));
-        StyleCrispText(sub);
+        StyleFadingText(sub);
         menuSub_ = SharedPtr<Text>(sub);
 
         const char* items[7] = {
@@ -8637,7 +8745,7 @@ private:
             it->SetText(items[i]);
             it->SetPosition(sw / 2 - S(290), sh / 2 - S(137) + i * S(44));
             it->SetWidth(S(580));
-            StyleCrispText(it);
+            StyleFadingText(it);
             mainMenuItems_.Push(SharedPtr<Text>(it));
         }
 
@@ -8648,17 +8756,25 @@ private:
         hint->SetPosition(sw / 2 - S(440), sh / 2 + S(210));
         hint->SetWidth(S(880));
         hint->SetColor(Color(0.75f, 0.82f, 0.90f, 0.92f));
-        StyleCrispText(hint);
+        StyleFadingText(hint);
         menuHint_ = SharedPtr<Text>(hint);
 
         UpdateMainMenuSelection();
     }
 
     void AnimateMainMenu(float dt) {
-        (void)dt;
         if (!mainMenuPanel_ || !mainMenuPanel_->IsVisible()) return;
         auto* gfx = GetSubsystem<Graphics>();
         int sw = gfx->GetWidth(), sh = gfx->GetHeight();
+        menuIntroTimer_ = Min(2.0f, menuIntroTimer_ + dt);
+        mainMenuPanel_->SetOpacity(SplashIntro::Smooth(menuIntroTimer_ / 1.0f));
+        for (unsigned i = 0; i < (unsigned)mainMenuItems_.Size(); ++i) {
+            const float rowIn = SplashIntro::Smooth((menuIntroTimer_ - 0.15f - i * 0.08f) / 0.8f);
+            if (mainMenuItems_[i]) mainMenuItems_[i]->SetOpacity(rowIn);
+            if (i < (unsigned)menuRows_.Size() && menuRows_[i]) menuRows_[i]->SetOpacity(rowIn);
+        }
+        if (menuSub_) menuSub_->SetOpacity(SplashIntro::Smooth((menuIntroTimer_ - 0.10f) / 0.9f));
+        if (menuHint_) menuHint_->SetOpacity(SplashIntro::Smooth((menuIntroTimer_ - 0.55f) / 0.9f));
 
         if (!menuBasesSet_) {
             if (menuTitle_)      menuTitleBase_  = menuTitle_->GetPosition();
@@ -8667,20 +8783,20 @@ private:
             menuBasesSet_ = true;
         }
         if (menuTitle_) {
-            float pulse = 0.78f + 0.22f * sinf(timeAcc_ * 1.6f);
+            float pulse = 0.92f + 0.08f * sinf(timeAcc_ * 0.8f);
             menuTitle_->SetColor(Color(pulse, pulse * 0.84f, pulse * 0.28f, 1.0f));
         }
         if (menuAccentBar_) {
-            int w = S(310.0f + 130.0f * (0.5f + 0.5f * sinf(timeAcc_ * 1.2f)));
+            int w = S(310.0f + 130.0f * (0.5f + 0.5f * sinf(timeAcc_ * 0.7f)));
             menuAccentBar_->SetSize(w, Max(2, S(2.5f)));
-            menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.55f + 0.45f * sinf(timeAcc_ * 2.4f)));
+            menuAccentBar_->SetColor(Color(1.0f, 0.8f, 0.2f, 0.68f + 0.18f * sinf(timeAcc_ * 0.9f)));
         }
         if (menuSub_) {
-            float flick = (sinf(timeAcc_ * 7.0f) > 0.985f) ? 0.35f : 0.92f;
-            menuSub_->SetColor(Color(0.48f, 0.86f, 1.0f, flick));
+            const float glow = 0.84f + 0.08f * sinf(timeAcc_ * 0.7f);
+            menuSub_->SetColor(Color(0.48f, 0.86f, 1.0f, glow));
         }
         if (menuHint_) {
-            menuHint_->SetColor(Color(0.75f, 0.82f, 0.90f, 0.58f + 0.36f * sinf(timeAcc_ * 2.0f)));
+            menuHint_->SetColor(Color(0.75f, 0.82f, 0.90f, 0.70f + 0.12f * sinf(timeAcc_ * 0.8f)));
         }
         for (unsigned i = 0; i < (unsigned)menuParticles_.Size(); ++i) {
             BorderImage* p = menuParticles_[i].Get();
@@ -8701,8 +8817,9 @@ private:
                                     menuPlateBase_.y_ + int(ny * S(6.0f)));
         }
         if (menuTitle_) {
+            const int rise = (int)((1.0f - SplashIntro::EaseOut(menuIntroTimer_ / 1.4f)) * S(24));
             menuTitle_->SetPosition(menuTitleBase_.x_ - int(nx * S(7.0f)),
-                                    menuTitleBase_.y_ + int(sinf(timeAcc_ * 0.8f) * S(3.0f)));
+                                    menuTitleBase_.y_ + rise + int(sinf(timeAcc_ * 0.6f) * S(3.0f)));
         }
         if (menuAccentBar_) {
             int w = menuAccentBar_->GetWidth();
@@ -8722,6 +8839,8 @@ private:
             if (helpPanel_) helpPanel_->SetVisible(false);
             if (weaponNode_) weaponNode_->SetEnabled(true);
             if (!mainMenuPanel_) CreateMainMenu();
+            menuIntroTimer_ = loadingScreenActive_ ? 0.0f : 2.0f;
+            mainMenuPanel_->SetOpacity(loadingScreenActive_ ? 0.0f : 1.0f);
             mainMenuPanel_->SetVisible(true);
             SetGameHudVisible(false);
             SyncMouseLock();
@@ -12091,7 +12210,26 @@ private:
 };
 
 // ============================================================================
-// Макрос регистрации приложения
+// На Linux проверяем именно тот SDL, который использует Urho3D, до создания
+// Engine (его Audio-конструктор инициализируется ещё до Setup()).
 // ============================================================================
-
+#if defined(__linux__) && !defined(__ANDROID__)
+int RunApplication() {
+    bool diagnose = false;
+    bool noSound = false;
+    const Vector<String>& arguments = GetArguments();
+    for (unsigned i = 0; i < (unsigned)arguments.Size(); ++i) {
+        const String option = arguments[i].ToLower();
+        if (option == "--diagnose-sdl") diagnose = true;
+        else if (option == "-nosound") noSound = true;
+    }
+    const DesktopSDL::Result startup = DesktopSDL::Prepare(diagnose, noSound);
+    if (!startup.run) return startup.exitCode;
+    SharedPtr<Context> context(new Context());
+    SharedPtr<MyApp> application(new MyApp(context, startup.disableAudio));
+    return application->Run();
+}
+URHO3D_DEFINE_MAIN(RunApplication())
+#else
 URHO3D_DEFINE_APPLICATION_MAIN(MyApp)
+#endif

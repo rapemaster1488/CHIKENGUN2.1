@@ -7,6 +7,10 @@
 #   --install-deps   Поставить системные пакеты / войти в Nix shell
 #   --4k             Пересобрать PBR текстуры в 4096x4096
 #   --rebuild        Принудительно пересобрать клиент
+#   --rebuild-urho3d Пересобрать кэшированный локальный Urho3D SDK и клиент
+#   --diagnose-sdl   Проверить SDL-драйверы, дисплей, OpenGL и аудио (Linux)
+#   -nosound         Запустить без звука
+#   -j N / --jobs N  Ограничить число потоков при пересборке
 # ============================================================================
 set -euo pipefail
 
@@ -46,6 +50,33 @@ while [ "$#" -gt 0 ]; do
         --rebuild)
             FORCE_BUILD=1
             shift
+            ;;
+        --rebuild-urho3d)
+            BUILD_ARGS+=("$1")
+            FORCE_BUILD=1
+            shift
+            ;;
+        -j|--jobs)
+            if [[ ! "${2:-}" =~ ^[1-9][0-9]*$ ]]; then
+                echo "ОШИБКА: $1 требует положительное число потоков." >&2
+                exit 2
+            fi
+            BUILD_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        -j?*|--jobs=*)
+            JOBS_VALUE="${1#-j}"
+            if [[ "$1" == --jobs=* ]]; then JOBS_VALUE="${1#--jobs=}"; fi
+            if [[ ! "$JOBS_VALUE" =~ ^[1-9][0-9]*$ ]]; then
+                echo "ОШИБКА: $1 требует положительное число потоков." >&2
+                exit 2
+            fi
+            BUILD_ARGS+=("$1")
+            shift
+            ;;
+        -h|--help)
+            sed -n '2,14p' "$0" | sed 's/^# \?//'
+            exit 0
             ;;
         *)
             APP_ARGS+=("$1")
@@ -97,16 +128,30 @@ if [ "$NEED_BUILD" -eq 1 ]; then
     TARGET_BIN="$ROOT/build/MyShooter${EXE_EXT}"
 fi
 
+# Keep the declared order: an explicitly selected SDK must not be shadowed by
+# another copy with the same shared-library name in a cache or home directory.
+RUNTIME_PATHS=""
+append_runtime_dir() {
+    local dir="$1"
+    if [ -n "$dir" ] && [ -d "$dir" ]; then
+        RUNTIME_PATHS="${RUNTIME_PATHS:+$RUNTIME_PATHS:}$dir"
+    fi
+}
 if [ "$OS_NAME" = "Linux" ]; then
     # Драйверы OpenGL/Vulkan на NixOS живут в /run/opengl-driver/lib + локальные профили Nix
     for ld in \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib/Urho3D}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib64}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib64/Urho3D}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/build/lib}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/build/lib/Urho3D}" \
+        "$ROOT/.cache/urho3d-sdk/lib" \
+        "$ROOT/.cache/urho3d-sdk/lib/Urho3D" \
+        "$ROOT/.cache/urho3d-sdk/lib64" \
+        "$ROOT/.cache/urho3d-sdk/lib64/Urho3D" \
         "/run/opengl-driver/lib" \
         "/run/opengl-driver-32/lib" \
-        "$ROOT/.cache/urho3d-sdk/lib" \
-        "$ROOT/.cache/urho3d-sdk/lib64" \
-        "${URHO3D_HOME:-}/lib" \
-        "${URHO3D_HOME:-}/lib64" \
-        "${URHO3D_HOME:-}/build/lib" \
         "$HOME/urho3d-build/out/lib" \
         "$HOME/urho3d-build/lib" \
         "$HOME/urho3d/build/lib" \
@@ -117,19 +162,28 @@ if [ "$OS_NAME" = "Linux" ]; then
         "$HOME/.nix-profile/lib" \
         "/run/current-system/sw/lib"
     do
-        [ -n "$ld" ] && [ -d "$ld" ] && export LD_LIBRARY_PATH="${ld}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+        append_runtime_dir "$ld"
     done
+    if [ -n "$RUNTIME_PATHS" ]; then
+        export LD_LIBRARY_PATH="${RUNTIME_PATHS}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    fi
 elif [ "$OS_NAME" = "Darwin" ]; then
     for ld in \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/lib/Urho3D}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/build/lib}" \
+        "${URHO3D_HOME:+$URHO3D_HOME/build/lib/Urho3D}" \
         "$ROOT/.cache/urho3d-sdk/lib" \
-        "${URHO3D_HOME:-}/lib" \
-        "${URHO3D_HOME:-}/build/lib" \
+        "$ROOT/.cache/urho3d-sdk/lib/Urho3D" \
         "$HOME/urho3d/build/lib" \
         "/opt/homebrew/lib" \
         "/usr/local/lib"
     do
-        [ -n "$ld" ] && [ -d "$ld" ] && export DYLD_LIBRARY_PATH="${ld}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+        append_runtime_dir "$ld"
     done
+    if [ -n "$RUNTIME_PATHS" ]; then
+        export DYLD_LIBRARY_PATH="${RUNTIME_PATHS}${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+    fi
 fi
 
 export CHIKENGUN_DATA_DIR="${CHIKENGUN_DATA_DIR:-$ROOT/build/Data}"

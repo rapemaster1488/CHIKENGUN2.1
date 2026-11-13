@@ -3,7 +3,7 @@
 # CHIKENGUN 2.5.6 — интро-тема «Осенняя заунывость» (оригинальное произведение, A minor)
 # Меланхоличный гармонь-шансон: felt piano, щипковый бас, дождь, ветер, винил.
 # Без единой расстроенной пилы: всё синусоидальное -> трансляция-«кукольное» звучание.
-# Звучит на заставке koch.studios → powered by fall.os → CHICHKENCUM 2.1
+# Звучит на заставке koch.studios → powered by fall.os → CHICKENCUM 2.1
 # Сгенерировано tools/gen_splash_theme.py → Data/Music/KochSplashTheme.wav
 # ВНИМАНИЕ: это ОРИГИНАЛЬНАЯ композиция. Песни в репозиторий не продаются.
 #   Запуск: python3 tools/gen_splash_theme.py   (нужны numpy, soundfile)
@@ -215,7 +215,7 @@ place(mix, riser(2.3, 320.0, 2100.0, 0.075), 0.2)
 # «вздох» — одинокая нота E4 издалека, как первое воспоминание о мелодии
 place(mix, harmonium(E4, 1.5, 0.085, rate=4.2, depth=0.40), 0.95)
 
-# ---- 2.5: SLAM падающего CHICHKENCUM — felt piano Am в полную силу + taiko
+# ---- 2.5: музыкальный акцент — felt piano Am в полную силу + taiko
 place(mix, soft_slam(1.7, 0.85), 2.50)
 place(mix, taiko(1.1, 0.55), 2.50)
 place(mix, chord_notes(Am, 2.6, 0.55, felt_piano), 2.50)
