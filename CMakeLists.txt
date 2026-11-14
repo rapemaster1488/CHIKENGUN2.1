@@ -50,6 +50,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_build_scripts.sh")
         set_tests_properties(BuildScriptSafety PROPERTIES TIMEOUT 60)
 
+        # Docker packaging contract (Dockerfile, compose, entrypoint, docs).
+        add_test(NAME DockerPackaging
+            COMMAND "${BASH_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_docker_files.sh")
+        set_tests_properties(DockerPackaging PROPERTIES TIMEOUT 60)
+
         find_program(PKG_CONFIG_FOR_LINK_TEST pkg-config)
         if(PKG_CONFIG_FOR_LINK_TEST)
             add_test(NAME CMakeSDLLinkage

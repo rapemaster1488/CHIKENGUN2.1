@@ -1,0 +1,34 @@
+# --- сборка и кэш (недопустимо тащить в контекст образа) ---
+.git
+.github
+.cache/
+build/
+build*/
+dist/
+release/
+result
+result-*
+
+# --- логи и артефакты запуска ---
+*.log
+Urho3D.log
+run_log.txt
+core
+core.*
+
+# --- бэкапы и «сломанные» копии исходников ---
+*.bak
+*.bak[0-9]*
+*.broken.*
+*.orig
+*.rej
+*~
+
+# --- кэш Python и объектные файлы ---
+__pycache__/
+*.pyc
+*.o
+*.obj
+*.a
+*.so
+*.so.*

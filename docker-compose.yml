@@ -1,0 +1,69 @@
+# ============================================================================
+# CHIKENGUN 2.5 «ПЕРО СУДЬБЫ» — Docker Compose
+#
+#   docker compose up --build            # игра в браузере: http://localhost:6080/
+#   docker compose --profile x11 run --rm chikengun-x11   # нативное окно X11 (Linux)
+#
+# Настройки через переменные окружения (или .env рядом с этим файлом):
+#   TEX_SIZE=1024|4096       разрешение процедурных PBR-текстур при сборке образа
+#   RESOLUTION=1280x720x24   геометрия виртуального дисплея
+#   VNC_PASSWORD=секрет      включить VNC-аутентификацию (обязательно на публичных серверах!)
+#   NOVNC_PORT=6080          порт веб-доступа на хосте
+#   SHM_SIZE=512mb           размер /dev/shm (llvmpipe/Xvfb требуют > 64mb)
+# ============================================================================
+services:
+  # Игра в БРАУЗЕРЕ через noVNC — работает на любой ОС (Linux, Windows, macOS).
+  chikengun:
+    build:
+      context: .
+      args:
+        TEX_SIZE: "${TEX_SIZE:-1024}"
+    image: chikengun:2.5
+    ports:
+      - "${NOVNC_PORT:-6080}:6080"
+      # - "${VNC_PORT:-5900}:5900"   # прямой VNC-клиент (TigerVNC/RealVNC) — по желанию
+    environment:
+      CHIKENGUN_MODE: "web"
+      CHIKENGUN_RESOLUTION: "${RESOLUTION:-1280x720x24}"
+      VNC_PASSWORD: "${VNC_PASSWORD:-}"
+      LIBGL_ALWAYS_SOFTWARE: "${LIBGL_ALWAYS_SOFTWARE:-1}"
+    volumes:
+      # settings.ini: кредиты ¤ казино, графика, достижения — переживают пересоздание контейнера
+      - chikengun-save:/data
+    shm_size: "${SHM_SIZE:-512mb}"
+    restart: "no"
+
+  # Нативное окно через X11-сокет хоста (Linux/X11 или XWayland).
+  # На хосте: xhost +local: && docker compose --profile x11 run --rm chikengun-x11
+  chikengun-x11:
+    profiles: ["x11"]
+    build:
+      context: .
+      args:
+        TEX_SIZE: "${TEX_SIZE:-1024}"
+    image: chikengun:2.5
+    environment:
+      CHIKENGUN_MODE: "x11"
+      DISPLAY: "${DISPLAY:-:0}"
+      LIBGL_ALWAYS_SOFTWARE: "${LIBGL_ALWAYS_SOFTWARE:-1}"
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - chikengun-save:/data
+      # --- звук (по желанию) ---
+      # - /dev/snd:/dev/snd:rw                                  # ALSA-устройства хоста
+      # - ${XDG_RUNTIME_DIR:-/run/user/1000}/pulse:/run/user/1000/pulse  # PulseAudio сокет
+    shm_size: "${SHM_SIZE:-512mb}"
+
+  # Одноразовая проверка SDL-диагностики внутри образа (CI / отладка):
+  #   docker compose run --rm chikengun-diagnose
+  chikengun-diagnose:
+    profiles: ["tools"]
+    image: chikengun:2.5
+    environment:
+      CHIKENGUN_MODE: "offscreen"
+    entrypoint: ["/usr/local/bin/chikengun-entrypoint"]
+    command: ["--diagnose-sdl"]
+    shm_size: "${SHM_SIZE:-512mb}"
+
+volumes:
+  chikengun-save:
