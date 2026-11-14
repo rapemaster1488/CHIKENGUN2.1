@@ -4,6 +4,17 @@
 
 ## Быстрый старт на любой ОС
 
+### Docker — работает везде (Linux, Windows, macOS, облачные серверы)
+```bash
+./docker.sh                  # собрать образ и запустить: игра в БРАУЗЕРЕ на http://localhost:6080/
+./docker.sh x11              # нативное окно через X11 хоста (Linux)
+./docker.sh build --4k       # образ с полным 4K UHD набором PBR-текстур
+```
+Ничего не нужно устанавливать, кроме Docker: образ сам собирает Urho3D 1.9.0, текстуры
+и клиент, а через noVNC игра доступна в браузере с любой ОС. Готовый образ также
+публикуется в GHCR. Подробности, GPU-ускорение, публичный сервер и troubleshooting —
+в [`docs/DOCKER.md`](docs/DOCKER.md).
+
 ### Nix / NixOS
 ```bash
 nix run                  # Flakes: собрать, проверить тесты и сразу запустить
@@ -87,6 +98,7 @@ cd CHIKENGUN2.1
 ## Проверка и тесты
 
 ```bash
-./build.sh --tests-only   # 11 наборов C++17 тестов, включая тайминг интро и пропуск
-./tools/syntax_check.sh   # проверка C++17 / Urho3D типов (-Wall -Wextra -Werror)
+./build.sh --tests-only     # 11 наборов C++17 тестов, включая тайминг интро и пропуск
+./tools/syntax_check.sh     # проверка C++17 / Urho3D типов (-Wall -Wextra -Werror)
+./tests/test_docker_files.sh # контракт Docker-упаковки (Dockerfile, compose, entrypoint)
 ```

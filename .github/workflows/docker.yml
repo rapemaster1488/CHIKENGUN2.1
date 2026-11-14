@@ -1,0 +1,67 @@
+# Сборка официального Docker-образа CHIKENGUN 2.5 (игра в браузере через noVNC)
+# и публикация в GitHub Container Registry при пуше в main / тегах v*.
+name: Docker Image (noVNC web build)
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - ".dockerignore"
+      - "docker.sh"
+      - "docker/**"
+      - "tests/test_docker_files.sh"
+  workflow_dispatch:
+
+jobs:
+  docker-image:
+    name: Build & publish container image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute lowercase image name
+        run: echo "IMAGE=ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image (loaded into the local daemon for smoke tests)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke-test the image (SDL diagnostics inside the container)
+        run: |
+          docker run --rm --entrypoint /bin/bash "$IMAGE:${{ github.sha }}" \
+            -c 'test -x /opt/chikengun/MyShooter && test -f /opt/chikengun/Data/Textures/Skybox4K.xml && test -d /opt/chikengun/CoreData/Shaders'
+          docker run --rm -e CHIKENGUN_MODE=offscreen --shm-size=512m "$IMAGE:${{ github.sha }}" --diagnose-sdl > diagnose.log 2>&1 || true
+          cat diagnose.log
+          grep -q "Video drivers (built):" diagnose.log
+
+      - name: Push image to GHCR
+        if: github.event_name != 'pull_request'
+        run: |
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:${{ github.sha }}"
