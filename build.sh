@@ -7,7 +7,7 @@
 #
 # Флаги:
 #   --install-deps   Автоматически поставить пакеты сборки / войти в nix-shell
-#   --4k             Сгенерировать PBR текстуры в максимальном 4096x4096 (def: 1024)
+#   --4k             Сгенерировать PBR текстуры в максимальном 4096x4096 (def: 4096)
 #   --rebuild-urho3d Пересобрать только локальный кэш Urho3D SDK (не внешний SDK)
 #   --tests-only     Собрать и прогнать только модульные C++17 тесты (без Urho3D)
 #   -j N / --jobs N  Число потоков сборки (по умолчанию все ядра)
@@ -19,7 +19,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 ORIG_ARGS=("$@")
 CXX="${CXX:-}"
 CXXFLAGS="${CXXFLAGS:--O2 -DNDEBUG -Wall -Wextra}"
-TEX_SIZE="${TEX_SIZE:-1024}"
+TEX_SIZE="${TEX_SIZE:-4096}"
 URHO3D_REF="${URHO3D_REF:-1.9.0}"
 INSTALL_DEPS="${AUTO_INSTALL_DEPS:-0}"
 REBUILD_URHO3D=0
@@ -1184,7 +1184,7 @@ STAMP_FILE="$ROOT/build/Data/Textures/.4k_pbr_stamp"
 CUR_STAMP=""
 [ -f "$STAMP_FILE" ] && CUR_STAMP="$(cat "$STAMP_FILE" 2>/dev/null || true)"
 
-if [ "$CUR_STAMP" != "$TEX_SIZE" ] || ! texture_set_is_valid "$ROOT/build/Data/Textures"; then
+if [ "$CUR_STAMP" != "$TEX_SIZE" ] || [ "$ROOT/tools/gen_textures_4k.cpp" -nt "$STAMP_FILE" ] || ! texture_set_is_valid "$ROOT/build/Data/Textures"; then
     echo "[2/3] Генерация PBR текстур (${TEX_SIZE}x${TEX_SIZE}), IBL Skybox4K и UHD Loading Art..."
     "$CXX" -O3 -std=c++17 -pthread "$ROOT/tools/gen_textures_4k.cpp" -o "$ROOT/build/gen_textures_4k${EXE_EXT}"
     "$ROOT/build/gen_textures_4k${EXE_EXT}" "$ROOT/build/Data/Textures" "$TEX_SIZE"

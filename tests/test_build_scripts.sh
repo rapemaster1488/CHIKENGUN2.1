@@ -369,7 +369,7 @@ printf 'SDL\n' > "$spaced_sdk/include/Urho3D/ThirdParty/SDL/SDL_joystick.h"
 printf 'generated config\n' > "$spaced_sdk/Source/ThirdParty/SDL/include/generated/SDL_config.h"
 printf 'Bullet\n' > "$spaced_sdk/include/Urho3D/ThirdParty/Bullet/LinearMath/btIDebugDraw.h"
 printf 'library\n' > "$spaced_sdk/lib/Urho3D/libUrho3D.a"
-printf '1024\n' > "$tmp/project/build/Data/Textures/.4k_pbr_stamp"
+printf '4096\n' > "$tmp/project/build/Data/Textures/.4k_pbr_stamp"
 printf '#!%s\n' "$bash_path" > "$tmp/bin/python3"
 cat >> "$tmp/bin/python3" <<'PYTHON'
 if [ "${1:-}" = - ]; then cat > /dev/null; fi
