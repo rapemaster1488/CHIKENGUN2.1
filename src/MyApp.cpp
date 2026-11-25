@@ -1403,8 +1403,27 @@ public:
     // Setup() — вызывается ДО создания окна OpenGL: выставляет 4K UHD / монитор,
     // MSAA, HighDPI, TripleBuffer, Anisotropy 16x и максимальное качество PBR!
     // =========================================================================
+    // Apply before loading materials, not after allocating the full 4K set.
+    auto MiniTextureQuality() const -> decltype(QUALITY_LOW) {
+        return gfxQualityIdx_ >= 3 ? QUALITY_MAX :
+               (gfxQualityIdx_ >= 2 ? QUALITY_MEDIUM : QUALITY_LOW);
+    }
+
+    void ApplyStartupRecovery() {
+        if (!GetArguments().Contains(String("--safe-mode"))) return;
+        // Explicit recovery from saved Ultra/4K settings, without deleting settings.ini.
+        gfxQualityIdx_ = 0;
+        gfxResIdx_ = 4; // 1600x900
+        gfxDisplayMode_ = 0;
+        gfxMonitorIdx_ = 0;
+        gfxMsaaIdx_ = gfxShadowIdx_ = gfxGlowIdx_ = gfxAnisoIdx_ = 0;
+        gfxHdr_ = gfxSsao_ = gfxFxaa_ = gfxSharpen_ = false;
+        gfxFpsIdx_ = 0;
+    }
+
     void Setup() override {
         LoadSettingsFile();
+        ApplyStartupRecovery();
 
         if (!engineParameters_.Contains(EP_RESOURCE_PREFIX_PATHS)) {
             String prefixes = ".;..;bin;../bin";
@@ -1443,7 +1462,7 @@ public:
         engineParameters_[EP_TEXTURE_ANISOTROPY] = kAnisoTable[Clamp(gfxAnisoIdx_, 0, 2)];
         engineParameters_[EP_TEXTURE_FILTER_MODE] = (gfxAnisoIdx_ >= 2) ? FILTER_ANISOTROPIC
                                                   : (gfxAnisoIdx_ == 1 ? FILTER_TRILINEAR : FILTER_BILINEAR);
-        engineParameters_[EP_TEXTURE_QUALITY] = QUALITY_MAX;
+        engineParameters_[EP_TEXTURE_QUALITY] = MiniTextureQuality();
         engineParameters_[EP_MATERIAL_QUALITY] = (gfxQualityIdx_ >= 2) ? QUALITY_HIGH
                                                : (gfxQualityIdx_ == 1 ? QUALITY_MEDIUM : QUALITY_LOW);
 
@@ -1578,6 +1597,7 @@ public:
 
         // Пользовательские настройки графики/звука (settings.ini) + 4K движок
         LoadSettingsFile();
+        ApplyStartupRecovery();
         SetupEngineSettings();
         RefreshUIScale();
 
@@ -1627,7 +1647,7 @@ private:
         graphics->SetDefaultTextureFilterMode((gfxAnisoIdx_ >= 2) ? FILTER_ANISOTROPIC
                                             : (gfxAnisoIdx_ == 1 ? FILTER_TRILINEAR : FILTER_BILINEAR));
 
-        renderer->SetTextureQuality(QUALITY_MAX);
+        renderer->SetTextureQuality(MiniTextureQuality());
         renderer->SetMaterialQuality((gfxQualityIdx_ >= 2) ? QUALITY_HIGH
                                    : (gfxQualityIdx_ == 1 ? QUALITY_MEDIUM : QUALITY_LOW));
         renderer->SetSpecularLighting(gfxQualityIdx_ >= 1);
@@ -1637,6 +1657,8 @@ private:
         renderer->SetShadowQuality(gfxQualityIdx_ >= 2 ? SHADOWQUALITY_PCF_24BIT : SHADOWQUALITY_PCF_16BIT);
         renderer->SetShadowSoftness(gfxQualityIdx_ >= 3 ? 1.15f : 1.0f);
         renderer->SetHDRRendering(gfxHdr_ || gfxGlowIdx_ >= 1);
+        static const int fpsValues[3] = { 60, 120, 0 };
+        if (engine_) engine_->SetMaxFps(fpsValues[Clamp(gfxFpsIdx_, 0, 2)]);
     }
 
     void LoadCoreModelsAndFont() {
@@ -3400,7 +3422,7 @@ private:
         bool inOverlay = inMenu_ || banyaOpen_ || casinoOpen_ || arcadeOpen_;
         bool useSsao   = gfxSsao_ && (gfxQualityIdx_ >= 1) && !inOverlay;
         bool useBloom  = (gfxGlowIdx_ > 0);
-        bool useCinema = true; // ACES tonemap + CAS 4K + виньетка всегда держат идеальный контраст!
+        bool useCinema = gfxQualityIdx_ > 0; // Low/recovery must not force a fullscreen postprocess pass.
         bool useFxaa   = gfxFxaa_;
 
         renderPath_->SetEnabled("SSAO4K", useSsao);
@@ -8685,7 +8707,7 @@ private:
 
         int q = Clamp(gfxQualityIdx_, 0, 3);
         renderer->SetMaterialQuality(q >= 2 ? QUALITY_HIGH : (q == 1 ? QUALITY_MEDIUM : QUALITY_LOW));
-        renderer->SetTextureQuality(QUALITY_MAX);
+        renderer->SetTextureQuality(MiniTextureQuality());
         renderer->SetSpecularLighting(q >= 1);
 
         static const int shadowSizes[3] = { 1024, 2048, 4096 };
@@ -10446,7 +10468,7 @@ private:
                 if (XMLFile* fxaaXml = cache->GetResource<XMLFile>("PostProcess/FXAA3.xml"))
                     casinoRenderPath_->Append(fxaaXml);
                 casinoRenderPath_->SetEnabled("BloomHDR", gfxGlowIdx_ > 0);
-                casinoRenderPath_->SetEnabled("Cinema4K", true);
+                casinoRenderPath_->SetEnabled("Cinema4K", gfxQualityIdx_ > 0);
                 casinoRenderPath_->SetEnabled("FXAA3", gfxFxaa_);
                 casinoRenderPath_->SetShaderParameter("BloomHDRThreshold", Variant(0.92f));
                 casinoRenderPath_->SetShaderParameter("BloomHDRMix", Variant(Vector2(1.0f, 0.34f)));
@@ -11185,6 +11207,8 @@ private:
         if (casinoNumberButton_)  casinoNumberButton_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
         if (casinoNumMinusBtn_)   casinoNumMinusBtn_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
         if (casinoNumPlusBtn_)    casinoNumPlusBtn_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
+        setBtnText(casinoModeButton_, blackjackMode_ ? "РУЛЕТКА [B]" : "РУЛЕТКА / 777 [TAB]");
+        if (casinoQuickDoubleBtn_) casinoQuickDoubleBtn_->SetVisible(!blackjackMode_);
         setBtnText(casinoQuickRedBtn_, blackjackMode_ ? "ЕЩЁ [H]" : "КРАСНОЕ");
         setBtnText(casinoQuickBlackBtn_, blackjackMode_ ? "ХВАТИТ [N]" : "ЧЁРНОЕ");
         setBtnText(casinoQuickZeroBtn_, blackjackMode_ ? "ДАБЛ [X]" : "ЗЕРО");
@@ -11414,8 +11438,14 @@ private:
     }
 
     void CloseCasino() {
+        if (!casinoOpen_) return;
         if (blackjackActive_) SettleBlackjack();
-        if (!casinoOpen_ || casinoSpinTimer_ > 0.0f) return;
+        // Finish the already-paid spin exactly once before leaving. Never trap
+        // the player behind the animation, and never refund/re-roll on reopen.
+        if (casinoSpinTimer_ > 0.0f) {
+            casinoSpinTimer_ = 0.0f;
+            FinishCasinoSpin();
+        }
         casinoOpen_ = false;
         casinoDisclaimerVisible_ = false;
         if (casinoPanel_) casinoPanel_->SetVisible(false);
@@ -11563,8 +11593,8 @@ private:
             }
             return;
         }
-        if (casinoSpinTimer_ > 0.0f) return;
         if (key == KEY_ESCAPE || key == KEY_J) { CloseCasino(); return; }
+        if (casinoSpinTimer_ > 0.0f) return;
         if (key == KEY_B && !blackjackActive_) { blackjackMode_ = !blackjackMode_; casinoSlotsMode_ = false; UpdateCasinoVisuals(); return; }
         if (blackjackMode_) {
             if (key == KEY_H || key == KEY_SPACE || key == KEY_RETURN) { BlackjackAction(0); return; }
@@ -11628,6 +11658,7 @@ private:
             UpdateCasinoVisuals();
             return;
         }
+        if (HitUIElement(casinoCloseButton_, mp)) { CloseCasino(); return; }
         if (casinoSpinTimer_ > 0.0f) return;
 
         if (blackjackMode_) {
@@ -11803,7 +11834,7 @@ private:
                 if (XMLFile* fxaaXml = cache->GetResource<XMLFile>("PostProcess/FXAA3.xml"))
                     banyaRenderPath_->Append(fxaaXml);
                 banyaRenderPath_->SetEnabled("BloomHDR", gfxGlowIdx_ > 0);
-                banyaRenderPath_->SetEnabled("Cinema4K", true);
+                banyaRenderPath_->SetEnabled("Cinema4K", gfxQualityIdx_ > 0);
                 banyaRenderPath_->SetEnabled("FXAA3", gfxFxaa_);
                 banyaRenderPath_->SetShaderParameter("BloomHDRThreshold", Variant(0.95f));
                 banyaRenderPath_->SetShaderParameter("BloomHDRMix", Variant(Vector2(1.0f, 0.28f)));

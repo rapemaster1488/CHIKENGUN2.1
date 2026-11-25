@@ -6,7 +6,7 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 export HOME="$tmp/home"
-unset URHO3D_HOME URHO_INC URHO3D_ALLOW_HEADLESS IN_NIX_SHELL NIX_CC NIX_CFLAGS_COMPILE NIX_LDFLAGS NIX_PROFILES LD_LIBRARY_PATH SDL_VIDEODRIVER || true
+unset TEX_SIZE URHO3D_HOME URHO_INC URHO3D_ALLOW_HEADLESS IN_NIX_SHELL NIX_CC NIX_CFLAGS_COMPILE NIX_LDFLAGS NIX_PROFILES LD_LIBRARY_PATH SDL_VIDEODRIVER || true
 export AUTO_INSTALL_DEPS=0
 # /usr/bin/env need not exist inside a Nix build sandbox.
 bash_path="$(command -v bash)"
@@ -44,6 +44,14 @@ if tr ':' '\n' < "$APP_LIBRARY_PATH_TRACE" | grep -Fxq /lib; then
     echo 'Unset URHO3D_HOME unexpectedly added /lib to LD_LIBRARY_PATH' >&2
     exit 1
 fi
+
+# Recovery flags reach the client, not the texture builder; ordinary rebuild
+# must remain non-Ultra so a previous accidental 4K build can be downgraded.
+"$bash_path" "$tmp/launcher/run.sh" --rebuild --safe-mode > /dev/null
+printf '\n' > "$tmp/expected"
+cmp "$tmp/expected" "$BUILD_TRACE"
+printf '%s\n' --safe-mode > "$tmp/expected"
+cmp "$tmp/expected" "$APP_TRACE"
 
 mkdir -p "$tmp/external-sdk/lib/Urho3D" "$tmp/launcher/.cache/urho3d-sdk/lib/Urho3D" \
     "$HOME/urho3d-local/lib" "$tmp/user-runtime"
@@ -369,7 +377,7 @@ printf 'SDL\n' > "$spaced_sdk/include/Urho3D/ThirdParty/SDL/SDL_joystick.h"
 printf 'generated config\n' > "$spaced_sdk/Source/ThirdParty/SDL/include/generated/SDL_config.h"
 printf 'Bullet\n' > "$spaced_sdk/include/Urho3D/ThirdParty/Bullet/LinearMath/btIDebugDraw.h"
 printf 'library\n' > "$spaced_sdk/lib/Urho3D/libUrho3D.a"
-printf '4096\n' > "$tmp/project/build/Data/Textures/.4k_pbr_stamp"
+printf '1024\n' > "$tmp/project/build/Data/Textures/.4k_pbr_stamp"
 printf '#!%s\n' "$bash_path" > "$tmp/bin/python3"
 cat >> "$tmp/bin/python3" <<'PYTHON'
 if [ "${1:-}" = - ]; then cat > /dev/null; fi

@@ -1,7 +1,7 @@
 # ============================================================================
 # CHIKENGUN 2.5 — ПЕРО СУДЬБЫ (Zero-Pain Windows Builder: MSVC / CMake)
 # Использование в PowerShell:
-#   .\build.ps1                # Собрать клиент и PBR текстуры (4096)
+#   .\build.ps1                # Собрать клиент и PBR текстуры (1024)
 #   .\build.ps1 -Ultra4K       # Собрать с текстурами 4096x4096
 #   .\build.ps1 -TestsOnly     # Собрать и прогнать только C++17 модульные тесты
 # ============================================================================
@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
-$TexSize = 4096
+$TexSize = if ($Ultra4K) { 4096 } else { 1024 }
 $BuildDir = Join-Path $Root "build-win"
 
 function Require-Command([string]$Name, [string]$Hint) {

@@ -7,7 +7,7 @@
 #
 # Флаги:
 #   --install-deps   Автоматически поставить пакеты сборки / войти в nix-shell
-#   --4k             Сгенерировать PBR текстуры в максимальном 4096x4096 (def: 4096)
+#   --4k             Сгенерировать PBR текстуры в максимальном 4096x4096 (def: 1024)
 #   --rebuild-urho3d Пересобрать только локальный кэш Urho3D SDK (не внешний SDK)
 #   --tests-only     Собрать и прогнать только модульные C++17 тесты (без Urho3D)
 #   -j N / --jobs N  Число потоков сборки (по умолчанию все ядра)
@@ -19,7 +19,7 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 ORIG_ARGS=("$@")
 CXX="${CXX:-}"
 CXXFLAGS="${CXXFLAGS:--O2 -DNDEBUG -Wall -Wextra}"
-TEX_SIZE="${TEX_SIZE:-4096}"
+TEX_SIZE="${TEX_SIZE:-1024}"
 URHO3D_REF="${URHO3D_REF:-1.9.0}"
 INSTALL_DEPS="${AUTO_INSTALL_DEPS:-0}"
 REBUILD_URHO3D=0
