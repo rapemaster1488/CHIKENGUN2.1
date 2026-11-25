@@ -344,6 +344,55 @@ int main(int argc, char** argv) {
                 assert(!Casino::Wins(b, (z+1)%37));
             }
         }
+        // Multiple chips are reserved, frozen at spin, and paid exactly once.
+        Casino::RouletteRound round;
+        int wallet = 1000;
+        assert(round.Add(Casino::BetForTableZone(7, 10), wallet));
+        assert(round.Add(Casino::BetForTableZone(7, 25), wallet));
+        assert(round.Add(Casino::BetForTableZone(37, 100), wallet));
+        assert(round.OnZone(7) == 35 && round.Total() == 135 && wallet == 1000);
+        round.Undo(); assert(round.Total() == 35);
+        assert(round.Add(Casino::BetForTableZone(37, 100), wallet));
+        assert(!round.Add(Casino::BetForTableZone(38, 900), wallet));
+        assert(round.Begin(wallet) && wallet == 865);
+        assert(!round.Begin(wallet));
+        round.Undo(); round.Clear(); assert(round.Total() == 135);
+        assert(!round.Add(Casino::BetForTableZone(1, 10), wallet));
+        assert(round.Settle(99) == 0 && round.locked);
+        wallet += round.Settle(7);
+        assert(wallet == 2325 && !round.locked && round.Total() == 0);
+        assert(round.Settle(7) == 0); // no duplicate return on close/reopen
+        assert(!round.Begin(wallet));
+        assert(!round.Add(Casino::BetForTableZone(0, 0), wallet));
+        for (int z=37; z<43; ++z) assert(round.Add(Casino::BetForTableZone(z, 10), wallet));
+        assert(round.Add(Casino::BetForTableZone(0, 10), wallet));
+        assert(round.Begin(wallet));
+        assert(round.Settle(0) == 360); // outside bets all lose to zero
+        assert(round.Add(Casino::BetForTableZone(1, 10), wallet));
+        round.Clear(); assert(round.Total() == 0);
+        assert(!round.Add(Casino::BetForTableZone(1, 1000001), 100000000));
+
+        // Cross-check overlapping inside/outside bets for every wheel pocket.
+        for (int result=0; result<=36; ++result) {
+            Casino::RouletteRound mixed;
+            int cash = 10000, expected = 0;
+            for (int z : {0, 7, 19, 37, 38, 43, 46}) {
+                auto bet = Casino::BetForTableZone(z, 25);
+                assert(mixed.Add(bet, cash));
+                expected += Casino::Payout(bet, result);
+            }
+            int insufficient = mixed.Total()-1;
+            assert(!mixed.Begin(insufficient) && !mixed.locked);
+            assert(mixed.Begin(cash) && cash == 9825);
+            assert(mixed.Settle(result) == expected);
+        }
+        Casino::RouletteRound capped;
+        for (int i=0; i<512; ++i) assert(capped.Add(Casino::BetForTableZone(1, 10), 1000000));
+        assert(!capped.Add(Casino::BetForTableZone(1, 10), 1000000));
+        capped.Clear();
+        assert(capped.Add(Casino::BetForTableZone(1, 1000000), 100000000));
+        assert(!capped.Add(Casino::BetForTableZone(1, 1), 100000000));
+
         Casino::Card aces[] = {{1,0}, {1,1}, {9,2}};
         Casino::Card natural[] = {{1,0}, {13,1}};
         Casino::Card seventeen[] = {{1,0}, {6,1}};

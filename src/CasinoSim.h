@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <vector>
 
 namespace Casino {
 
@@ -285,6 +286,41 @@ inline bool TableZoneIsRed(int zoneIdx) {
     if (zoneIdx < 0 || zoneIdx > 36) return false;
     return IsRed(zoneIdx);
 }
+
+// Pending chips are reserved logically; the wallet is debited only at Begin.
+// A locked snapshot cannot be edited or paid twice.
+class RouletteRound {
+public:
+    std::vector<Bet> chips;
+    bool locked = false;
+    int Total() const { int n = 0; for (const auto& b : chips) n += b.amount; return n; }
+    bool Add(const Bet& b, int balance) {
+        if (locked || b.amount <= 0 || b.amount > 1000000 || chips.size() >= 512 ||
+            b.type < BET_RED || b.type >= BET_COUNT || b.number < 0 || b.number > 36 ||
+            Total() > std::min(balance, 1000000) - b.amount) return false;
+        chips.push_back(b); return true;
+    }
+    void Undo() { if (!locked && !chips.empty()) chips.pop_back(); }
+    void Clear() { if (!locked) chips.clear(); }
+    bool Begin(int& balance) {
+        if (locked || chips.empty() || Total() > balance) return false;
+        balance -= Total(); locked = true; return true;
+    }
+    int Settle(int result) {
+        if (!locked || result < 0 || result > 36) return 0;
+        int payout = 0;
+        for (const auto& b : chips) payout += Payout(b, result);
+        chips.clear(); locked = false;
+        return payout;
+    }
+    int OnZone(int zone) const {
+        const Bet target = BetForTableZone(zone, 1);
+        int n = 0;
+        for (const auto& b : chips)
+            if (b.type == target.type && (b.type < BET_NUMBER || b.number == target.number)) n += b.amount;
+        return n;
+    }
+};
 
 // ============================================================================
 // БЛЭКДЖЕК «КОЧЕТ-21» — второй настоящий стол казино (чистая логика).
