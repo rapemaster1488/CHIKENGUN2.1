@@ -5,7 +5,7 @@
     <texture unit="diffuse" name="Textures/CasinoMahoganyDiffuse.png" />
     <texture unit="normal" name="Textures/CasinoMahoganyNormal.png" />
     <texture unit="specular" name="Textures/CasinoMahoganyRoughMetal.png" />
-    <parameter name="Roughness" value="0" />
+    <parameter name="Roughness" value="0.20" />
     <parameter name="Metallic" value="0" />
-    <parameter name="MatSpecColor" value="0.82 0.56 0.44 84" />
+    <parameter name="MatSpecColor" value="0.36 0.27 0.21 40" />
 </material>
