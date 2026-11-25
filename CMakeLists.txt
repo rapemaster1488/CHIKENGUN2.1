@@ -61,7 +61,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # 3. Цель генерации PBR текстур (1024 быстро по умолчанию, 4096 для 4K ULTRA)
-set(TEX_SIZE "1024" CACHE STRING "Разрешение процедурных PBR текстур (1024..4096)")
+set(TEX_SIZE "4096" CACHE STRING "Разрешение процедурных PBR текстур (1024..4096)")
 add_custom_target(textures_4k
     COMMAND gen_textures_4k "${CMAKE_BINARY_DIR}/Data/Textures" "${TEX_SIZE}"
     DEPENDS gen_textures_4k

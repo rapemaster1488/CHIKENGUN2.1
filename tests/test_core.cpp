@@ -329,12 +329,43 @@ int main(int argc, char** argv) {
         assert(Casino::Wins(corner, 5) && Casino::Wins(corner, 8) && !Casino::Wins(corner, 9));
         Casino::Bet sixline{Casino::BET_SIXLINE, 10, 7};
         assert(Casino::Wins(sixline, 12) && !Casino::Wins(sixline, 13));
-        assert(Casino::PayoutMultiplier(Casino::BET_CORNER) == 8);
+        assert(Casino::PayoutMultiplier(Casino::BET_CORNER) == 9);
         assert(Casino::ColorName(0) == std::string("ЗЕРО"));
         assert(Casino::IsBlack(2) && !Casino::IsBlack(1));
         assert(Casino::NextChipAmount(25, -1) == 10);
         assert(Casino::NextChipAmount(25, 1) == 50);
         assert(Casino::ClampNumber(99) == 36 && Casino::ClampNumber(-5) == 0);
+
+        for (int z = 0; z < Casino::kTableZoneCount; ++z) {
+            auto b = Casino::BetForTableZone(z, 25);
+            assert(b.amount == 25);
+            if (z <= 36) {
+                assert(b.number == z && Casino::Payout(b, z) == 900);
+                assert(!Casino::Wins(b, (z+1)%37));
+            }
+        }
+        Casino::Card aces[] = {{1,0}, {1,1}, {9,2}};
+        Casino::Card natural[] = {{1,0}, {13,1}};
+        Casino::Card seventeen[] = {{1,0}, {6,1}};
+        Casino::Card bust[] = {{10,0}, {10,1}, {5,2}};
+        assert(Casino::HandValue(aces, 3) == 21);
+        assert(Casino::IsSoftHand(aces, 3));
+        assert(!Casino::DealerMustHit(seventeen, 2));
+        assert(Casino::BlackjackPayout(100, natural, 2, seventeen, 2) == 250);
+        assert(Casino::BlackjackPayout(25, natural, 2, seventeen, 2) == 62);
+        assert(Casino::BlackjackPayout(100, natural, 2, natural, 2) == 100);
+        assert(Casino::BlackjackPayout(100, seventeen, 2, bust, 3) == 200);
+        assert(Casino::BlackjackPayout(100, bust, 3, bust, 3) == 0);
+        Casino::Card deck[52];
+        Casino::MakeDeck(deck);
+        uint32_t seed = 0;
+        Casino::ShuffleDeck(deck, 52, seed);
+        bool seenCard[52] = {};
+        for (const auto& c : deck) {
+            int index = c.suit * 13 + c.rank - 1;
+            assert(index >= 0 && index < 52 && !seenCard[index]);
+            seenCard[index] = true;
+        }
 
         // Кибер-Слоты 777
         assert(Casino::SlotsMultiplier(Casino::SYM_SEVEN, Casino::SYM_SEVEN, Casino::SYM_SEVEN) == 50);

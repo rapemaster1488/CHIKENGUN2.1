@@ -1970,10 +1970,10 @@ int main(int argc, char** argv) {
     saveSet("BanyaRooster", S,         genBanyaRooster4K(S));
     saveSet("BanyaPlank",   S,         genBanyaPlank4K(S));
     saveSet("BanyaStone",     S,         genBanyaStone4K(S));
-    saveSet("BanyaCopper",    smallSize, genBanyaCopper4K(smallSize));
-    saveSet("BanyaBirch",     smallSize, genBanyaBirch4K(smallSize));
-    saveSet("CasinoFelt",     smallSize, genCasinoFelt4K(smallSize));
-    saveSet("CasinoGold",     smallSize, genCasinoGold4K(smallSize));
+    saveSet("BanyaCopper",    S, genBanyaCopper4K(S));
+    saveSet("BanyaBirch",     S, genBanyaBirch4K(S));
+    saveSet("CasinoFelt",     S, genCasinoFelt4K(S));
+    saveSet("CasinoGold",     S, genCasinoGold4K(S));
     saveSet("CasinoMarble",   S,         genCasinoMarble4K(S));
     saveSet("CasinoMahogany", S,         genCasinoMahogany4K(S));
 

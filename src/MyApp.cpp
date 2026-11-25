@@ -67,6 +67,8 @@
 #include <Urho3D/Graphics/ParticleEmitter.h>
 #include <Urho3D/Graphics/ParticleEffect.h>
 #include <Urho3D/Graphics/Octree.h>
+#include <Urho3D/Graphics/OctreeQuery.h>
+#include <Urho3D/UI/Text3D.h>
 #include <Urho3D/Graphics/DebugRenderer.h>
 #include <Urho3D/Graphics/Skybox.h>
 #include <Urho3D/Graphics/RenderPath.h>
@@ -5457,6 +5459,12 @@ private:
     void HandleMouseMove(StringHash eventType, VariantMap& eventData) {
         using namespace MouseMove;
         (void)eventType; (void)eventData;
+        if (casinoOpen_ || banyaOpen_) {
+            auto* input = GetSubsystem<Input>();
+            if (input && input->GetMouseButtonDown(MOUSEB_RIGHT))
+                miniOrbit_ = Clamp(miniOrbit_ + input->GetMouseMove().x_ * 0.2f, -35.0f, 35.0f);
+            return;
+        }
         if (loadingScreenActive_ || isMouseVisible_ || banyaOpen_ || paused_ || helpOpen_ || perkShopOpen_) return;
         
         auto* input = GetSubsystem<Input>();
@@ -10297,6 +10305,107 @@ private:
         }
     }
 
+    bool blackjackMode_ = false, blackjackActive_ = false;
+    Casino::Card blackjackDeck_[52], blackjackPlayer_[12], blackjackDealer_[12];
+    int blackjackNext_ = 0, blackjackP_ = 0, blackjackD_ = 0, blackjackBet_ = 0;
+    uint32_t blackjackRng_ = 0xB1ACu;
+    SharedPtr<Node> blackjackCards_;
+    SharedPtr<Node> tableChip_;
+    float miniOrbit_ = 0.0f;
+
+    // Pick the nearest visible triangle, never an object behind a wall.
+    Node* PickMiniObject(Scene* scene, Node* camera, const IntVector2& mouse) {
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!scene || !camera || !gfx || gfx->GetWidth() <= 0 || gfx->GetHeight() <= 0) return nullptr;
+        Vector<RayQueryResult> hits;
+        Ray ray = camera->GetComponent<Camera>()->GetScreenRay(
+            float(mouse.x_) / gfx->GetWidth(), float(mouse.y_) / gfx->GetHeight());
+        RayOctreeQuery query(hits, ray, RAY_TRIANGLE, 30.0f, DrawableTypes::Geometry, 1u);
+        scene->GetComponent<Octree>()->RaycastSingle(query);
+        return hits.Empty() ? nullptr : hits[0].node_;
+    }
+
+    void TableLabel(Node* parent, const String& label, const Vector3& position, float size, const Color& color = Color::WHITE) {
+        Node* n = parent->CreateChild("TableLabel");
+        n->SetPosition(position);
+        n->SetRotation(Quaternion(90, 0, 0));
+        auto* text = n->CreateComponent<Text3D>();
+        text->SetViewMask(2u); // Visible to camera, excluded from interaction rays.
+        text->SetFont(font_, 32);
+        text->SetText(label);
+        text->SetColor(color);
+        text->SetAlignment(HA_CENTER, VA_CENTER);
+        n->SetScale(size);
+    }
+
+    void RefreshBlackjack() {
+        if (!blackjackCards_) return;
+        blackjackCards_->RemoveAllChildren();
+        static const char* suits[] = {"♠", "♥", "♦", "♣"};
+        for (int side = 0; side < 2; ++side) {
+            int count = side ? blackjackD_ : blackjackP_;
+            for (int i = 0; i < count; ++i) {
+                bool hidden = side && i == 1 && blackjackActive_;
+                const auto& card = side ? blackjackDealer_[i] : blackjackPlayer_[i];
+                Node* n = blackjackCards_->CreateChild("Card");
+                n->SetPosition(Vector3(2.65f + i * 0.22f, 1.01f + i * 0.002f, side ? 0.35f : -0.35f));
+                Node* body = n->CreateChild("Paper");
+                body->SetScale(Vector3(0.21f, 0.008f, 0.32f));
+                auto* sm = body->CreateComponent<StaticModel>();
+                sm->SetModel(boxModel_);
+                sm->SetMaterial(MakePBR(hidden ? Color(35, 50, 100) : Color(245, 240, 225), 0.65f, 0.0f));
+                sm->SetCastShadows(true);
+                String rank = card.rank >= 2 && card.rank <= 10 ? String(card.rank) : String(Casino::CardLabel(card.rank));
+                TableLabel(n, hidden ? "?" : rank + suits[card.suit], Vector3(0, 0.008f, 0), 0.23f, hidden ? Color::WHITE : ((card.suit == 1 || card.suit == 2) ? Color(180, 25, 30) : Color(20, 22, 28)));
+            }
+        }
+        UpdateCasinoVisuals();
+    }
+
+    void SettleBlackjack() {
+        if (!blackjackActive_) return;
+        while (Casino::HandValue(blackjackPlayer_, blackjackP_) <= 21 &&
+               Casino::DealerMustHit(blackjackDealer_, blackjackD_) && blackjackD_ < 12)
+            blackjackDealer_[blackjackD_++] = blackjackDeck_[blackjackNext_++];
+        blackjackActive_ = false;
+        int payout = Casino::BlackjackPayout(blackjackBet_, blackjackPlayer_, blackjackP_, blackjackDealer_, blackjackD_);
+        casinoBalance_ += payout;
+        if (payout > blackjackBet_) ++casinoWins_;
+        else if (payout < blackjackBet_) ++casinoLosses_;
+        casinoLastPayout_ = payout;
+        SaveSettingsFile();
+        RefreshBlackjack();
+    }
+
+    void BlackjackAction(int action) {
+        if (!blackjackActive_) {
+            if (action != 0 || casinoBalance_ < casinoBet_.amount) return;
+            blackjackBet_ = casinoBet_.amount;
+            casinoBalance_ -= blackjackBet_;
+            ++casinoSessionSpins_;
+            Casino::MakeDeck(blackjackDeck_);
+            blackjackRng_ ^= static_cast<uint32_t>(timeAcc_ * 1000.0f);
+            Casino::ShuffleDeck(blackjackDeck_, 52, blackjackRng_);
+            blackjackNext_ = 0; blackjackP_ = blackjackD_ = 0;
+            for (int i = 0; i < 2; ++i) {
+                blackjackPlayer_[blackjackP_++] = blackjackDeck_[blackjackNext_++];
+                blackjackDealer_[blackjackD_++] = blackjackDeck_[blackjackNext_++];
+            }
+            blackjackActive_ = true;
+            if (Casino::IsBlackjack(blackjackPlayer_, blackjackP_) || Casino::IsBlackjack(blackjackDealer_, blackjackD_)) SettleBlackjack();
+        } else {
+            if (action == 2) { SettleBlackjack(); return; }
+            if (action == 3) {
+                if (blackjackP_ != 2 || casinoBalance_ < blackjackBet_) return;
+                casinoBalance_ -= blackjackBet_; blackjackBet_ *= 2;
+            }
+            if (blackjackP_ < 12) blackjackPlayer_[blackjackP_++] = blackjackDeck_[blackjackNext_++];
+            if (action == 3 || blackjackP_ == 12 || Casino::HandValue(blackjackPlayer_, blackjackP_) >= 21) SettleBlackjack();
+        }
+        PlayCasinoSound(casinoChipSound_, 0.8f);
+        RefreshBlackjack();
+    }
+
     void CreateCasinoScene3D() {
         if (casinoScene_) return;
         auto* cache = GetSubsystem<ResourceCache>();
@@ -10495,28 +10604,33 @@ private:
         addObj(nullptr, "TableLegR",     Vector3( 1.55f, 0.42f, 0.0f), Vector3(0.38f, 0.84f, 1.35f), boxModel_, mahogMat);
         addObj(nullptr, "TableLegGoldL", Vector3(-1.55f, 0.08f, 0.0f), Vector3(0.46f, 0.14f, 1.44f), boxModel_, goldMat);
         addObj(nullptr, "TableLegGoldR", Vector3( 1.55f, 0.08f, 0.0f), Vector3(0.46f, 0.14f, 1.44f), boxModel_, goldMat);
-        addObj(nullptr, "TableRim",      Vector3(0.0f,   0.88f, 0.0f), Vector3(3.85f, 0.14f, 2.08f), boxModel_, mahogMat);
-        addObj(nullptr, "TableGoldTrim", Vector3(0.0f,   0.92f, 0.0f), Vector3(3.64f, 0.08f, 1.88f), boxModel_, goldMat);
-        addObj(nullptr, "TableFelt",     Vector3(0.0f,   0.955f,0.0f), Vector3(3.52f, 0.04f, 1.76f), boxModel_, feltMat);
+        addObj(nullptr, "TableRim",      Vector3(0.0f,   0.88f, 0.0f), Vector3(3.85f, 0.14f, 2.60f), boxModel_, mahogMat);
+        addObj(nullptr, "TableGoldTrim", Vector3(0.0f,   0.92f, 0.0f), Vector3(3.64f, 0.08f, 2.40f), boxModel_, goldMat);
+        addObj(nullptr, "TableFelt",     Vector3(0.0f,   0.955f,0.0f), Vector3(3.52f, 0.04f, 2.28f), boxModel_, feltMat);
 
-        // Разметка поля ставок справа от колеса (12 рядов x 3 колонки из золотых линий + цветные ячейки!)
-        for (int col = 0; col < 4; ++col) {
-            float lx = 0.62f + (float)col * 0.34f;
-            addObj(nullptr, "GridLineV", Vector3(lx, 0.978f, 0.0f), Vector3(0.015f, 0.008f, 1.24f), boxModel_, goldMat, Quaternion::IDENTITY, false);
+        // Full European layout: every printed cell is a ray-pickable betting zone.
+        for (int zone = 0; zone < Casino::kTableZoneCount; ++zone) {
+            float x, z, w, h;
+            if (zone == 0) { x=1.13f; z=0.72f; w=1.0f; h=0.12f; }
+            else if (zone <= 36) {
+                x=0.79f + ((zone-1)%3)*0.34f;
+                z=0.60f - ((zone-1)/3)*0.10f; w=0.32f; h=0.09f;
+            } else { x=0.79f + ((zone-37)%3)*0.34f; z=-0.65f-((zone-37)/3)*0.12f; w=0.32f; h=0.11f; }
+            Material* mat = zone == 0 ? zeroSectorMat.Get() :
+                (Casino::TableZoneIsRed(zone) ? redSectorMat.Get() : blackSectorMat.Get());
+            Node* cell = addObj(nullptr, "BetZone", Vector3(x, 0.984f, z), Vector3(w, 0.008f, h), boxModel_, mat, Quaternion::IDENTITY, false);
+            cell->SetVar("BetZone", zone + 1);
+            // Labels are siblings so their size does not inherit the thin cell scale.
+            TableLabel(casinoScene_, Casino::GetTableZones()[zone].label, Vector3(x, 0.994f, z), zone <= 36 ? 0.10f : 0.045f);
         }
-        for (int row = 0; row <= 6; ++row) {
-            float lz = -0.60f + (float)row * 0.20f;
-            addObj(nullptr, "GridLineH", Vector3(1.13f, 0.978f, lz), Vector3(1.04f, 0.008f, 0.015f), boxModel_, goldMat, Quaternion::IDENTITY, false);
-        }
-        for (int cell = 0; cell < 18; ++cell) {
-            int cx = cell % 3, cz = cell / 3;
-            float px = 0.79f + (float)cx * 0.34f;
-            float pz = -0.50f + (float)cz * 0.20f;
-            Material* cm = ((cell + cz) % 2 == 0) ? redSectorMat.Get() : blackSectorMat.Get();
-            addObj(nullptr, "BetCell", Vector3(px, 0.976f, pz), Vector3(0.28f, 0.006f, 0.15f), boxModel_, cm, Quaternion::IDENTITY, false);
-        }
-        // Сектор Зеро на сукне
-        addObj(nullptr, "BetZeroCell", Vector3(1.13f, 0.976f, 0.70f), Vector3(0.98f, 0.006f, 0.14f), boxModel_, zeroSectorMat.Get(), Quaternion::IDENTITY, false);
+        tableChip_ = SharedPtr<Node>(addObj(nullptr, "SelectedBetChip", Vector3(1.13f, 1.02f, 0.72f), Vector3(0.075f, 0.025f, 0.075f), cylModel_, goldMat));
+        tableChip_->SetEnabled(false);
+        // Dedicated blackjack table beside the roulette: timber base, brass rail, felt.
+        addObj(nullptr, "BlackjackBase", Vector3(3.3f, 0.45f, 0), Vector3(1.8f, 0.9f, 1.4f), boxModel_, mahogMat);
+        addObj(nullptr, "BlackjackRail", Vector3(3.3f, 0.94f, 0), Vector3(2.45f, 0.12f, 1.85f), cylModel_, goldMat);
+        addObj(nullptr, "BlackjackFelt", Vector3(3.3f, 0.99f, 0), Vector3(2.3f, 0.04f, 1.7f), cylModel_, feltMat);
+        TableLabel(casinoScene_, "BLACKJACK 3:2 • S17", Vector3(3.3f, 1.018f, 0), 0.16f);
+        blackjackCards_ = SharedPtr<Node>(casinoScene_->CreateChild("BlackjackCards"));
 
         // Стопки золотых 3D-слитков VIP-банка на краю стола
         for (int g = 0; g < 4; ++g) {
@@ -10804,6 +10918,8 @@ private:
 
             Vector3 cp = rCam.Lerp(sCam, casinoCamModeBlend_);
             Vector3 lp = rLook.Lerp(sLook, casinoCamModeBlend_);
+            if (blackjackMode_) { cp = Vector3(3.3f, 2.8f, -2.1f); lp = Vector3(3.3f, 0.98f, 0); }
+            cp = lp + Quaternion(0, miniOrbit_, 0) * (cp - lp);
             casinoCamNode_->SetPosition(cp);
             casinoCamNode_->LookAt(lp);
         }
@@ -11065,10 +11181,21 @@ private:
         if (casinoQuickRedBtn_)   casinoQuickRedBtn_->SetVisible(!casinoSlotsMode_);
         if (casinoQuickBlackBtn_) casinoQuickBlackBtn_->SetVisible(!casinoSlotsMode_);
         if (casinoQuickZeroBtn_)  casinoQuickZeroBtn_->SetVisible(!casinoSlotsMode_);
-        if (casinoBetButton_)     casinoBetButton_->SetVisible(!casinoSlotsMode_);
-        if (casinoNumberButton_)  casinoNumberButton_->SetVisible(!casinoSlotsMode_);
-        if (casinoNumMinusBtn_)   casinoNumMinusBtn_->SetVisible(!casinoSlotsMode_);
-        if (casinoNumPlusBtn_)    casinoNumPlusBtn_->SetVisible(!casinoSlotsMode_);
+        if (casinoBetButton_)     casinoBetButton_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
+        if (casinoNumberButton_)  casinoNumberButton_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
+        if (casinoNumMinusBtn_)   casinoNumMinusBtn_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
+        if (casinoNumPlusBtn_)    casinoNumPlusBtn_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
+        setBtnText(casinoQuickRedBtn_, blackjackMode_ ? "ЕЩЁ [H]" : "КРАСНОЕ");
+        setBtnText(casinoQuickBlackBtn_, blackjackMode_ ? "ХВАТИТ [N]" : "ЧЁРНОЕ");
+        setBtnText(casinoQuickZeroBtn_, blackjackMode_ ? "ДАБЛ [X]" : "ЗЕРО");
+        if (casinoTitleText_) casinoTitleText_->SetText(blackjackMode_ ? "КОЧЕТ-21 • [B] РУЛЕТКА • ПКМ: ОБЗОР" : "3D КАЗИНО • [B] БЛЭКДЖЕК • ПКМ: ОБЗОР • КЛИК ПО СУКНУ: СТАВКА");
+        if (blackjackMode_) {
+            casinoBetText_->SetText("ФИШКА: " + String(casinoBet_.amount) + " ¤ • [A/D] Номинал • [SPACE/H] Ещё • [N] Хватит • [X] Дабл");
+            casinoWheelText_->SetText("ВАШИ: " + String(Casino::HandValue(blackjackPlayer_, blackjackP_)) +
+                (blackjackActive_ ? " • ДИЛЕР: ?" : " • ДИЛЕР: " + String(Casino::HandValue(blackjackDealer_, blackjackD_))));
+            casinoResultText_->SetText(blackjackActive_ ? "Ваш ход. Дилер стоит на soft 17." : "[SPACE] Раздать • Возврат: " + String(casinoLastPayout_) + " ¤ • 3:2 округляется вниз");
+            setBtnText(casinoSpinButton_, blackjackActive_ ? "ЕЩЁ [H] • ХВАТИТ [N]" : "РАЗДАТЬ [SPACE]");
+        }
     }
 
     void CreateCasinoPanel() {
@@ -11287,6 +11414,7 @@ private:
     }
 
     void CloseCasino() {
+        if (blackjackActive_) SettleBlackjack();
         if (!casinoOpen_ || casinoSpinTimer_ > 0.0f) return;
         casinoOpen_ = false;
         casinoDisclaimerVisible_ = false;
@@ -11303,6 +11431,7 @@ private:
     }
 
     void StartCasinoSpin() {
+        if (blackjackMode_) { BlackjackAction(0); return; }
         if (casinoDisclaimerVisible_) {
             casinoDisclaimerVisible_ = false;
             casinoDisclaimerAck_ = true;
@@ -11436,6 +11565,14 @@ private:
         }
         if (casinoSpinTimer_ > 0.0f) return;
         if (key == KEY_ESCAPE || key == KEY_J) { CloseCasino(); return; }
+        if (key == KEY_B && !blackjackActive_) { blackjackMode_ = !blackjackMode_; casinoSlotsMode_ = false; UpdateCasinoVisuals(); return; }
+        if (blackjackMode_) {
+            if (key == KEY_H || key == KEY_SPACE || key == KEY_RETURN) { BlackjackAction(0); return; }
+            if (key == KEY_N) { BlackjackAction(2); return; }
+            if (key == KEY_X) { BlackjackAction(3); return; }
+            if (key != KEY_A && key != KEY_D && key != KEY_T) return;
+            if (blackjackActive_) return;
+        }
         if (key == KEY_TAB) {
             casinoSlotsMode_ = !casinoSlotsMode_;
             PlayCasinoSound(casinoChipSound_, 0.75f);
@@ -11493,6 +11630,17 @@ private:
         }
         if (casinoSpinTimer_ > 0.0f) return;
 
+        if (blackjackMode_) {
+            if (HitUIElement(casinoCloseButton_, mp)) CloseCasino();
+            else if (HitUIElement(casinoSpinButton_, mp) || HitUIElement(casinoQuickRedBtn_, mp)) BlackjackAction(0);
+            else if (HitUIElement(casinoQuickBlackBtn_, mp)) BlackjackAction(2);
+            else if (HitUIElement(casinoQuickZeroBtn_, mp)) BlackjackAction(3);
+            else if (!blackjackActive_ && HitUIElement(casinoChipMinusBtn_, mp)) HandleCasinoKey(KEY_A);
+            else if (!blackjackActive_ && (HitUIElement(casinoChipPlusBtn_, mp) || HitUIElement(casinoChipButton_, mp))) HandleCasinoKey(KEY_D);
+            else if (!blackjackActive_ && HitUIElement(casinoTopupButton_, mp)) HandleCasinoKey(KEY_T);
+            else if (!blackjackActive_ && HitUIElement(casinoModeButton_, mp)) HandleCasinoKey(KEY_B);
+            return;
+        }
         if (HitUIElement(casinoInfoBtn_.Get(), mp)) {
             casinoDisclaimerVisible_ = true;
             PlayUISound(); UpdateCasinoVisuals(); return;
@@ -11540,7 +11688,18 @@ private:
             SpawnCasinoJackpotBurst(casinoSlotsMode_ ? Vector3(-3.05f, 1.05f, 0.25f) : Vector3(1.1f, 1.15f, 0.2f), 24, false);
             UpdateCasinoVisuals(); return;
         }
-        if (HitUIElement(casinoCloseButton_.Get(), mp)) CloseCasino();
+        if (HitUIElement(casinoCloseButton_.Get(), mp)) { CloseCasino(); return; }
+        auto* graphics = GetSubsystem<Graphics>();
+        if (graphics && (mp.y_ < S(130) || mp.y_ > graphics->GetHeight() - S(230))) return;
+        Node* hit = PickMiniObject(casinoScene_, casinoCamNode_, mp);
+        if (hit && !casinoSlotsMode_) {
+            int zone = VarToInt(hit->GetVar("BetZone")) - 1;
+            if (zone >= 0) {
+                casinoBet_ = Casino::BetForTableZone(zone, casinoBet_.amount);
+                if (tableChip_) { tableChip_->SetEnabled(true); tableChip_->SetPosition(hit->GetWorldPosition() + Vector3(0.09f, 0.025f, 0)); }
+                PlayCasinoSound(casinoChipSound_, 0.8f); UpdateCasinoVisuals();
+            }
+        }
     }
 
     // =========================================================================
@@ -12569,6 +12728,15 @@ private:
                 return;
             }
         }
+        if (banyaSim_.riddle.active) return;
+        Node* hit = PickMiniObject(banyaScene_, banyaCamNode_, mp);
+        for (Node* n = hit; n && n != banyaScene_; n = n->GetParent()) {
+            String name = n->GetName();
+            if (name.Contains("Stove") || name.Contains("Ladle")) { TriggerBanyaAction(0); return; }
+            if (name.Contains("Venik")) { TriggerBanyaAction(1); return; }
+            if (name.Contains("Tub")) { TriggerBanyaAction(2); return; }
+            if (name.Contains("Door")) { TriggerBanyaAction(3); return; }
+        }
     }
 
     void SyncBanyaVisuals(float dt) {
@@ -12579,7 +12747,7 @@ private:
         String buffStr = (banyaBuffTier_ >= 2) ? "◆ КОВШ СМОТРЯЩЕГО (+50HP/+15%УР)"
                        : (banyaBuffTier_ == 1) ? "• БАННЫЙ ЗАКАЛ (+25HP/+25БР)"
                                                : "нет баффа";
-        String badgeStr = "CHIKENGUN 2.5  •  КОШЕЛЁК: " + String(wallet) + "¤  •  БАФФ АРЕНЫ: " + buffStr +
+        String badgeStr = "ЛКМ: печь / веник / кадка / дверь • ПКМ: обзор • КОШЕЛЁК: " + String(wallet) + "¤  •  БАФФ АРЕНЫ: " + buffStr +
                           "  •  ОТКРЫТО КОНЦОВОК: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + "/14";
         if (banyaBadgeText_ && badgeStr != lastBanyaBadge_) {
             lastBanyaBadge_ = badgeStr;
@@ -12637,6 +12805,7 @@ private:
                     ? Vector3(0.32f + sinf(timeAcc_ * 0.7f) * 0.05f, 1.72f + sinf(timeAcc_ * 1.1f) * 0.02f, -2.65f)
                     : Vector3(0.08f + sinf(timeAcc_ * 0.45f) * 0.08f, 1.80f + sinf(timeAcc_ * 0.8f) * 0.025f, -3.45f);
                 Vector3 lookAtPos = focusRooster ? Vector3(0.55f, 1.58f, 1.15f) : Vector3(0.05f, 1.38f, 1.05f);
+                camPos = lookAtPos + Quaternion(0, miniOrbit_, 0) * (camPos - lookAtPos);
                 banyaCamNode_->SetPosition(banyaCamNode_->GetPosition().Lerp(camPos, Clamp(dt * 4.5f, 0.05f, 1.0f)));
                 banyaCamNode_->LookAt(lookAtPos);
             }

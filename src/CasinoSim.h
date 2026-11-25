@@ -7,6 +7,7 @@
 // ============================================================================
 
 #include <algorithm>
+#include <cstdint>
 
 namespace Casino {
 
@@ -76,7 +77,7 @@ inline int PayoutMultiplier(BetType type) {
         case BET_NUMBER: return 36;
         case BET_SPLIT:  return 18;
         case BET_STREET: return 12;
-        case BET_CORNER: return 8;
+        case BET_CORNER: return 9; // 8:1 profit plus the original stake
         case BET_SIXLINE:return 6;
         case BET_DOZEN:
         case BET_COLUMN: return 3;
@@ -225,6 +226,155 @@ inline const char* RoflStatusTitle(int balance) {
 
 inline const char* RoflDisclaimerShort() {
     return "100% РОФЛ • ВСЁ ПОНАРОШКУ • БЕЗ РЕАЛЬНЫХ ДЕНЕГ, ПЛАТЕЖЕЙ И ВЫВОДА";
+}
+
+// ============================================================================
+// НАСТОЯЩИЙ СТОЛ РУЛЕТКИ (европейский layout 0–36 + внешние ставки)
+// Игрок кликает по ячейке стола «как в настоящем» — зона сразу превращается
+// в Bet и участвует в обычном Payout(). Чистая логика, без Urho3D.
+// ============================================================================
+struct TableZone {
+    BetType type;
+    int     number;   // для BET_NUMBER — число, для дюжин/колонок — якорь
+    const char* label;
+};
+
+inline const TableZone (&GetTableZones())[49] {
+    static const TableZone kZones[49] = {
+        { BET_NUMBER, 0,  "0"  }, { BET_NUMBER, 1,  "1"  }, { BET_NUMBER, 2,  "2"  },
+        { BET_NUMBER, 3,  "3"  }, { BET_NUMBER, 4,  "4"  }, { BET_NUMBER, 5,  "5"  },
+        { BET_NUMBER, 6,  "6"  }, { BET_NUMBER, 7,  "7"  }, { BET_NUMBER, 8,  "8"  },
+        { BET_NUMBER, 9,  "9"  }, { BET_NUMBER, 10, "10" }, { BET_NUMBER, 11, "11" },
+        { BET_NUMBER, 12, "12" }, { BET_NUMBER, 13, "13" }, { BET_NUMBER, 14, "14" },
+        { BET_NUMBER, 15, "15" }, { BET_NUMBER, 16, "16" }, { BET_NUMBER, 17, "17" },
+        { BET_NUMBER, 18, "18" }, { BET_NUMBER, 19, "19" }, { BET_NUMBER, 20, "20" },
+        { BET_NUMBER, 21, "21" }, { BET_NUMBER, 22, "22" }, { BET_NUMBER, 23, "23" },
+        { BET_NUMBER, 24, "24" }, { BET_NUMBER, 25, "25" }, { BET_NUMBER, 26, "26" },
+        { BET_NUMBER, 27, "27" }, { BET_NUMBER, 28, "28" }, { BET_NUMBER, 29, "29" },
+        { BET_NUMBER, 30, "30" }, { BET_NUMBER, 31, "31" }, { BET_NUMBER, 32, "32" },
+        { BET_NUMBER, 33, "33" }, { BET_NUMBER, 34, "34" }, { BET_NUMBER, 35, "35" },
+        { BET_NUMBER, 36, "36" },
+        { BET_RED,    0,  "КРАСНОЕ" }, { BET_BLACK, 0, "ЧЁРНОЕ" },
+        { BET_EVEN,   0,  "ЧЁТ"     }, { BET_ODD,   0, "НЕЧЁТ"  },
+        { BET_LOW,    0,  "1–18"    }, { BET_HIGH,  0, "19–36"  },
+        { BET_DOZEN,  1,  "1-Я ДЮЖ." }, { BET_DOZEN, 13, "2-Я ДЮЖ." },
+        { BET_DOZEN,  25, "3-Я ДЮЖ." },
+        { BET_COLUMN, 1,  "КОЛ.1"   }, { BET_COLUMN, 2, "КОЛ.2"   },
+        { BET_COLUMN, 3,  "КОЛ.3"   }
+    };
+    return kZones;
+}
+
+inline constexpr int kTableZoneCount = 49;
+
+inline Bet BetForTableZone(int zoneIdx, int amount) {
+    int idx = std::max(0, std::min(kTableZoneCount - 1, zoneIdx));
+    const TableZone& z = GetTableZones()[idx];
+    Bet b;
+    b.type = z.type;
+    b.amount = std::max(0, amount);
+    b.number = z.number;
+    return b;
+}
+
+inline int TableZoneForNumber(int number) {
+    return ClampNumber(number); // зоны 0..36 совпадают с числами
+}
+
+inline bool TableZoneIsRed(int zoneIdx) {
+    if (zoneIdx < 0 || zoneIdx > 36) return false;
+    return IsRed(zoneIdx);
+}
+
+// ============================================================================
+// БЛЭКДЖЕК «КОЧЕТ-21» — второй настоящий стол казино (чистая логика).
+// Колода 52 карты, дилер добирает до 17, блэкджек платит 3:2, дабл — удвоение.
+// ============================================================================
+struct Card {
+    int rank = 1; // 1=Туз, 11=Валет, 12=Дама, 13=Король
+    int suit = 0; // 0..3
+};
+
+inline int CardValue(int rank) {
+    if (rank == 1) return 11;
+    if (rank >= 10) return 10;
+    return std::max(2, std::min(10, rank));
+}
+
+inline int HandValue(const Card* cards, int count) {
+    int total = 0, aces = 0;
+    for (int i = 0; i < count; ++i) {
+        total += CardValue(cards[i].rank);
+        if (cards[i].rank == 1) ++aces;
+    }
+    while (total > 21 && aces > 0) { total -= 10; --aces; }
+    return total;
+}
+
+inline bool IsSoftHand(const Card* cards, int count) {
+    int total = 0, aces = 0;
+    for (int i = 0; i < count; ++i) {
+        total += CardValue(cards[i].rank);
+        if (cards[i].rank == 1) ++aces;
+    }
+    while (total > 21 && aces > 0) { total -= 10; --aces; }
+    return aces > 0 && total <= 21;
+}
+
+inline bool IsBlackjack(const Card* cards, int count) {
+    return count == 2 && HandValue(cards, count) == 21;
+}
+
+inline bool DealerMustHit(const Card* cards, int count) {
+    return HandValue(cards, count) < 17;
+}
+
+inline const char* CardLabel(int rank) {
+    switch (rank) {
+        case 1:  return "Т";
+        case 11: return "В";
+        case 12: return "Д";
+        case 13: return "К";
+        default: return "?";
+    }
+}
+
+// Возврат игроку (включая ставку): 0 — проигрыш, bet — пуш, 2*bet — победа,
+// 2*bet + bet/2 — блэкджек 3:2. Дабл уже учтён в betAmount вызывающим кодом.
+inline int BlackjackPayout(int betAmount, const Card* player, int pCount,
+                           const Card* dealer, int dCount) {
+    int bet = std::max(0, betAmount);
+    int pv = HandValue(player, pCount);
+    int dv = HandValue(dealer, dCount);
+    bool pBj = IsBlackjack(player, pCount);
+    bool dBj = IsBlackjack(dealer, dCount);
+    if (pv > 21) return 0;
+    if (pBj && dBj) return bet;
+    if (pBj) return bet * 2 + bet / 2;
+    if (dBj) return 0;
+    if (dv > 21) return bet * 2;
+    if (pv > dv) return bet * 2;
+    if (pv == dv) return bet;
+    return 0;
+}
+
+inline void MakeDeck(Card out[52]) {
+    int idx = 0;
+    for (int s = 0; s < 4; ++s)
+        for (int r = 1; r <= 13; ++r)
+            out[idx++] = Card{r, s};
+}
+
+inline void ShuffleDeck(Card* deck, int count, uint32_t& rngState) {
+    if (!deck || count < 2) return;
+    if (rngState == 0) rngState = 0xB1ACu;
+    for (int i = count - 1; i > 0; --i) {
+        uint32_t x = rngState;
+        x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+        rngState = x ? x : 0xB1ACu;
+        int j = (int)(rngState % (uint32_t)(i + 1));
+        Card tmp = deck[i]; deck[i] = deck[j]; deck[j] = tmp;
+    }
 }
 
 } // namespace Casino

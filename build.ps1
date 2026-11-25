@@ -1,7 +1,7 @@
 # ============================================================================
 # CHIKENGUN 2.5 — ПЕРО СУДЬБЫ (Zero-Pain Windows Builder: MSVC / CMake)
 # Использование в PowerShell:
-#   .\build.ps1                # Собрать клиент и PBR текстуры (1024)
+#   .\build.ps1                # Собрать клиент и PBR текстуры (4096)
 #   .\build.ps1 -Ultra4K       # Собрать с текстурами 4096x4096
 #   .\build.ps1 -TestsOnly     # Собрать и прогнать только C++17 модульные тесты
 # ============================================================================
@@ -16,7 +16,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $Root
 
-$TexSize = if ($Ultra4K) { 4096 } else { 1024 }
+$TexSize = 4096
 $BuildDir = Join-Path $Root "build-win"
 
 function Require-Command([string]$Name, [string]$Hint) {
@@ -127,7 +127,8 @@ $TexOut = Join-Path $AppDir "Data\Textures"
 $StampFile = Join-Path $TexOut ".4k_pbr_stamp"
 $CurStamp = if (Test-Path $StampFile) { (Get-Content $StampFile -Raw).Trim() } else { "" }
 
-if ($GenExe -and $CurStamp -ne "$TexSize") {
+$GeneratorChanged = (Test-Path $StampFile) -and ((Get-Item "$Root\tools\gen_textures_4k.cpp").LastWriteTime -gt (Get-Item $StampFile).LastWriteTime)
+if ($GenExe -and ($CurStamp -ne "$TexSize" -or $GeneratorChanged)) {
     Write-Host "[3/3] Генерация PBR текстур (${TexSize}x${TexSize}) -> $TexOut..."
     Invoke-Checked { & $GenExe $TexOut $TexSize } "Texture generation failed"
 }
