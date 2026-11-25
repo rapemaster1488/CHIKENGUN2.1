@@ -8447,7 +8447,7 @@ private:
     }
 
     // =========================================================================
-    // НАСТРОЙКИ 4K ULTRA: settings.ini + мгновенное применение на лету
+    // Настройки: settings.ini + мгновенное применение на лету
     // =========================================================================
 
     static int XmlGetInt(const XMLElement& el, const char* name, int def) {
@@ -8836,7 +8836,7 @@ private:
 
         Text* sub = mainMenuPanel_->CreateChild<Text>();
         sub->SetFont(font_, SF(16));
-        sub->SetText("[ 2.5 ПЕРО СУДЬБЫ ]  •  [ БАНЬКА ]  •  [ КАЗИК ]  •  [ МИНИИГРЫ ]");
+        sub->SetText("");
         sub->SetTextAlignment(HA_CENTER);
         sub->SetPosition(sw / 2 - S(440), sh / 2 - S(190));
         sub->SetWidth(S(880));
@@ -8845,12 +8845,12 @@ private:
         menuSub_ = SharedPtr<Text>(sub);
 
         const char* items[7] = {
-            "ПОЛИГОН (тир 4K)",
-            "КИБЕР-АРЕНА (волны + босс)",
-            "КОЧЕТ В БАНЬКЕ (парная) [P]",
-            "3D КАЗИНО VIP (рофл) [J]",
-            "PIXEL ARCADE (6 миниигр) [K]",
-            "НАСТРОЙКИ 4K ULTRA",
+            "Полигон",
+            "Арена",
+            "Баня",
+            "Казино",
+            "Мини-игры",
+            "Настройки",
             "ВЫХОД"
         };
         for (int i = 0; i < 7; ++i) {
@@ -8872,7 +8872,7 @@ private:
 
         Text* hint = mainMenuPanel_->CreateChild<Text>();
         hint->SetFont(font_, SF(14));
-        hint->SetText("W/S — выбор  •  ENTER — старт  •  [P] БАНЯ  •  [J] КАЗИК  •  [K] МИНИИГРЫ  •  F11/F3");
+        hint->SetText("");
         hint->SetTextAlignment(HA_CENTER);
         hint->SetPosition(sw / 2 - S(440), sh / 2 + S(210));
         hint->SetWidth(S(880));
@@ -9010,12 +9010,12 @@ private:
 
     void UpdateMainMenuSelection() {
         static const char* labels[7] = {
-            "ПОЛИГОН (тир 4K)",
-            "КИБЕР-АРЕНА (волны + босс)",
-            "КОЧЕТ В БАНЬКЕ (парная) [P]",
-            "3D КАЗИНО VIP (рофл) [J]",
-            "PIXEL ARCADE (6 миниигр) [K]",
-            "НАСТРОЙКИ 4K ULTRA",
+            "Полигон",
+            "Арена",
+            "Баня",
+            "Казино",
+            "Мини-игры",
+            "Настройки",
             "ВЫХОД"
         };
         auto* gfx = GetSubsystem<Graphics>();
@@ -10292,11 +10292,16 @@ private:
     SharedPtr<BorderImage> bettingLayout_;
     SharedPtr<BorderImage> bettingCells_[49], bettingUndo_, bettingClear_, bettingAdd_;
     SharedPtr<Text> bettingSummary_, bettingLabels_[49];
+    SharedPtr<BorderImage> bettingChips_[49][3];
+    SharedPtr<Text> bettingChipAmounts_[49];
     bool bettingLayoutVisible_ = true;
 
     void AddRouletteChip(const Casino::Bet& bet) {
         if (casinoSlotsMode_ || blackjackMode_ || casinoSpinTimer_ > 0.0f) return;
-        if (!rouletteRound_.Add(bet, casinoBalance_)) PlayEmptyClickSound();
+        if (!rouletteRound_.Add(bet, casinoBalance_)) {
+            PlayEmptyClickSound();
+            if (casinoResultText_) casinoResultText_->SetText("Недостаточно фишек или лимит стола");
+        }
         else PlayCasinoSound(casinoChipSound_, 0.65f);
         UpdateCasinoVisuals();
     }
@@ -10305,12 +10310,12 @@ private:
         const int width = Min(GetSubsystem<Graphics>()->GetWidth() - S(32), S(1060));
         bettingLayout_ = casinoPanel_->CreateChild<BorderImage>();
         bettingLayout_->SetPosition((GetSubsystem<Graphics>()->GetWidth()-width)/2, S(150));
-        bettingLayout_->SetSize(width, S(260));
+        bettingLayout_->SetSize(width, S(305));
         bettingLayout_->SetColor(Color(0.025f, 0.14f, 0.095f, 0.98f));
         bettingSummary_ = bettingLayout_->CreateChild<Text>();
         bettingSummary_->SetFont(font_, SF(14));
         bettingSummary_->SetPosition(S(10), S(8));
-        const int cw = (width - S(28)) / 14, ch = S(31), top = S(40);
+        const int cw = (width - S(28)) / 14, ch = S(40), top = S(40);
         auto cell = [&](int x, int y, int w, int h, const String& label, Color color, SharedPtr<Text>* out) {
             auto* bg = bettingLayout_->CreateChild<BorderImage>();
             bg->SetPosition(x, y); bg->SetSize(w - S(2), h - S(2)); bg->SetColor(color);
@@ -10334,16 +10339,35 @@ private:
                 c = (Casino::IsRed(z) && z <= 36) || z == 37 ? Color(0.48f,0.045f,0.055f) : Color(0.035f,0.04f,0.04f);
             bettingCells_[z] = cell(S(14)+x*cw, top+y*ch, w*cw, h*ch,
                 Casino::GetTableZones()[z].label, c, &bettingLabels_[z]);
+            bettingLabels_[z]->SetAlignment(HA_LEFT, VA_CENTER);
+            bettingLabels_[z]->SetPosition(S(4), 0);
+            auto* atlas = GetSubsystem<ResourceCache>()->GetResource<Texture2D>("Textures/UI/CasinoChips.png");
+            for (int layer=0; layer<3; ++layer) {
+                auto* chip = bettingCells_[z]->CreateChild<BorderImage>();
+                chip->SetTexture(atlas);
+                chip->SetImageRect(IntRect(0, 0, 64, 64));
+                chip->SetSize(S(36), S(36));
+                chip->SetPosition(bettingCells_[z]->GetWidth()-S(39), (bettingCells_[z]->GetHeight()-S(36))/2 + S(2-layer*2));
+                chip->SetVisible(false);
+                bettingChips_[z][layer] = chip;
+            }
+            auto* amount = bettingChips_[z][2]->CreateChild<Text>();
+            amount->SetFont(font_, SF(9));
+            amount->SetAlignment(HA_CENTER, VA_CENTER);
+            bettingChipAmounts_[z] = amount;
         }
-        bettingAdd_ = cell(S(14), top+5*ch+S(4), cw*7, S(38), "ДОБАВИТЬ ВЫБРАННУЮ [V]", Color(0.2f,0.3f,0.23f), nullptr);
-        bettingUndo_ = cell(S(14)+cw*7, top+5*ch+S(4), cw*3, S(38), "ОТМЕНА [U]", Color(0.2f,0.25f,0.24f), nullptr);
-        bettingClear_ = cell(S(14)+cw*10, top+5*ch+S(4), cw*4, S(38), "ОЧИСТИТЬ [C]", Color(0.3f,0.18f,0.16f), nullptr);
+        bettingAdd_ = cell(S(14), top+5*ch+S(4), cw*7, S(38), "Поставить", Color(0.2f,0.3f,0.23f), nullptr);
+        bettingUndo_ = cell(S(14)+cw*7, top+5*ch+S(4), cw*3, S(38), "Отмена", Color(0.2f,0.25f,0.24f), nullptr);
+        bettingClear_ = cell(S(14)+cw*10, top+5*ch+S(4), cw*4, S(38), "Очистить", Color(0.3f,0.18f,0.16f), nullptr);
     }
 
     void ResetCasinoUIPointers() {
         bettingLayout_ = nullptr; bettingSummary_ = nullptr;
         bettingUndo_ = nullptr; bettingClear_ = nullptr; bettingAdd_ = nullptr;
-        for (int i=0; i<49; ++i) { bettingCells_[i] = nullptr; bettingLabels_[i] = nullptr; }
+        for (int i=0; i<49; ++i) {
+            bettingCells_[i] = nullptr; bettingLabels_[i] = nullptr; bettingChipAmounts_[i] = nullptr;
+            for (auto& chip : bettingChips_[i]) chip = nullptr;
+        }
         casinoPanel_ = nullptr;
         casinoDisclaimerBox_ = nullptr;
         casinoWheelCard_ = nullptr;
@@ -11154,147 +11178,69 @@ private:
     }
 
     void UpdateCasinoVisuals() {
-        if (bettingLayout_) {
-            bettingLayout_->SetVisible(bettingLayoutVisible_ && !casinoSlotsMode_ && !blackjackMode_);
-            bettingSummary_->SetText(String(rouletteRound_.locked ? "СТАВКИ ЗАКРЫТЫ" : "СТАВКИ ОТКРЫТЫ") +
-                " • НА СТОЛЕ: " + String(rouletteRound_.Total()) + " ¤ • ФИШКА: " + String(casinoBet_.amount) + " ¤ [A/D] • [F] СКРЫТЬ");
-            for (int z=0; z<49; ++z) {
-                int n = rouletteRound_.OnZone(z);
-                bettingLabels_[z]->SetText(String(Casino::GetTableZones()[z].label) + (n ? "\n● " + String(n) : String()));
-            }
-        }
         if (!casinoPanel_) return;
+        const bool spinning = casinoSpinTimer_ > 0.0f;
+        const bool roulette = !casinoSlotsMode_ && !blackjackMode_;
         if (casinoDisclaimerBox_) casinoDisclaimerBox_->SetVisible(casinoDisclaimerVisible_);
-
-        if (casinoTitleText_) {
-            casinoTitleText_->SetText(casinoSlotsMode_
-                ? "VIP-КАЗИНО «ЧИКЕН-РОЯЛЬ»  •  3D КИБЕР-СЛОТЫ 777"
-                : "VIP-КАЗИНО «ЧИКЕН-РОЯЛЬ»  •  3D ЗОЛОТАЯ РУЛЕТКА");
-        }
-        if (casinoBalanceText_)
-            casinoBalanceText_->SetText("РОФЛ-ФИШКИ: " + String(casinoBalance_) + " ¤");
-        if (casinoStatusText_)
-            casinoStatusText_->SetText("Статус: " + String(Casino::RoflStatusTitle(casinoBalance_)) +
-                                         (casinoMaxWin_ > 0 ? ("  •  Рекорд: +" + String(casinoMaxWin_) + " ¤") : ""));
-
-        if (casinoBetText_) {
-            if (casinoSlotsMode_) {
-                casinoBetText_->SetText("СТАВКА НА СПИН: " + String(casinoBet_.amount) + " ¤   •   3×[777]=×50  |  3×КОРОНА=×20  |  ПАРА=×2..3");
-            } else {
-                String bet = String(Casino::BetName(casinoBet_.type));
-                if (casinoBet_.type >= Casino::BET_NUMBER)
-                    bet += " #" + String(casinoBet_.number);
-                int mul = Casino::PayoutMultiplier(casinoBet_.type);
-                casinoBetText_->SetText("СТАВКА: " + bet + " (×" + String(mul) + ")   •   ФИШКА: " + String(casinoBet_.amount) + " ¤");
-            }
-        }
-
-        if (casinoStatsText_)
-            casinoStatsText_->SetText("ПОБЕДЫ: " + String(casinoWins_) + "   ПРОМАХИ: " + String(casinoLosses_) + "   СПИНЫ: " + String(casinoSessionSpins_));
-
-        if (casinoHistoryText_) {
-            if (casinoSlotsMode_) {
-                casinoHistoryText_->SetText("ВЫПЛАТЫ 777:  [777]=×50  •  [КОРОНА]=×20  •  [ЗВЕЗДА]=×12  •  [АЛМАЗ]=×8  •  [КОЧЕТ]=×6  •  [ВИШНЯ]=×4");
-            } else if (casinoHistory_.Empty()) {
-                casinoHistoryText_->SetText("ИСТОРИЯ 3D-РУЛЕТКИ: пока пусто — крути барабан!");
-            } else {
-                String hist = "ПОСЛЕДНИЕ ШАРИКИ: ";
-                for (int i = (int)casinoHistory_.Size() - 1; i >= 0; --i) {
-                    int n = casinoHistory_[(unsigned)i];
-                    const char* tag = (n == 0) ? "З" : (Casino::IsRed(n) ? "К" : "Ч");
-                    hist += "[" + String(n) + tag + "] ";
+        if (bettingLayout_) {
+            bettingLayout_->SetVisible(bettingLayoutVisible_ && roulette);
+            bettingSummary_->SetText(String(rouletteRound_.locked ? "Закрыто" : "Ставки") + "   " + String(rouletteRound_.Total()) + " ¤");
+            static const int values[] = {10,25,50,100,250,500};
+            for (int z=0; z<49; ++z) {
+                const int amount = rouletteRound_.OnZone(z);
+                int count = 0;
+                const auto target = Casino::BetForTableZone(z, 1);
+                for (const auto& chip : rouletteRound_.chips)
+                    if (chip.type == target.type && (chip.type < Casino::BET_NUMBER || chip.number == target.number)) ++count;
+                int color = 0;
+                while (color < 5 && amount >= values[color+1]) ++color;
+                for (int layer=0; layer<3; ++layer) {
+                    bettingChips_[z][layer]->SetVisible(amount > 0 && layer >= 3-Min(count,3));
+                    bettingChips_[z][layer]->SetImageRect(IntRect(color*64, 0, (color+1)*64, 64));
                 }
-                casinoHistoryText_->SetText(hist);
+                bettingChipAmounts_[z]->SetText(amount ? String(amount) : String());
+                const unsigned digits = String(amount).Length();
+                bettingChipAmounts_[z]->SetFontSize(float(SF(9)) * Min(1.0f, 5.0f / Max(1u, digits)));
             }
         }
-
-        if (casinoResultText_) {
-            if (casinoSpinTimer_ > 0.0f) {
-                casinoResultText_->SetText(casinoSlotsMode_
-                    ? "Барабаны 777 раскручены… держим кулачки понарошку!"
-                    : "Хромированный шарик летит по треку…");
-                casinoResultText_->SetColor(Color(1.0f, 0.86f, 0.36f, 1.0f));
-            } else if (!casinoSlotsMode_ && casinoLastResult_ >= 0 && casinoResultFlash_ <= 0.0f) {
-                casinoResultText_->SetText("Последний шарик: " + String(casinoLastResult_) + " (" + String(Casino::ColorName(casinoLastResult_)) + ") — ставь и крути!");
-                casinoResultText_->SetColor(casinoLastResult_ == 0 ? Color(0.35f, 1.0f, 0.62f, 1.0f)
-                    : Casino::IsRed(casinoLastResult_) ? Color(1.0f, 0.44f, 0.42f, 1.0f)
-                                                        : Color(0.80f, 0.86f, 0.94f, 1.0f));
-            }
-        }
-
-        if (casinoWheelText_) {
-            if (casinoSlotsMode_) {
-                int r0 = slotReels_[0], r1 = slotReels_[1], r2 = slotReels_[2];
-                if (casinoSpinTimer_ > 0.0f) {
-                    float elapsed = casinoSpinDur_ - casinoSpinTimer_;
-                    int tick = (int)(timeAcc_ * 22.0f);
-                    r0 = (elapsed < 0.68f) ? ((tick + 0) % Casino::SYM_COUNT) : slotPendingReels_[0];
-                    r1 = (elapsed < 1.15f) ? ((tick + 2) % Casino::SYM_COUNT) : slotPendingReels_[1];
-                    r2 = (elapsed < 1.60f) ? ((tick + 4) % Casino::SYM_COUNT) : slotPendingReels_[2];
-                }
-                casinoWheelText_->SetText(String(Casino::SlotLabel(r0)) + "  •  " +
-                                          String(Casino::SlotLabel(r1)) + "  •  " +
-                                          String(Casino::SlotLabel(r2)));
-            } else if (casinoSpinTimer_ > 0.0f) {
-                int tick = (int)(timeAcc_ * 20.0f);
-                String wheel = "* ";
-                for (int i = 0; i < 7; ++i) {
-                    if (i > 0) wheel += " · ";
-                    wheel += String(Casino::kEuropeanWheelOrder[(tick + i) % 37]);
-                }
-                casinoWheelText_->SetText(wheel + " *");
-            } else if (casinoLastResult_ >= 0) {
-                casinoWheelText_->SetText("ШАРИК В ЛУНКЕ: [ " + String(casinoLastResult_) + " • " + String(Casino::ColorName(casinoLastResult_)) + " ]");
-            } else {
-                casinoWheelText_->SetText("3D-РУЛЕТКА НА ГОТОВЕ  •  ВЫБИРАЙТЕ СТАВКУ");
-            }
-        }
-
-        auto setBtnText = [](BorderImage* btn, const String& txt) {
-            if (!btn || btn->GetNumChildren() == 0) return;
-            if (Text* t = dynamic_cast<Text*>(btn->GetChild(0u))) t->SetText(txt);
+        casinoTitleText_->SetText(blackjackMode_ ? "Блэкджек" : (casinoSlotsMode_ ? "777" : "Рулетка"));
+        casinoBalanceText_->SetText(String(casinoBalance_) + " ¤");
+        casinoStatusText_->SetVisible(false);
+        casinoStatsText_->SetText(roulette ? "На столе  " + String(rouletteRound_.Total()) + " ¤" : String());
+        casinoHistoryText_->SetVisible(false);
+        String selected = String(Casino::BetName(casinoBet_.type));
+        if (casinoBet_.type >= Casino::BET_NUMBER) selected += " " + String(casinoBet_.number);
+        casinoBetText_->SetText(roulette ? selected : "Ставка");
+        auto label = [](BorderImage* button, const String& value) {
+            if (button && button->GetNumChildren())
+                if (auto* text = dynamic_cast<Text*>(button->GetChild(0u))) text->SetText(value);
         };
-        setBtnText(casinoSpinButton_.Get(), casinoSpinTimer_ > 0.0f
-            ? "КРУТИТСЯ… (ВСЕ ПОНАРОШКУ)"
-            : (casinoSlotsMode_ ? "ДЁРНУТЬ РЫЧАГ 777 [SPACE]" : "КРУТИТЬ 3D-РУЛЕТКУ [SPACE]"));
-
-        if (casinoSpinButton_)
-            casinoSpinButton_->SetColor(casinoSpinTimer_ > 0.0f ? Color(0.24f, 0.22f, 0.26f, 0.88f)
-                                                              : Color(0.76f, 0.48f, 0.06f, 0.94f));
-        if (casinoModeButton_)
-            casinoModeButton_->SetColor(casinoSlotsMode_ ? Color(0.54f, 0.14f, 0.50f, 0.92f)
-                                                         : Color(0.12f, 0.42f, 0.24f, 0.92f));
-        if (casinoQuickRedBtn_)   casinoQuickRedBtn_->SetVisible(!casinoSlotsMode_);
-        if (casinoQuickBlackBtn_) casinoQuickBlackBtn_->SetVisible(!casinoSlotsMode_);
-        if (casinoQuickZeroBtn_)  casinoQuickZeroBtn_->SetVisible(!casinoSlotsMode_);
-        if (casinoBetButton_)     casinoBetButton_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
-        if (casinoNumberButton_)  casinoNumberButton_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
-        if (casinoNumMinusBtn_)   casinoNumMinusBtn_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
-        if (casinoNumPlusBtn_)    casinoNumPlusBtn_->SetVisible(!casinoSlotsMode_ && !blackjackMode_);
-        if (!casinoSlotsMode_ && !blackjackMode_) {
-            casinoStatsText_->SetText("НА СТОЛЕ: " + String(rouletteRound_.Total()) + " ¤ • ФИШЕК: " + String((int)rouletteRound_.chips.size()));
-            if (casinoSpinTimer_ <= 0.0f) setBtnText(casinoSpinButton_, "КРУТИТЬ • " + String(rouletteRound_.Total()) + " ¤ [SPACE]");
-            if (!rouletteRound_.chips.empty()) {
-                const auto& last = rouletteRound_.chips.back();
-                casinoHistoryText_->SetText("ПОСЛЕДНЯЯ ФИШКА: " + String(Casino::BetName(last.type)) +
-                    (last.type >= Casino::BET_NUMBER ? " #" + String(last.number) : String()) + " • " + String(last.amount) +
-                    " ¤ • [U] ОТМЕНА • [C] ОЧИСТИТЬ • СВОБОДНО: " +
-                    String(casinoBalance_ - (rouletteRound_.locked ? 0 : rouletteRound_.Total())) + " ¤");
-            }
-        }
-        setBtnText(casinoModeButton_, blackjackMode_ ? "РУЛЕТКА [B]" : "РУЛЕТКА / 777 [TAB]");
-        if (casinoQuickDoubleBtn_) casinoQuickDoubleBtn_->SetVisible(!blackjackMode_);
-        setBtnText(casinoQuickRedBtn_, blackjackMode_ ? "ЕЩЁ [H]" : "КРАСНОЕ");
-        setBtnText(casinoQuickBlackBtn_, blackjackMode_ ? "ХВАТИТ [N]" : "ЧЁРНОЕ");
-        setBtnText(casinoQuickZeroBtn_, blackjackMode_ ? "ДАБЛ [X]" : "ЗЕРО");
-        if (casinoTitleText_) casinoTitleText_->SetText(blackjackMode_ ? "КОЧЕТ-21 • [B] РУЛЕТКА • ПКМ: ОБЗОР" : "3D КАЗИНО • [B] БЛЭКДЖЕК • ПКМ: ОБЗОР • [F] ПОЛЕ СТАВОК");
+        label(casinoChipButton_, String(casinoBet_.amount) + " ¤");
+        label(casinoSpinButton_, spinning ? "…" : (blackjackMode_ ? (blackjackActive_ ? "Ещё" : "Раздать") : "Играть"));
+        label(casinoModeButton_, blackjackMode_ ? "Рулетка" : (casinoSlotsMode_ ? "Рулетка" : "777"));
+        label(casinoQuickRedBtn_, blackjackMode_ ? "Ещё" : "Красное");
+        label(casinoQuickBlackBtn_, blackjackMode_ ? "Хватит" : "Чёрное");
+        label(casinoQuickZeroBtn_, blackjackMode_ ? "Дабл" : "0");
+        casinoQuickRedBtn_->SetVisible(!casinoSlotsMode_);
+        casinoQuickBlackBtn_->SetVisible(!casinoSlotsMode_);
+        casinoQuickZeroBtn_->SetVisible(!casinoSlotsMode_);
+        casinoQuickDoubleBtn_->SetVisible(!blackjackMode_);
+        casinoBetButton_->SetVisible(roulette);
+        casinoNumberButton_->SetVisible(roulette);
+        casinoNumMinusBtn_->SetVisible(roulette);
+        casinoNumPlusBtn_->SetVisible(roulette);
+        casinoSpinButton_->SetColor(spinning ? Color(0.18f,0.20f,0.19f) : Color(0.19f,0.38f,0.29f));
         if (blackjackMode_) {
-            casinoBetText_->SetText("ФИШКА: " + String(casinoBet_.amount) + " ¤ • [A/D] Номинал • [SPACE/H] Ещё • [N] Хватит • [X] Дабл");
-            casinoWheelText_->SetText("ВАШИ: " + String(Casino::HandValue(blackjackPlayer_, blackjackP_)) +
-                (blackjackActive_ ? " • ДИЛЕР: ?" : " • ДИЛЕР: " + String(Casino::HandValue(blackjackDealer_, blackjackD_))));
-            casinoResultText_->SetText(blackjackActive_ ? "Ваш ход. Дилер стоит на soft 17." : "[SPACE] Раздать • Возврат: " + String(casinoLastPayout_) + " ¤ • 3:2 округляется вниз");
-            setBtnText(casinoSpinButton_, blackjackActive_ ? "ЕЩЁ [H] • ХВАТИТ [N]" : "РАЗДАТЬ [SPACE]");
+            casinoWheelText_->SetText(String(Casino::HandValue(blackjackPlayer_, blackjackP_)) + "  /  " +
+                (blackjackActive_ ? String("?") : String(Casino::HandValue(blackjackDealer_, blackjackD_))));
+            casinoResultText_->SetText(blackjackActive_ ? "Ваш ход" : "Возврат  " + String(casinoLastPayout_) + " ¤");
+        } else if (casinoSlotsMode_) {
+            casinoWheelText_->SetText(spinning ? "…" : String(Casino::SlotLabel(slotReels_[0])) + "  " +
+                Casino::SlotLabel(slotReels_[1]) + "  " + Casino::SlotLabel(slotReels_[2]));
+        } else {
+            casinoWheelText_->SetText(spinning ? "…" : (casinoLastResult_ >= 0 ? String(casinoLastResult_) : String()));
         }
+        if (spinning) casinoResultText_->SetText("");
     }
 
     void CreateCasinoPanel() {
@@ -11324,11 +11270,11 @@ private:
         BorderImage* roflStrip = casinoPanel_->CreateChild<BorderImage>();
         roflStrip->SetPosition(0, 0);
         roflStrip->SetSize(sw, S(34));
-        roflStrip->SetColor(Color(0.38f, 0.06f, 0.06f, 0.90f));
+        roflStrip->SetColor(Color(0.035f, 0.055f, 0.05f, 0.90f));
 
         casinoRoflBannerText_ = roflStrip->CreateChild<Text>();
         casinoRoflBannerText_->SetFont(font_, SF(14));
-        casinoRoflBannerText_->SetText("⚠  100% РОФЛ-КАЗИНО  •  ВСЁ ПОНАРОШКУ! НИКАКИХ РЕАЛЬНЫХ ДЕНЕГ, ПЛАТЕЖЕЙ И ВЫВОДА — ТОЛЬКО ВИРТУАЛЬНЫЕ ФИШКИ ¤  ⚠");
+        casinoRoflBannerText_->SetText("Виртуальные фишки · без реальных денег");
         casinoRoflBannerText_->SetTextAlignment(HA_CENTER);
         casinoRoflBannerText_->SetPosition(S(12), S(7));
         casinoRoflBannerText_->SetWidth(sw - S(24));
@@ -11361,8 +11307,8 @@ private:
         StyleCrispText(casinoStatusText_);
 
         int rx = sw - S(36);
-        casinoCloseButton_ = SharedPtr<BorderImage>(makeGlassBtn(topBar, rx - S(156), S(16), S(142), S(46), "ВЫХОД [ESC]", Color(0.28f, 0.12f, 0.14f, 0.92f), 14));
-        casinoInfoBtn_     = SharedPtr<BorderImage>(makeGlassBtn(topBar, rx - S(286), S(16), S(120), S(46), "[?] О РОФЛЕ", Color(0.32f, 0.22f, 0.08f, 0.92f), 13));
+        casinoCloseButton_ = SharedPtr<BorderImage>(makeGlassBtn(topBar, rx - S(156), S(16), S(142), S(46), "Выход", Color(0.28f, 0.12f, 0.14f, 0.92f), 14));
+        casinoInfoBtn_     = SharedPtr<BorderImage>(makeGlassBtn(topBar, rx - S(286), S(16), S(120), S(46), "?", Color(0.32f, 0.22f, 0.08f, 0.92f), 13));
         casinoModeButton_  = SharedPtr<BorderImage>(makeGlassBtn(topBar, rx - S(536), S(16), S(240), S(46), "[TAB] РУЛЕТКА / СЛОТЫ 777", Color(0.12f, 0.42f, 0.24f, 0.92f), 14));
 
         // 3. Компактная плавающая плашка статуса спина под верхней панелью
@@ -11418,22 +11364,22 @@ private:
         casinoQuickRedBtn_    = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(18),  r1y, S(106), bh, "КРАСНОЕ", Color(0.58f, 0.10f, 0.12f, 0.94f), 13));
         casinoQuickBlackBtn_  = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(130), r1y, S(106), bh, "ЧЁРНОЕ",  Color(0.12f, 0.13f, 0.17f, 0.94f), 13));
         casinoQuickZeroBtn_   = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(242), r1y, S(86),  bh, "ЗЕРО 0",  Color(0.08f, 0.44f, 0.22f, 0.94f), 13));
-        casinoBetButton_      = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(334), r1y, S(150), bh, "ТИП [Q/E]", Color(0.24f, 0.18f, 0.30f, 0.94f), 13));
+        casinoBetButton_      = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(334), r1y, S(150), bh, "Тип", Color(0.24f, 0.18f, 0.30f, 0.94f), 13));
 
         casinoNumMinusBtn_    = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(492), r1y, S(38),  bh, "-",       Color(0.18f, 0.28f, 0.18f, 0.94f), 16));
-        casinoNumberButton_   = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(534), r1y, S(108), bh, "ЧИСЛО [W/S]", Color(0.14f, 0.24f, 0.14f, 0.94f), 12));
+        casinoNumberButton_   = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(534), r1y, S(108), bh, "Число", Color(0.14f, 0.24f, 0.14f, 0.94f), 12));
         casinoNumPlusBtn_     = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(646), r1y, S(38),  bh, "+",       Color(0.18f, 0.28f, 0.18f, 0.94f), 16));
 
         int chipX = botW - S(420);
         casinoChipMinusBtn_   = SharedPtr<BorderImage>(makeGlassBtn(botBar, chipX,          r1y, S(42),  bh, "- ¤",     Color(0.12f, 0.22f, 0.34f, 0.94f), 14));
         casinoChipButton_     = SharedPtr<BorderImage>(makeGlassBtn(botBar, chipX + S(48),  r1y, S(162), bh, "ФИШКА [A/D]", Color(0.12f, 0.22f, 0.34f, 0.94f), 13));
         casinoChipPlusBtn_    = SharedPtr<BorderImage>(makeGlassBtn(botBar, chipX + S(216), r1y, S(42),  bh, "+ ¤",     Color(0.12f, 0.22f, 0.34f, 0.94f), 14));
-        casinoQuickDoubleBtn_ = SharedPtr<BorderImage>(makeGlassBtn(botBar, chipX + S(264), r1y, S(138), bh, "×2 СТАВКА", Color(0.36f, 0.24f, 0.08f, 0.94f), 13));
+        casinoQuickDoubleBtn_ = SharedPtr<BorderImage>(makeGlassBtn(botBar, chipX + S(264), r1y, S(138), bh, "Больше", Color(0.36f, 0.24f, 0.08f, 0.94f), 13));
 
         // Ряд 2 кнопок: Главная кнопка КРУТИТЬ + Пополнение + История
         int r2y = S(90);
         casinoSpinButton_  = SharedPtr<BorderImage>(makeGlassBtn(botBar, S(18), r2y, botW - S(290), S(50), "КРУТИТЬ 3D-РУЛЕТКУ [SPACE]", Color(0.76f, 0.48f, 0.06f, 0.96f), 18));
-        casinoTopupButton_ = SharedPtr<BorderImage>(makeGlassBtn(botBar, botW - S(260), r2y, S(242), S(50), "+5000 ФИШЕК (БЕСПЛАТНО) [T]", Color(0.10f, 0.42f, 0.24f, 0.94f), 13));
+        casinoTopupButton_ = SharedPtr<BorderImage>(makeGlassBtn(botBar, botW - S(260), r2y, S(242), S(50), "+5000 ¤", Color(0.10f, 0.42f, 0.24f, 0.94f), 13));
 
         casinoHistoryText_ = botBar->CreateChild<Text>();
         casinoHistoryText_->SetFont(font_, SF(13));
@@ -11467,7 +11413,7 @@ private:
 
         Text* dHead = dCard->CreateChild<Text>();
         dHead->SetFont(font_, SF(26));
-        dHead->SetText("★  СТОП! ЭТО 100% РОФЛ-КАЗИНО  ★");
+        dHead->SetText("Как играть");
         dHead->SetTextAlignment(HA_CENTER);
         dHead->SetPosition(S(20), S(24));
         dHead->SetWidth(dw - S(40));
@@ -11476,20 +11422,14 @@ private:
 
         Text* dSub = dCard->CreateChild<Text>();
         dSub->SetFont(font_, SF(17));
-        dSub->SetText(
-            "ВНИМАНИЕ — ВСЁ В ЭТОМ ЗАЛЕ 100% ПОНАРОШКУ!\n\n"
-            "• Никаких реальных денег, пополнений с карты, ставок и вывода тут НЕТ.\n"
-            "• Все 3D-фишки, золотые слитки, рулетка и слоты 777 — шуточная мини-игра.\n"
-            "• Фишки (¤) не имеют никакой стоимости, а кнопка «+5000 ФИШЕК» бесконечна.\n\n"
-            "Просто кайфуй от 3D 4K-графона и крути с Кочетом-Крупье на здоровье!"
-        );
+        dSub->SetText("Клик — поставить фишку. A/D — номинал.\nU — отмена, C — очистить, SPACE — играть.\nF — поле, B — блэкджек, ПКМ — обзор.\n\nБлэкджек: H — ещё, N — хватит, X — дабл.\nТолько виртуальные фишки. Без покупки и вывода.");
         dSub->SetTextAlignment(HA_CENTER);
         dSub->SetPosition(S(26), S(78));
         dSub->SetWidth(dw - S(52));
         dSub->SetColor(Color(0.92f, 0.96f, 0.94f, 1.0f));
         StyleCrispText(dSub);
 
-        casinoDisclaimerBtn_ = SharedPtr<BorderImage>(makeGlassBtn(dCard, S(80), dh - S(76), dw - S(160), S(52), "ПОНЯЛ, ЭТО РОФЛ — ЗАЛЕТАЕМ В 3D! [ENTER]", Color(0.76f, 0.48f, 0.06f, 0.98f), 16));
+        casinoDisclaimerBtn_ = SharedPtr<BorderImage>(makeGlassBtn(dCard, S(80), dh - S(76), dw - S(160), S(52), "Понятно", Color(0.76f, 0.48f, 0.06f, 0.98f), 16));
 
         casinoPanel_->SetVisible(false);
         UpdateCasinoVisuals();
@@ -11502,7 +11442,7 @@ private:
         casinoSpinTimer_ = 0.0f;
         casinoResultFlash_ = 0.0f;
         casinoCamModeBlend_ = casinoSlotsMode_ ? 1.0f : 0.0f;
-        if (!casinoDisclaimerAck_) casinoDisclaimerVisible_ = true;
+        casinoDisclaimerVisible_ = false; // Instructions are opt-in via ?.
         CreateCasinoScene3D();
         if (!casinoPanel_) CreateCasinoPanel();
         if (mainMenuPanel_) mainMenuPanel_->SetVisible(false);
@@ -11550,13 +11490,13 @@ private:
         if (casinoSpinTimer_ > 0.0f) return;
         casinoBet_.amount = std::max(1, casinoBet_.amount);
         if (!casinoSlotsMode_ && rouletteRound_.chips.empty()) {
-            if (casinoResultText_) casinoResultText_->SetText("Сначала положите фишки на поле [F] или добавьте выбранную ставку [V].");
+            if (casinoResultText_) casinoResultText_->SetText("Поставьте фишки");
             PlayEmptyClickSound(); return;
         }
         const int stake = casinoSlotsMode_ ? casinoBet_.amount : rouletteRound_.Total();
         if (stake <= 0 || casinoBalance_ < stake) {
             if (casinoResultText_) {
-                casinoResultText_->SetText("Фишки кончились понарошку! Жмите [+5000 ФИШЕК] или [T].");
+                casinoResultText_->SetText("Недостаточно фишек");
                 casinoResultText_->SetColor(Color(1.0f, 0.42f, 0.34f, 1.0f));
             }
             PlayEmptyClickSound();
@@ -11605,9 +11545,7 @@ private:
                 if (payout > casinoMaxWin_) casinoMaxWin_ = payout;
                 bool is777 = (slotReels_[0] == Casino::SYM_SEVEN && slotReels_[1] == Casino::SYM_SEVEN && slotReels_[2] == Casino::SYM_SEVEN);
                 if (casinoResultText_) {
-                    casinoResultText_->SetText(is777
-                        ? ("ДЖЕКПОТ 777!! +" + String(payout) + " ¤ (всё по-настоящему красиво, но понарошку!)")
-                        : ("ПОБЕДА НА СЛОТАХ! +" + String(payout) + " ¤ (рофл-выигрыш начислен)"));
+                    casinoResultText_->SetText((is777 ? String("Джекпот  ") : String("Возврат  ")) + String(payout) + " ¤");
                     casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
                 }
                 PlayCasinoSound(casinoJackpotSound_, is777 ? 1.0f : 0.85f);
@@ -11615,7 +11553,7 @@ private:
             } else {
                 ++casinoLosses_;
                 if (casinoResultText_) {
-                    casinoResultText_->SetText("Мимо линии! Хорошо, что это чистый рофл и фантики — крути ещё!");
+                    casinoResultText_->SetText("Нет выигрыша");
                     casinoResultText_->SetColor(Color(1.0f, 0.44f, 0.44f, 1.0f));
                 }
                 PlayUISound();
@@ -11641,7 +11579,7 @@ private:
             if (payout > casinoMaxWin_) casinoMaxWin_ = payout;
             bool big = (payout >= roundStake * 6);
             if (casinoResultText_) {
-                casinoResultText_->SetText("ВЫИГРЫШ +" + String(payout) + " ¤  •  Выпало " + String(casinoLastResult_) + " (" + String(Casino::ColorName(casinoLastResult_)) + ") — рофл-касса платит!");
+                casinoResultText_->SetText("Возврат  " + String(payout) + " ¤");
                 casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
             }
             PlayCasinoSound(casinoJackpotSound_, big ? 1.0f : 0.85f);
@@ -11649,14 +11587,12 @@ private:
         } else {
             ++casinoLosses_;
             if (casinoResultText_) {
-                casinoResultText_->SetText("Выпало " + String(casinoLastResult_) + " (" + String(Casino::ColorName(casinoLastResult_)) + ") • Сгорело понарошку, реальный кошелёк цел!");
+                casinoResultText_->SetText("Нет выигрыша");
                 casinoResultText_->SetColor(Color(1.0f, 0.42f, 0.44f, 1.0f));
             }
             PlayUISound();
         }
-        if (casinoResultText_) casinoResultText_->SetText("Выпало " + String(casinoLastResult_) +
-            " • СТАВКИ: " + String(roundStake) + " ¤ • ВОЗВРАТ: " + String(payout) +
-            " ¤ • ИТОГ: " + String(payout - roundStake) + " ¤");
+        if (casinoResultText_) casinoResultText_->SetText("Итог  " + String(payout - roundStake) + " ¤");
         casinoPendingResult_ = -1;
         SaveSettingsFile();
         UpdateCasinoVisuals();
@@ -11765,6 +11701,9 @@ private:
             if (HitUIElement(bettingClear_, mp)) rouletteRound_.Clear();
             if (HitUIElement(bettingAdd_, mp)) AddRouletteChip(casinoBet_);
             UpdateCasinoVisuals(); return;
+        }
+        if (HitUIElement(casinoInfoBtn_, mp)) {
+            casinoDisclaimerVisible_ = true; UpdateCasinoVisuals(); return;
         }
         if (blackjackMode_) {
             if (HitUIElement(casinoCloseButton_, mp)) CloseCasino();
@@ -12059,7 +11998,7 @@ private:
         addObj(nullptr, "RightWallF", Vector3(2.80f, 1.70f, -1.30f), Vector3(0.30f, 3.4f, 2.35f), boxModel_, plankMat);
         addObj(nullptr, "RightWallB", Vector3(2.80f, 1.70f,  1.80f), Vector3(0.30f, 3.4f, 1.45f), boxModel_, plankMat);
 
-        // Приоткрывающаяся банная дверь справа в ближнем углу (для [4] Проветрить)
+        // Приоткрывающаяся банная дверь справа в ближнем углу (для Воздух)
         addObj(nullptr, "DoorFrame", Vector3(2.68f, 1.10f, -1.65f), Vector3(0.18f, 2.25f, 1.05f), boxModel_, logMat);
         banyaDoor3D_ = SharedPtr<Node>(banyaScene_->CreateChild("BanyaDoorPivot"));
         banyaDoor3D_->SetPosition(Vector3(2.60f, 1.10f, -2.10f));
@@ -12369,7 +12308,7 @@ private:
         banyaStatsBtnBg_->SetColor(Color(0.16f, 0.09f, 0.04f, 0.82f));
         Text* stLbl = banyaStatsBtnBg_->CreateChild<Text>();
         stLbl->SetFont(font_, SF(13));
-        stLbl->SetText("[6] СТАТИСТИКА");
+        stLbl->SetText("Статистика");
         stLbl->SetTextAlignment(HA_CENTER);
         stLbl->SetPosition(S(6), S(9));
         stLbl->SetWidth(S(148));
@@ -12386,7 +12325,7 @@ private:
 
         Text* rKick = banyaRiddleBox_->CreateChild<Text>();
         rKick->SetFont(font_, SF(12));
-        rKick->SetText("ЗАГАДКА СМОТРЯЩЕГО (ответь мышью или Q / W / E / R)");
+        rKick->SetText("Загадка");
         rKick->SetPosition(S(14), S(8));
         rKick->SetColor(Color(0.96f, 0.82f, 0.62f, 0.88f));
         StyleCrispText(rKick);
@@ -12449,11 +12388,11 @@ private:
         StyleCrispText(banyaCaptionText_, true);
 
         const char* actLabels[5] = {
-            "[1] Поддать пару",
-            "[2] Веником",
-            "[3] Окатить",
-            "[4] Проветрить",
-            "[5] Загадка"
+            "Пар",
+            "Веник",
+            "Вода",
+            "Воздух",
+            "Загадка"
         };
         int btnW = S(186), btnGap = S(10);
         int totalBtnsW = btnW * 5 + btnGap * 4;
@@ -12482,7 +12421,7 @@ private:
         foot->SetPosition(S(20), sh - S(26));
         foot->SetWidth(sw - S(40));
         foot->SetColor(Color(0.92f, 0.84f, 0.72f, 0.82f));
-        foot->SetText("Цель: 3 минуты и минимум 3 загадки смотрящего (6 — на Ковш Смотрящего). [1..5] действия, [Q/W/E/R] ответы, [6] статистика, [ESC] выход.");
+        foot->SetText("3 минуты · 3 загадки");
         StyleCrispText(foot);
 
         // Оверлей концовки (14 концовок)
@@ -12554,7 +12493,7 @@ private:
 
         Text* stHead = banyaStatsBox_->CreateChild<Text>();
         stHead->SetFont(font_, SF(22));
-        stHead->SetText("СТАТИСТИКА ПАРНОЙ (пауза)");
+        stHead->SetText("Статистика");
         stHead->SetPosition(S(22), S(16));
         stHead->SetColor(Color(1.0f, 0.86f, 0.56f, 1.0f));
         StyleCrispText(stHead, true);
@@ -12565,7 +12504,7 @@ private:
         banyaStatsCloseBtn_->SetColor(Color(0.32f, 0.19f, 0.10f, 0.95f));
         Text* clTxt = banyaStatsCloseBtn_->CreateChild<Text>();
         clTxt->SetFont(font_, SF(13));
-        clTxt->SetText("[6/ESC] Закр.");
+        clTxt->SetText("Закрыть");
         clTxt->SetTextAlignment(HA_CENTER);
         clTxt->SetPosition(S(4), S(7));
         clTxt->SetWidth(S(98));
@@ -12609,7 +12548,7 @@ private:
 
         SyncMouseLock();
         SyncActiveViewport();
-        SetBanyaCaption("Банька натоплена. Три минуты, три загадки смотрящего — и выйдешь с зачётом.", 6.0f);
+        SetBanyaCaption("", 6.0f);
         SyncBanyaVisuals(0.0f);
     }
 
@@ -12718,7 +12657,7 @@ private:
         if (actIdx == 4) {
             if (banyaSim_.OpenRiddle(false)) {
                 PlayUISound();
-                SetBanyaCaption("Смотрящий прищурился из пара и задал вопрос вне очереди.", 3.4f);
+                SetBanyaCaption("", 3.4f);
             }
             return;
         }
@@ -12733,7 +12672,7 @@ private:
                                          Vector3(((rand() % 100) - 50) * 0.008f, 0.85f + (rand() % 60) * 0.01f, ((rand() % 100) - 50) * 0.006f),
                                          1.9f, 0.34f, 0);
                 if (banyaSim_.phase == Banya::PHASE_PLAY)
-                    SetBanyaCaption("Пшшш… пар пошёл под потолок, камни довольны.");
+                    SetBanyaCaption("");
             }
         } else if (actIdx == 1) {
             if (banyaSim_.ActVenik()) {
@@ -12744,7 +12683,7 @@ private:
                                          Vector3(((rand() % 100) - 50) * 0.012f, -0.45f - (rand() % 40) * 0.01f, ((rand() % 100) - 50) * 0.01f),
                                          1.5f, 0.11f, 3);
                 if (banyaSim_.phase == Banya::PHASE_PLAY)
-                    SetBanyaCaption("Берёзовый дух… косточки размякли, кочет тает.");
+                    SetBanyaCaption("");
             }
         } else if (actIdx == 2) {
             bool wasCold = false;
@@ -12756,7 +12695,7 @@ private:
                                          Vector3(((rand() % 100) - 40) * 0.014f, 0.65f + (rand() % 60) * 0.01f, ((rand() % 100) - 50) * 0.01f),
                                          1.05f, 0.07f, 2);
                 if (banyaSim_.phase == Banya::PHASE_PLAY)
-                    SetBanyaCaption(wasCold ? "Ледяная вода по остывшему кочету — брр, квохчет от холода!" : "Ух! Прохладная водица из шайки — голова ясная.");
+                    SetBanyaCaption(wasCold ? "Слишком холодно" : "");
             }
         } else if (actIdx == 3) {
             bool wasCold = false;
@@ -12768,7 +12707,7 @@ private:
                                          Vector3(-1.35f - (rand() % 50) * 0.01f, -0.18f, 0.45f),
                                          1.8f, 0.06f, 4);
                 if (banyaSim_.phase == Banya::PHASE_PLAY)
-                    SetBanyaCaption(wasCold ? "И без того прохладно, а ты дверь настежь — кочет дрожит!" : "Дверь скрипнула, морозный воздух — дышать легче.");
+                    SetBanyaCaption(wasCold ? "Слишком холодно" : "");
             }
         }
     }
@@ -12801,7 +12740,7 @@ private:
                 banyaRewardApplied_ = false;
                 banyaSim_.Reset();
                 if (banyaEndBox_) banyaEndBox_->SetVisible(false);
-                SetBanyaCaption("Новый заход! Три минуты и три загадки смотрящего.", 5.0f);
+                SetBanyaCaption("", 5.0f);
                 SyncBanyaVisuals(0.0f);
             }
             return;
@@ -12841,7 +12780,7 @@ private:
                 banyaRewardApplied_ = false;
                 banyaSim_.Reset();
                 banyaEndBox_->SetVisible(false);
-                SetBanyaCaption("Новый заход! Три минуты и три загадки смотрящего.", 5.0f);
+                SetBanyaCaption("", 5.0f);
                 SyncBanyaVisuals(0.0f);
             } else if (HitUIElement(banyaEndBtnStats_.Get(), mp)) {
                 ToggleBanyaStats();
@@ -12882,11 +12821,7 @@ private:
 
         // 1. Кэшированное обновление HUD (без перерисовки шрифтовых глифов, пока значения не изменились!)
         int wallet = banyaFromMenu_ ? (100 + banyaBonusCredits_) : credits_;
-        String buffStr = (banyaBuffTier_ >= 2) ? "◆ КОВШ СМОТРЯЩЕГО (+50HP/+15%УР)"
-                       : (banyaBuffTier_ == 1) ? "• БАННЫЙ ЗАКАЛ (+25HP/+25БР)"
-                                               : "нет баффа";
-        String badgeStr = "ЛКМ: печь / веник / кадка / дверь • ПКМ: обзор • КОШЕЛЁК: " + String(wallet) + "¤  •  БАФФ АРЕНЫ: " + buffStr +
-                          "  •  ОТКРЫТО КОНЦОВОК: " + String(Banya::CountSeenEndings(banyaSim_.lifetime.seenEndingsMask)) + "/14";
+        String badgeStr = String(wallet) + " ¤";
         if (banyaBadgeText_ && badgeStr != lastBanyaBadge_) {
             lastBanyaBadge_ = badgeStr;
             banyaBadgeText_->SetText(badgeStr);
@@ -13211,17 +13146,17 @@ private:
         banyaSim_.Step(dt);
         if (!wasRiddle && banyaSim_.riddle.active) {
             PlayUISound();
-            SetBanyaCaption("Смотрящий из пара загадывает загадку. Не ответишь — кочету худо.", 3.5f);
+            SetBanyaCaption("", 3.5f);
         }
 
         // Предупреждения состояния парной
         if (banyaSim_.phase == Banya::PHASE_PLAY && !banyaSim_.paused && (timeAcc_ - banyaLastWarnTime_) > 7.0f) {
-            if (banyaSim_.fire > 82.0f)       SetBanyaCaption("Печь раскалилась — того и гляди займётся! Дай ей остыть.");
-            else if (banyaSim_.air < 26.0f)   SetBanyaCaption("Душно! Проветри [4], пока кочет не угорел.");
-            else if (banyaSim_.temp > 103.0f) SetBanyaCaption("Кочет красный, как гребешок. Окати [3] или проветри [4]!");
-            else if (banyaSim_.temp < 60.0f)  SetBanyaCaption("Холодно! Поддай пару [1], не то кочет замёрзнет.");
-            else if (banyaSim_.steamMax > 10.0f) SetBanyaCaption("Пар на максимуме — ещё немного, и кочет растворится в облаке!");
-            else if (banyaSim_.life < 32.0f)  SetBanyaCaption("Силы на исходе. Верный ответ на загадку [5] их вернёт.");
+            if (banyaSim_.fire > 82.0f)       SetBanyaCaption("Перегрев печи");
+            else if (banyaSim_.air < 26.0f)   SetBanyaCaption("Нужен воздух");
+            else if (banyaSim_.temp > 103.0f) SetBanyaCaption("Нужно охладиться");
+            else if (banyaSim_.temp < 60.0f)  SetBanyaCaption("Нужно согреться");
+            else if (banyaSim_.steamMax > 10.0f) SetBanyaCaption("Слишком много пара");
+            else if (banyaSim_.life < 32.0f)  SetBanyaCaption("Мало сил");
         }
 
         SyncBanyaVisuals(dt);
@@ -13287,8 +13222,8 @@ private:
 
         // 6 вкладок выбора игры ([1..6]) + кнопки Рестарт [R] и Назад [ESC]
         static const char* kTabs[8] = {
-            "[1] ЗМЕЙКА", "[2] АРКАНОИД", "[3] КУРО-РАН", "[4] PONG",
-            "[5] FLAPPY", "[6] ТЕТРИС", "[R] ЗАНОВО", "[ESC] НАЗАД"
+            "Змейка", "Арканоид", "Куро-ран", "Pong",
+            "Flappy", "Тетрис", "Заново", "Назад"
         };
         int tabW = (pw - S(40) - S(35)) / 8;
         for (int i = 0; i < 8; ++i) {
@@ -13339,14 +13274,14 @@ private:
             arcadeGameTabs_[i]->SetColor(act ? Color(0.86f, 0.22f, 0.58f, 0.98f) : Color(0.14f, 0.12f, 0.32f, 0.95f));
         }
         if (arcadeTitleText_)
-            arcadeTitleText_->SetText(String("PIXEL ARCADE: ") + Arcade::PixelArcadeSim::GameTitle(arcadeSim_.kind));
+            arcadeTitleText_->SetText(String() + Arcade::PixelArcadeSim::GameTitle(arcadeSim_.kind));
         if (arcadeScoreText_) {
             int hi = arcadeSim_.highScores[(size_t)arcadeSim_.kind];
             arcadeScoreText_->SetText("СЧЕТ: " + String(arcadeSim_.score) + "  |  РЕК: " + String(hi) +
                                       "  |  " + String(GetMiniAppWallet(arcadeFromMenu_)) + " ¤");
         }
         if (arcadeHintText_)
-            arcadeHintText_->SetText(String(Arcade::PixelArcadeSim::GameControls(arcadeSim_.kind)) + "  •  [1..6] Игра  •  [R] Заново  •  [ESC] Выход");
+            arcadeHintText_->SetText(String(Arcade::PixelArcadeSim::GameControls(arcadeSim_.kind)));
 
         if (arcadeOverlayText_) {
             if (arcadeSim_.over) {
@@ -13354,10 +13289,10 @@ private:
                 arcadeOverlayText_->SetText((arcadeSim_.won ? "ПОБЕДА! " : "ИГРА ОКОНЧЕНА! ") +
                                             String("СЧЕТ: ") + String(arcadeSim_.score) +
                                             (bonus > 0 ? (" (+" + String(bonus) + " ¤)") : String()) +
-                                            "\n[R] — сыграть ещё   •   [1..6] — другая игра");
+                                            "");
                 arcadeOverlayText_->SetVisible(true);
             } else if (arcadeSim_.paused) {
-                arcadeOverlayText_->SetText("ПАУЗА\nНажмите [SPACE] чтобы продолжить");
+                arcadeOverlayText_->SetText("Пауза");
                 arcadeOverlayText_->SetVisible(true);
             } else {
                 arcadeOverlayText_->SetVisible(false);

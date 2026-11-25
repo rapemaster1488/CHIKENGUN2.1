@@ -33,6 +33,7 @@ set_tests_properties(CorePhysicsAndAssets PROPERTIES
 
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(NAME ChipAtlas COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_chip_atlas.py")
     add_test(NAME UrhoAppleCpuPatch
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_urho_apple_cpu_patch.py")
 endif()
