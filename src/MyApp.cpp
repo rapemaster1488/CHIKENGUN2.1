@@ -109,6 +109,7 @@
 #include "CyberSystems.h"
 #include "BanyaSim.h"
 #include "CasinoSim.h"
+#include "CasinoAnimation.h"
 #include "ArcadeGames.h"
 #include "SplashIntro.h"
 #include "SDLStartup.h"
@@ -674,7 +675,7 @@ private:
     bool gfxFxaa_ = true;           // FXAA 3.11
     bool gfxSharpen_ = true;        // Contrast-Adaptive 4K Sharpening (CAS)
     bool gfxVsync_ = false;         // вертикальная синхронизация
-    int gfxFpsIdx_ = 1;             // 0=60 FPS 1=120 FPS 2=БЕЗ ЛИМИТА
+    int gfxFpsIdx_ = 1;             // 0=60 FPS 1=120 FPS 2=БЕЗ ЛИМИТА 3=240 FPS
     int gfxAnisoIdx_ = 2;           // 0=Билинейная 1=Трилинейная 2=Анизотропная 16x
     float fovBase_ = 90.0f;         // базовый горизонтально-комфортный FOV 4K (75..115)
     float uiScale_ = 1.0f;          // авто-масштаб интерфейса под 1080p / 1440p / 4K UHD (3840x2160 -> 2.0x)
@@ -1657,8 +1658,7 @@ private:
         renderer->SetShadowQuality(gfxQualityIdx_ >= 2 ? SHADOWQUALITY_PCF_24BIT : SHADOWQUALITY_PCF_16BIT);
         renderer->SetShadowSoftness(gfxQualityIdx_ >= 3 ? 1.15f : 1.0f);
         renderer->SetHDRRendering(gfxHdr_ || gfxGlowIdx_ >= 1);
-        static const int fpsValues[3] = { 60, 120, 0 };
-        if (engine_) engine_->SetMaxFps(fpsValues[Clamp(gfxFpsIdx_, 0, 2)]);
+        if (engine_) engine_->SetMaxFps(CasinoAnimation::FpsLimit(gfxFpsIdx_));
     }
 
     void LoadCoreModelsAndFont() {
@@ -8526,7 +8526,7 @@ private:
         gfxFxaa_        = XmlGetInt(gfx, "fxaa",    gfxFxaa_    ? 1 : 0) != 0;
         gfxSharpen_     = XmlGetInt(gfx, "sharpen", gfxSharpen_ ? 1 : 0) != 0;
         gfxVsync_       = XmlGetInt(gfx, "vsync",   gfxVsync_   ? 1 : 0) != 0;
-        gfxFpsIdx_      = Clamp(XmlGetInt(gfx, "fps",         gfxFpsIdx_),     0, 2);
+        gfxFpsIdx_      = Clamp(XmlGetInt(gfx, "fps",         gfxFpsIdx_),     0, 3);
         gfxAnisoIdx_    = Clamp(XmlGetInt(gfx, "anisotropicIdx", gfxAnisoIdx_), 0, 2);
         if (!gfx.HasAttribute("anisotropicIdx") && gfx.HasAttribute("anisotropic")) {
             int a = XmlGetInt(gfx, "anisotropic", 16);
@@ -8718,8 +8718,7 @@ private:
 
         renderer->SetHDRRendering(gfxHdr_);
 
-        static const int fpsValues[3] = { 60, 120, 0 };
-        if (engine_) engine_->SetMaxFps(fpsValues[Clamp(gfxFpsIdx_, 0, 2)]);
+        if (engine_) engine_->SetMaxFps(CasinoAnimation::FpsLimit(gfxFpsIdx_));
 
         ApplyTextureFiltering();
         SyncPbrLightScale();
@@ -8836,7 +8835,7 @@ private:
 
         Text* sub = mainMenuPanel_->CreateChild<Text>();
         sub->SetFont(font_, SF(16));
-        sub->SetText("");
+        sub->SetText("ПЕРО СУДЬБЫ  /  Арена · Парная · Казино · Аркады");
         sub->SetTextAlignment(HA_CENTER);
         sub->SetPosition(sw / 2 - S(440), sh / 2 - S(190));
         sub->SetWidth(S(880));
@@ -8872,7 +8871,7 @@ private:
 
         Text* hint = mainMenuPanel_->CreateChild<Text>();
         hint->SetFont(font_, SF(14));
-        hint->SetText("");
+        hint->SetText("Выбери режим  •  W/S — выбор  •  Enter — играть");
         hint->SetTextAlignment(HA_CENTER);
         hint->SetPosition(sw / 2 - S(440), sh / 2 + S(210));
         hint->SetWidth(S(880));
@@ -9123,7 +9122,7 @@ private:
         static const char* shadowNames[3] = { "1024 px", "2048 px", "4096 px (4K PCF)" };
         static const char* bloomNames[3]  = { "ВЫКЛ", "МЯГКИЙ HDR", "КИНЕМАТОГРАФИЧНЫЙ HDR" };
         static const char* filterNames[3] = { "Билинейная", "Трилинейная", "Анизотропная 16x" };
-        static const char* fpsNames[3]    = { "60 FPS", "120 FPS", "БЕЗ ЛИМИТА" };
+        static const char* fpsNames[4]    = { "60 FPS", "120 FPS", "БЕЗ ЛИМИТА", "240 FPS" };
         static const char* sensNames[3]   = { "Низкая", "Обычная", "Высокая" };
 
         const char* names[SETTINGS_ROW_COUNT] = {
@@ -9162,7 +9161,7 @@ private:
         vals[7]  = String(bloomNames[Clamp(gfxGlowIdx_, 0, 2)]) + (gfxHdr_ ? " [HDR ON]" : " [SDR]");
         vals[8]  = gfxSharpen_ ? "ВКЛ (Чёткость 4K)" : "ВЫКЛ";
         vals[9]  = filterNames[Clamp(gfxAnisoIdx_, 0, 2)];
-        vals[10] = String(fpsNames[Clamp(gfxFpsIdx_, 0, 2)]) + (gfxVsync_ ? " | VSync ВКЛ" : " | VSync ВЫКЛ");
+        vals[10] = String(fpsNames[Clamp(gfxFpsIdx_, 0, 3)]) + (gfxVsync_ ? " | VSync ВКЛ" : " | VSync ВЫКЛ");
         vals[11] = String((int)fovBase_) + "°";
         vals[12] = sensNames[Clamp(mouseSensIdx_, 0, 2)];
         vals[13] = "SFX " + String((int)(sfxVolume_ * 100.0f + 0.5f)) + "%  /  МУЗ " + String((int)(musicVolume_ * 100.0f + 0.5f)) + "%";
@@ -9213,7 +9212,7 @@ private:
         case 8: gfxSharpen_ = !gfxSharpen_; break;
         case 9: gfxAnisoIdx_ = Clamp(gfxAnisoIdx_ + delta, 0, 2); break;
         case 10:
-            gfxFpsIdx_ = (gfxFpsIdx_ + delta + 3) % 3;
+            gfxFpsIdx_ = (gfxFpsIdx_ + delta + 4) % 4;
             if (delta < 0 && gfxFpsIdx_ == 2) gfxVsync_ = !gfxVsync_;
             break;
         case 11: fovBase_ = (float)Clamp((int)fovBase_ + delta * 5, 75, 105); break;
@@ -10294,7 +10293,110 @@ private:
     SharedPtr<Text> bettingSummary_, bettingLabels_[49];
     SharedPtr<BorderImage> bettingChips_[49][3];
     SharedPtr<Text> bettingChipAmounts_[49];
+    Color bettingBaseColors_[49];
+    bool winningBetZones_[49] = {};
     bool bettingLayoutVisible_ = true;
+
+    struct CasinoFlight {
+        SharedPtr<BorderImage> sprite;
+        Vector2 from, to;
+        CasinoAnimation::Timeline clock;
+        bool active = false;
+    };
+    CasinoFlight casinoFlights_[24];
+    unsigned casinoFlightCursor_ = 0;
+    SharedPtr<Text> casinoOutcomeText_;
+    CasinoAnimation::Timeline casinoOutcomeClock_;
+    int casinoOutcome_ = 0, casinoOutcomeNet_ = 0, casinoOutcomeShown_ = -2147483647;
+    bool casinoOutcomeActive_ = false, casinoOutcomeJackpot_ = false;
+    struct CardMotion {
+        WeakPtr<Node> node;
+        Vector3 target;
+        CasinoAnimation::Timeline clock;
+        float delay = 0;
+        bool flip = false;
+    };
+    Vector<CardMotion> casinoCardMotions_;
+    int shownPlayerCards_ = 0, shownDealerCards_ = 0;
+    bool shownDealerHidden_ = false;
+
+    Vector2 CasinoUIPosition(UIElement* element) {
+        if (!element) return Vector2::ZERO;
+        const auto p = element->GetScreenPosition();
+        return Vector2(float(p.x_ + element->GetWidth()/2), float(p.y_ + element->GetHeight()/2));
+    }
+
+    void FlyCasinoChip(const Vector2& from, const Vector2& to, bool win) {
+        auto& f = casinoFlights_[casinoFlightCursor_++ % 24];
+        if (!f.sprite) return;
+        f.from = from; f.to = to; f.active = true; f.clock.Reset(win ? 0.65 : 0.45);
+        f.sprite->SetImageRect(IntRect(win ? 256 : 64, 0, win ? 320 : 128, 64));
+        f.sprite->SetOpacity(1.0f); f.sprite->SetVisible(true);
+        f.sprite->SetPosition((int)from.x_-S(14), (int)from.y_-S(14));
+    }
+
+    void CasinoOutcome(int stake, int payout, bool jackpot = false) {
+        casinoOutcome_ = CasinoAnimation::Outcome(stake, payout);
+        casinoOutcomeNet_ = payout-stake; casinoOutcomeShown_ = -2147483647;
+        casinoOutcomeJackpot_ = jackpot && casinoOutcome_ > 0;
+        casinoOutcomeClock_.Reset(casinoOutcomeJackpot_ ? 2.8 : 1.8);
+        casinoOutcomeActive_ = true;
+        if (casinoOutcomeText_) {
+            casinoOutcomeText_->SetVisible(true);
+            casinoOutcomeText_->SetColor(casinoOutcome_ > 0 ? Color(0.6f,0.95f,0.7f) :
+                casinoOutcome_ < 0 ? Color(0.95f,0.48f,0.43f) : Color(0.8f,0.85f,0.9f));
+        }
+        const auto start = CasinoUIPosition(casinoWheelText_);
+        const auto end = CasinoUIPosition(casinoBalanceText_);
+        const int count = casinoOutcomeJackpot_ ? 24 : (casinoOutcome_ > 0 ? 10 : 5);
+        for (int i=0; i<count; ++i)
+            FlyCasinoChip(start + Vector2(float((i%6-3)*S(15)), float((i/6)*S(12))),
+                casinoOutcome_ >= 0 ? end : start+Vector2(float((i-2)*S(22)), -float(S(90))), casinoOutcome_ >= 0);
+    }
+
+    void UpdateCasinoAnimations(float dt) {
+        for (int z=0; z<49; ++z) if (bettingCells_[z]) {
+            float glow = casinoOutcomeActive_ && winningBetZones_[z] ?
+                (0.3f + 0.15f*sinf(casinoOutcomeClock_.Progress()*12.56637f))*(1-casinoOutcomeClock_.Progress()) : 0.0f;
+            bettingCells_[z]->SetColor(bettingBaseColors_[z].Lerp(Color(0.85f,0.68f,0.27f),glow));
+        }
+        for (auto& f : casinoFlights_) {
+            if (!f.active || !f.sprite) continue;
+            f.clock.Step(dt);
+            const float t = f.clock.Progress(), e = CasinoAnimation::Ease(t);
+            Vector2 p = f.from + (f.to-f.from)*e;
+            p.y_ -= sinf(t*3.14159265f)*S(65);
+            f.sprite->SetPosition((int)p.x_-S(14), (int)p.y_-S(14));
+            f.sprite->SetOpacity(Min(1.0f, (1-t)*5));
+            if (f.clock.Done()) { f.active=false; f.sprite->SetVisible(false); }
+        }
+        for (unsigned i=casinoCardMotions_.Size(); i-- > 0;) {
+            auto& m = casinoCardMotions_[i];
+            if (!m.node) { casinoCardMotions_.Erase(i); continue; }
+            m.clock.Step(dt);
+            float t = Clamp((float(m.clock.elapsed)-m.delay)/0.45f, 0.0f, 1.0f);
+            const float e = CasinoAnimation::Ease(t);
+            m.node->SetPosition((m.flip ? m.target : Vector3(3.65f, 1.12f, 0.6f).Lerp(m.target,e))+Vector3(0,sinf(t*3.14159265f)*0.12f,0));
+            if (m.flip) {
+                m.node->SetRotation(Quaternion(180.0f*(1-e),0,0));
+                if (Node* face = m.node->GetChild("TableLabel")) face->SetEnabled(t >= 0.5f);
+            }
+            if (m.clock.Done()) { m.node->SetPosition(m.target); m.node->SetRotation(Quaternion::IDENTITY); casinoCardMotions_.Erase(i); }
+        }
+        if (casinoOutcomeActive_ && casinoOutcomeText_) {
+            casinoOutcomeClock_.Step(dt);
+            const float t = casinoOutcomeClock_.Progress();
+            int display = (int)(casinoOutcomeNet_*CasinoAnimation::Ease(Min(1.0f,t*3)));
+            if (display != casinoOutcomeShown_) {
+                casinoOutcomeShown_ = display;
+                casinoOutcomeText_->SetText(String(casinoOutcomeJackpot_ ? "ДЖЕКПОТ" : casinoOutcome_ > 0 ? "ПОБЕДА" : casinoOutcome_ < 0 ? "ПРОИГРЫШ" : "ВОЗВРАТ") +
+                    "\n" + (display > 0 ? "+" : "") + String(display) + " ¤");
+            }
+            casinoOutcomeText_->SetPosition(0,S(112)-int(sinf(Min(1.0f,t*4)*3.14159265f)*S(12)));
+            casinoOutcomeText_->SetOpacity(Min(1.0f,(1-t)*5));
+            if (casinoOutcomeClock_.Done()) { casinoOutcomeActive_=false; casinoOutcomeText_->SetVisible(false); }
+        }
+    }
 
     void AddRouletteChip(const Casino::Bet& bet) {
         if (casinoSlotsMode_ || blackjackMode_ || casinoSpinTimer_ > 0.0f) return;
@@ -10302,7 +10404,15 @@ private:
             PlayEmptyClickSound();
             if (casinoResultText_) casinoResultText_->SetText("Недостаточно фишек или лимит стола");
         }
-        else PlayCasinoSound(casinoChipSound_, 0.65f);
+        else {
+            PlayCasinoSound(casinoChipSound_, 0.65f);
+            for (int z=0; z<49; ++z) {
+                auto target = Casino::BetForTableZone(z, 1);
+                if (target.type == bet.type && (bet.type < Casino::BET_NUMBER || target.number == bet.number) && bettingLayout_ && bettingLayout_->IsVisible()) {
+                    FlyCasinoChip(CasinoUIPosition(casinoChipButton_), CasinoUIPosition(bettingCells_[z]), true); break;
+                }
+            }
+        }
         UpdateCasinoVisuals();
     }
 
@@ -10337,6 +10447,7 @@ private:
             Color c(0.035f,0.22f,0.14f);
             if ((z > 0 && z <= 36) || z == 37 || z == 38)
                 c = (Casino::IsRed(z) && z <= 36) || z == 37 ? Color(0.48f,0.045f,0.055f) : Color(0.035f,0.04f,0.04f);
+            bettingBaseColors_[z] = c;
             bettingCells_[z] = cell(S(14)+x*cw, top+y*ch, w*cw, h*ch,
                 Casino::GetTableZones()[z].label, c, &bettingLabels_[z]);
             bettingLabels_[z]->SetAlignment(HA_LEFT, VA_CENTER);
@@ -10362,6 +10473,8 @@ private:
     }
 
     void ResetCasinoUIPointers() {
+        for (auto& f : casinoFlights_) { f.sprite = nullptr; f.active=false; }
+        casinoOutcomeText_ = nullptr; casinoOutcomeActive_ = false;
         bettingLayout_ = nullptr; bettingSummary_ = nullptr;
         bettingUndo_ = nullptr; bettingClear_ = nullptr; bettingAdd_ = nullptr;
         for (int i=0; i<49; ++i) {
@@ -10441,6 +10554,7 @@ private:
 
     void RefreshBlackjack() {
         if (!blackjackCards_) return;
+        casinoCardMotions_.Clear();
         blackjackCards_->RemoveAllChildren();
         static const char* suits[] = {"♠", "♥", "♦", "♣"};
         for (int side = 0; side < 2; ++side) {
@@ -10450,6 +10564,15 @@ private:
                 const auto& card = side ? blackjackDealer_[i] : blackjackPlayer_[i];
                 Node* n = blackjackCards_->CreateChild("Card");
                 n->SetPosition(Vector3(2.65f + i * 0.22f, 1.01f + i * 0.002f, side ? 0.35f : -0.35f));
+                const int oldCount = side ? shownDealerCards_ : shownPlayerCards_;
+                const bool reveal = side && i==1 && shownDealerHidden_ && !hidden;
+                if (i >= oldCount || reveal) {
+                    CardMotion motion; motion.node = n; motion.target = n->GetPosition();
+                    motion.delay = float(Max(0,i-oldCount))*0.10f; motion.flip = reveal;
+                    motion.clock.Reset(motion.delay+0.45f);
+                    casinoCardMotions_.Push(motion);
+                    n->SetPosition(Vector3(3.65f,1.12f,0.6f));
+                }
                 Node* body = n->CreateChild("Paper");
                 body->SetScale(Vector3(0.21f, 0.008f, 0.32f));
                 auto* sm = body->CreateComponent<StaticModel>();
@@ -10458,8 +10581,15 @@ private:
                 sm->SetCastShadows(true);
                 String rank = card.rank >= 2 && card.rank <= 10 ? String(card.rank) : String(Casino::CardLabel(card.rank));
                 TableLabel(n, hidden ? "?" : rank + suits[card.suit], Vector3(0, 0.008f, 0), 0.23f, hidden ? Color::WHITE : ((card.suit == 1 || card.suit == 2) ? Color(180, 25, 30) : Color(20, 22, 28)));
+                if (reveal) {
+                    n->SetPosition(Vector3(2.65f + i*0.22f, 1.01f+i*0.002f, 0.35f));
+                    n->SetRotation(Quaternion(180,0,0));
+                    if (Node* face = n->GetChild("TableLabel")) face->SetEnabled(false);
+                }
             }
         }
+        shownPlayerCards_ = blackjackP_; shownDealerCards_ = blackjackD_;
+        shownDealerHidden_ = blackjackActive_;
         UpdateCasinoVisuals();
     }
 
@@ -10474,6 +10604,9 @@ private:
         if (payout > blackjackBet_) ++casinoWins_;
         else if (payout < blackjackBet_) ++casinoLosses_;
         casinoLastPayout_ = payout;
+        casinoResultFlash_ = 2.6f;
+        CasinoOutcome(blackjackBet_, payout, Casino::IsBlackjack(blackjackPlayer_, blackjackP_));
+        PlayCasinoSound(payout > blackjackBet_ ? casinoJackpotSound_ : casinoChipSound_, 0.65f);
         SaveSettingsFile();
         RefreshBlackjack();
     }
@@ -10481,19 +10614,24 @@ private:
     void BlackjackAction(int action) {
         if (!blackjackActive_) {
             if (action != 0 || casinoBalance_ < casinoBet_.amount) return;
+            casinoOutcomeActive_ = false;
+            casinoResultFlash_ = 0.0f;
+            if (casinoOutcomeText_) casinoOutcomeText_->SetVisible(false);
+            for (auto& win : winningBetZones_) win = false;
             blackjackBet_ = casinoBet_.amount;
             casinoBalance_ -= blackjackBet_;
             ++casinoSessionSpins_;
             Casino::MakeDeck(blackjackDeck_);
             blackjackRng_ ^= static_cast<uint32_t>(timeAcc_ * 1000.0f);
             Casino::ShuffleDeck(blackjackDeck_, 52, blackjackRng_);
+            shownPlayerCards_ = shownDealerCards_ = 0; shownDealerHidden_ = false;
             blackjackNext_ = 0; blackjackP_ = blackjackD_ = 0;
             for (int i = 0; i < 2; ++i) {
                 blackjackPlayer_[blackjackP_++] = blackjackDeck_[blackjackNext_++];
                 blackjackDealer_[blackjackD_++] = blackjackDeck_[blackjackNext_++];
             }
             blackjackActive_ = true;
-            if (Casino::IsBlackjack(blackjackPlayer_, blackjackP_) || Casino::IsBlackjack(blackjackDealer_, blackjackD_)) SettleBlackjack();
+            if (Casino::IsBlackjack(blackjackPlayer_, blackjackP_) || Casino::IsBlackjack(blackjackDealer_, blackjackD_)) { SettleBlackjack(); return; }
         } else {
             if (action == 2) { SettleBlackjack(); return; }
             if (action == 3) {
@@ -10501,7 +10639,7 @@ private:
                 casinoBalance_ -= blackjackBet_; blackjackBet_ *= 2;
             }
             if (blackjackP_ < 12) blackjackPlayer_[blackjackP_++] = blackjackDeck_[blackjackNext_++];
-            if (action == 3 || blackjackP_ == 12 || Casino::HandValue(blackjackPlayer_, blackjackP_) >= 21) SettleBlackjack();
+            if (action == 3 || blackjackP_ == 12 || Casino::HandValue(blackjackPlayer_, blackjackP_) >= 21) { SettleBlackjack(); return; }
         }
         PlayCasinoSound(casinoChipSound_, 0.8f);
         RefreshBlackjack();
@@ -11084,7 +11222,7 @@ private:
             casinoChipStacks_[cs]->SetScale(Vector3(1.0f, hScale, 1.0f));
         }
         if (casinoDollyNode_) {
-            float dy = (casinoResultFlash_ > 0.0f && casinoLastPayout_ > 0) ? (1.08f + fabsf(sinf(timeAcc_ * 7.0f)) * 0.16f) : 1.03f;
+            float dy = (casinoResultFlash_ > 0.0f && casinoOutcome_ > 0) ? (1.08f + fabsf(sinf(timeAcc_ * 7.0f)) * 0.16f) : 1.03f;
             float dx = (casinoBet_.type == Casino::BET_BLACK) ? 1.13f : ((casinoBet_.type == Casino::BET_RED) ? 0.79f : 1.13f);
             casinoDollyNode_->SetPosition(Vector3(dx, dy, (casinoBet_.type == Casino::BET_NUMBER && casinoBet_.number == 0) ? 0.70f : -0.10f));
             casinoDollyNode_->SetRotation(Quaternion(0.0f, timeAcc_ * 65.0f, 0.0f));
@@ -11123,7 +11261,7 @@ private:
         }
         for (unsigned lb = 0; lb < (unsigned)casinoSlotBeaconMats_.Size(); ++lb) {
             if (!casinoSlotBeaconMats_[lb]) continue;
-            bool lit = (casinoResultFlash_ > 0.0f && casinoLastPayout_ > 0)
+            bool lit = (casinoResultFlash_ > 0.0f && casinoOutcome_ > 0)
                 ? (((int)(timeAcc_ * 12.0f) + (int)lb) % 2 == 0)
                 : (((int)(timeAcc_ * 4.5f) + (int)lb) % 5 == 0);
             casinoSlotBeaconMats_[lb]->SetShaderParameter("MatDiffColor", Variant(lit ? Color(3.2f, 2.35f, 0.55f, 1.0f) : Color(0.55f, 0.32f, 0.12f, 1.0f)));
@@ -11132,16 +11270,16 @@ private:
         // 6. Кочет-Крупье «Дон Чикено»
         if (casinoRoosterNode_) {
             float bob = sinf(timeAcc_ * 2.2f) * 0.025f;
-            float sway = (casinoResultFlash_ > 0.0f && casinoLastPayout_ > 0) ? sinf(timeAcc_ * 10.0f) * 10.0f : sinf(timeAcc_ * 1.2f) * 3.5f;
+            float sway = (casinoResultFlash_ > 0.0f && casinoOutcome_ > 0) ? sinf(timeAcc_ * 10.0f) * 10.0f : sinf(timeAcc_ * 1.2f) * 3.5f;
             casinoRoosterNode_->SetPosition(Vector3(0.18f, 1.32f + bob, 1.36f));
             casinoRoosterNode_->SetRotation(Quaternion(0.0f, 180.0f + sway, 0.0f));
             if (casinoRoosterHead_) {
                 float headLook = (casinoSpinTimer_ > 0.0f) ? (sinf(timeAcc_ * 5.0f) * 16.0f) : (casinoCamModeBlend_ * -32.0f + sinf(timeAcc_ * 1.1f) * 7.0f);
-                float headPitch = (casinoResultFlash_ > 0.0f && casinoLastPayout_ <= 0) ? 14.0f : -4.0f;
+                float headPitch = (casinoResultFlash_ > 0.0f && casinoOutcome_ < 0) ? 14.0f : -4.0f;
                 casinoRoosterHead_->SetRotation(Quaternion(headPitch, headLook, 0.0f));
             }
             if (casinoRoosterWingL_ && casinoRoosterWingR_) {
-                float wing = (casinoResultFlash_ > 0.0f && casinoLastPayout_ > 0) ? (22.0f + sinf(timeAcc_ * 14.0f) * 18.0f)
+                float wing = (casinoResultFlash_ > 0.0f && casinoOutcome_ > 0) ? (22.0f + sinf(timeAcc_ * 14.0f) * 18.0f)
                            : (casinoSpinTimer_ > 0.0f ? sinf(timeAcc_ * 6.0f) * 8.0f : 2.0f);
                 casinoRoosterWingL_->SetRotation(Quaternion(0.0f, 0.0f, -wing));
                 casinoRoosterWingR_->SetRotation(Quaternion(0.0f, 0.0f,  wing));
@@ -11431,6 +11569,16 @@ private:
 
         casinoDisclaimerBtn_ = SharedPtr<BorderImage>(makeGlassBtn(dCard, S(80), dh - S(76), dw - S(160), S(52), "Понятно", Color(0.76f, 0.48f, 0.06f, 0.98f), 16));
 
+        auto* atlas = GetSubsystem<ResourceCache>()->GetResource<Texture2D>("Textures/UI/CasinoChips.png");
+        for (auto& f : casinoFlights_) {
+            f.sprite = casinoPanel_->CreateChild<BorderImage>();
+            f.sprite->SetTexture(atlas); f.sprite->SetSize(S(28),S(28));
+            f.sprite->SetVisible(false); f.sprite->SetEnabled(false);
+        }
+        casinoOutcomeText_ = casinoPanel_->CreateChild<Text>();
+        casinoOutcomeText_->SetFont(font_,SF(25)); casinoOutcomeText_->SetWidth(sw);
+        casinoOutcomeText_->SetTextAlignment(HA_CENTER); casinoOutcomeText_->SetEnabled(false);
+        casinoOutcomeText_->SetVisible(false);
         casinoPanel_->SetVisible(false);
         UpdateCasinoVisuals();
     }
@@ -11464,6 +11612,8 @@ private:
             FinishCasinoSpin();
         }
         rouletteRound_.Clear();
+        for (auto& f : casinoFlights_) { f.active=false; if (f.sprite) f.sprite->SetVisible(false); }
+        casinoOutcomeActive_=false; if (casinoOutcomeText_) casinoOutcomeText_->SetVisible(false);
         casinoOpen_ = false;
         casinoDisclaimerVisible_ = false;
         if (casinoPanel_) casinoPanel_->SetVisible(false);
@@ -11505,6 +11655,9 @@ private:
         if (casinoSlotsMode_) casinoBalance_ -= stake;
         else if (!rouletteRound_.Begin(casinoBalance_)) return;
         ++casinoSessionSpins_;
+        casinoOutcomeActive_ = false;
+        if (casinoOutcomeText_) casinoOutcomeText_->SetVisible(false);
+        for (auto& win : winningBetZones_) win = false;
         casinoResultFlash_ = 0.0f;
 
         if (casinoSlotsMode_) {
@@ -11537,6 +11690,7 @@ private:
                 casinoSlotStopped_[r] = true;
             }
             int payout = Casino::SlotsPayout(casinoBet_.amount, slotReels_[0], slotReels_[1], slotReels_[2]);
+            CasinoOutcome(casinoBet_.amount, payout, payout >= casinoBet_.amount*20);
             casinoLastPayout_ = payout;
             casinoResultFlash_ = 2.6f;
             if (payout > 0) {
@@ -11569,7 +11723,10 @@ private:
             casinoHistory_.Push(casinoLastResult_);
         }
         const int roundStake = rouletteRound_.Total();
+        for (int z=0; z<49; ++z) winningBetZones_[z] = rouletteRound_.OnZone(z) > 0 &&
+            Casino::Wins(Casino::BetForTableZone(z,1), casinoLastResult_);
         int payout = rouletteRound_.Settle(casinoLastResult_);
+        CasinoOutcome(roundStake, payout, payout >= roundStake*6);
         casinoLastPayout_ = payout;
         casinoResultFlash_ = 2.6f;
         if (payout > 0) {
@@ -11582,8 +11739,10 @@ private:
                 casinoResultText_->SetText("Возврат  " + String(payout) + " ¤");
                 casinoResultText_->SetColor(Color(0.35f, 1.0f, 0.62f, 1.0f));
             }
-            PlayCasinoSound(casinoJackpotSound_, big ? 1.0f : 0.85f);
-            SpawnCasinoJackpotBurst(Vector3(-0.32f, 1.15f, -0.05f), big ? 56 : 28, big);
+            if (payout > roundStake) {
+                PlayCasinoSound(casinoJackpotSound_, big ? 1.0f : 0.85f);
+                SpawnCasinoJackpotBurst(Vector3(-0.32f, 1.15f, -0.05f), big ? 56 : 28, big);
+            } else PlayUISound();
         } else {
             ++casinoLosses_;
             if (casinoResultText_) {
@@ -11601,9 +11760,9 @@ private:
     void UpdateCasino(float dt) {
         if (!casinoOpen_) return;
         UpdateCasino3DScene(dt);
+        UpdateCasinoAnimations(dt);
         if (casinoSpinTimer_ > 0.0f) {
             casinoSpinTimer_ = Max(0.0f, casinoSpinTimer_ - dt);
-            UpdateCasinoVisuals();
             if (casinoSpinTimer_ <= 0.0f) FinishCasinoSpin();
         }
     }

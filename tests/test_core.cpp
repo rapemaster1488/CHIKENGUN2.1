@@ -23,6 +23,7 @@
 #include "../src/CyberSystems.h"
 #include "../src/BanyaSim.h"
 #include "../src/CasinoSim.h"
+#include "../src/CasinoAnimation.h"
 #include "../src/ArcadeGames.h"
 #include "../src/SplashIntro.h"
 #include "../src/SettingsParsing.h"
@@ -304,6 +305,23 @@ int main(int argc, char** argv) {
 
     std::cout << "[test_core] 8/11 Проверка нативного казино (src/CasinoSim.h: Рулетка + Слоты 777)..." << std::endl;
     {
+        // Timelines advance in seconds, not frames; old FPS settings retain meaning.
+        assert(CasinoAnimation::FpsLimit(0) == 60);
+        assert(CasinoAnimation::FpsLimit(1) == 120);
+        assert(CasinoAnimation::FpsLimit(2) == 0);
+        assert(CasinoAnimation::FpsLimit(3) == 240);
+        for (int fps : {30,60,120,240}) {
+            CasinoAnimation::Timeline clock; clock.Reset(2.0);
+            for (int i=0; i<fps; ++i) clock.Step(1.0/fps);
+            assert(std::fabs(clock.Progress()-0.5f) < 0.00001f);
+            assert(std::fabs(CasinoAnimation::Ease(clock.Progress())-0.5f) < 0.00001f);
+            clock.Step(5.0); assert(clock.Done() && clock.Progress() == 1.0f);
+            clock.Step(-1.0); assert(clock.Progress() == 1.0f);
+        }
+        assert(CasinoAnimation::Outcome(100, 50) == -1); // partial return is a loss
+        assert(CasinoAnimation::Outcome(100, 100) == 0);
+        assert(CasinoAnimation::Outcome(100, 200) == 1);
+
         Casino::Bet red{Casino::BET_RED, 25, 7};
         assert(Casino::Wins(red, 19));
         assert(!Casino::Wins(red, 20));
