@@ -26,9 +26,13 @@ void PS()
 #if !defined(GL_ES) || __VERSION__ >= 300
     #ifdef AOCALC
     float dCenter = ReconstructDepth(texture2D(sDepthBuffer, vTexCoord).r);
+    // ФИКС: раньше при глубине >96% писался AO = 1.0, но .g = 1.0 (глубина).
+    // Соседний пиксель с нормальной глубиной считал такую «глубину» разницей в
+    // десятки метров и ставил затемнение в строку — получались горизонтальные
+    // тёмные полосы на границе с небом. Оставляем фар — полуразрешение справится.
     if (dCenter > 0.96)
     {
-        gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+        gl_FragColor = vec4(1.0, dCenter, 0.0, 1.0);
         return;
     }
 
@@ -44,7 +48,11 @@ void PS()
     slopeX /= max(px.x, 1e-6);
     slopeY /= max(px.y, 1e-6);
 
-    float zMeters = max(dCenter * cFarClipPS, 0.8);
+    // ФИКС: ReconstructDepth() возвращает линейную глубину В МЕТРАХ (cDepthReconstruct),
+    // поэтому умножать её на cFarClipPS (1000) было ошибкой: zMeters уходил в сотни
+    // тысяч, радиус падал к минимуму, а deltaM раздувался — AO превращался в
+    // стабильный затемняющий градиент («чёрная полоса» у горизонта).
+    float zMeters = max(dCenter, 0.25);
     float baseRadiusPx = clamp((cSSAORadius * 420.0) / zMeters, 2.5, 28.0);
 
     // Interleaved Gradient Noise rotation
@@ -62,7 +70,7 @@ void PS()
 
         float dSample = ReconstructDepth(texture2D(sDepthBuffer, suv).r);
         float dExpected = dCenter + slopeX * (suv.x - vTexCoord.x) + slopeY * (suv.y - vTexCoord.y);
-        float deltaM = (dExpected - dSample) * cFarClipPS;
+        float deltaM = dExpected - dSample;   // уже в метрах (см. выше)
 
         float rangeCheck = smoothstep(0.0, 1.0, 1.35 / (0.18 + abs(deltaM)));
         float hit = smoothstep(0.04, 0.24, deltaM);
@@ -78,6 +86,13 @@ void PS()
     #ifdef AOAPPLY
     vec4 sceneCol = texture2D(sDiffMap, vScreenPos);
     float dCenter = ReconstructDepth(texture2D(sDepthBuffer, vTexCoord).r);
+    // ФИКС: отсекаем по КАДРУ, а не по глубине — иначе вне экрана (vTexCoord за
+    // пределами [0,1]) сэмпл depth давал мусор и на краях рисовалась рамка.
+    if (vTexCoord.x < 0.0 || vTexCoord.x > 1.0 || vTexCoord.y < 0.0 || vTexCoord.y > 1.0)
+    {
+        gl_FragColor = sceneCol;
+        return;
+    }
     if (dCenter > 0.985)
     {
         gl_FragColor = sceneCol;
@@ -105,6 +120,12 @@ void PS()
     }
 
     float ao = aoSum / max(wSum, 1e-4);
+    if (ao > 0.985)
+    {
+        // Совсем нет затенения — не гоняем дорогой branch ниже и не трогаем цвет.
+        gl_FragColor = sceneCol;
+        return;
+    }
     // Preserve bright HDR emissives/highlights so neon & lasers keep full punch
     float lum = dot(sceneCol.rgb, vec3(0.2126, 0.7152, 0.0722));
     float strength = cSSAOStrength * (1.0 - smoothstep(0.95, 2.2, lum) * 0.75);
