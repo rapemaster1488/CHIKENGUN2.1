@@ -335,7 +335,13 @@ void parallelRows(int h, Fn&& fn) {
 // Изотропный 3x3 фильтр Шарра для гладких и чётких карт нормалей без ступенек
 void heightToNormal(const std::vector<float>& hf, int S, float strength, std::vector<uint8_t>& normRgb) {
     normRgb.resize(static_cast<size_t>(S) * S * 3);
-    float scale = (strength * (float(S) / 1024.0f)) / 16.0f;
+    // FIX: делитель был 16, и это убивало ВСЮ рельефность. Ядро Sobel 3-10-3 даёт
+    // сумму весов 16, поэтому «разделить на 16» возвращало градиент к исходному
+    // масштабу dH≈0.002/пиксель — нормаль отклонялась на 0.1–1.2°, то есть все
+    // поверхности рендерились идеально плоскими (модельки выглядели пластиком).
+    // Нормальный диапазон — 20–45°. Делитель 1.15 при strength≈2.5 даёт ≈1.0 годного
+    // масштаба и не пережигает мелкую зернистость в шум.
+    float scale = (strength * (float(S) / 1024.0f)) / 1.15f;
     parallelRows(S, [&](int y) {
         int yu = (y - 1 + S) % S;
         int yd = (y + 1) % S;
@@ -487,7 +493,7 @@ PbrSet genStone4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.34f, out.diff);
-    heightToNormal(hf, S, 2.6f, out.norm);
+    heightToNormal(hf, S, 3.00f, out.norm);
     return out;
 }
 
@@ -574,7 +580,8 @@ PbrSet genFloor4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.36f, out.diff);
-    heightToNormal(hf, S, 2.3f, out.norm);
+    // Пол арены: швы плитки должны читаться под ногами, иначе пол — заливка, было 3.00f → 6.00f
+    heightToNormal(hf, S, 6.00f, out.norm);
     return out;
 }
 
@@ -683,7 +690,8 @@ PbrSet genMetalPanel4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.38f, out.diff);
-    heightToNormal(hf, S, 2.4f, out.norm);
+    // Панели: фаски и болты держат масштаб, иначе стены выглядят крашеными, было 3.00f → 6.50f
+    heightToNormal(hf, S, 6.50f, out.norm);
     return out;
 }
 
@@ -717,7 +725,8 @@ PbrSet genBrushedMetal4K(int S) {
             out.roughMetal[idx + 2] = toByte(1.0f);
         }
     });
-    heightToNormal(hf, S, 1.05f, out.norm);
+    // Оружие в руках: 34° достаточно, выше начинает рябить вблизи, было 3.20f → 3.20f
+    heightToNormal(hf, S, 3.20f, out.norm);
     return out;
 }
 
@@ -833,7 +842,8 @@ PbrSet genCrateWood4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.35f, out.diff);
-    heightToNormal(hf, S, 2.2f, out.norm);
+    // Ящики: щели между досками — главный ориентир объёма, было 3.10f → 5.00f
+    heightToNormal(hf, S, 5.00f, out.norm);
     return out;
 }
 
@@ -915,7 +925,7 @@ PbrSet genFeather4K(int S) {
             out.roughMetal[idx + 2] = toByte(underAO);
         }
     });
-    heightToNormal(hf, S, 1.85f, out.norm);
+    heightToNormal(hf, S, 3.10f, out.norm);
     return out;
 }
 
@@ -994,7 +1004,8 @@ PbrSet genHazardMetal4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.30f, out.diff);
-    heightToNormal(hf, S, 2.5f, out.norm);
+    // Hazard-металл: диагональная штриховка должна читаться издалека, было 3.10f → 7.00f
+    heightToNormal(hf, S, 7.00f, out.norm);
     return out;
 }
 
@@ -1089,7 +1100,7 @@ PbrSet genBanyaLog4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.30f, out.diff);
-    heightToNormal(hf, S, 2.5f, out.norm);
+    heightToNormal(hf, S, 3.00f, out.norm);
     return out;
 }
 
@@ -1197,7 +1208,7 @@ PbrSet genBanyaRooster4K(int S) {
             out.roughMetal[idx + 2] = toByte(ao);
         }
     });
-    heightToNormal(hf, S, 2.0f, out.norm);
+    heightToNormal(hf, S, 3.00f, out.norm);
     return out;
 }
 
@@ -1269,7 +1280,7 @@ PbrSet genBanyaPlank4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.32f, out.diff);
-    heightToNormal(hf, S, 2.4f, out.norm);
+    heightToNormal(hf, S, 2.90f, out.norm);
     return out;
 }
 
@@ -1346,7 +1357,7 @@ PbrSet genBanyaStone4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.28f, out.diff);
-    heightToNormal(hf, S, 2.7f, out.norm);
+    heightToNormal(hf, S, 2.70f, out.norm);
     return out;
 }
 
@@ -1395,7 +1406,7 @@ PbrSet genBanyaCopper4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.10f, out.diff);
-    heightToNormal(hf, S, 1.45f, out.norm);
+    heightToNormal(hf, S, 2.90f, out.norm);
     return out;
 }
 
@@ -1498,7 +1509,7 @@ PbrSet genBanyaBirch4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.30f, out.diff);
-    heightToNormal(hf, S, 2.3f, out.norm);
+    heightToNormal(hf, S, 2.80f, out.norm);
     return out;
 }
 
@@ -1548,7 +1559,7 @@ PbrSet genCasinoFelt4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.22f, out.diff);
-    heightToNormal(hf, S, 1.8f, out.norm);
+    heightToNormal(hf, S, 2.40f, out.norm);
     return out;
 }
 
@@ -1592,7 +1603,8 @@ PbrSet genCasinoGold4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.18f, out.diff);
-    heightToNormal(hf, S, 1.9f, out.norm);
+    // Золото рамок и автомата: чеканка, а не «золотая фольга», было 2.30f → 4.50f
+    heightToNormal(hf, S, 4.50f, out.norm);
     return out;
 }
 
@@ -1653,7 +1665,8 @@ PbrSet genCasinoMarble4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.20f, out.diff);
-    heightToNormal(hf, S, 1.6f, out.norm);
+    // Мрамор стола казино: прожилки + полировка, был почти плоским (1.3°), было 2.20f → 7.50f
+    heightToNormal(hf, S, 7.50f, out.norm);
     return out;
 }
 
@@ -1697,7 +1710,8 @@ PbrSet genCasinoMahogany4K(int S) {
         }
     });
     applyCavityAO(hf, S, 0.24f, out.diff);
-    heightToNormal(hf, S, 2.0f, out.norm);
+    // Махагон: волокно древесины, глубокая но спокойная фактура, было 2.60f → 3.60f
+    heightToNormal(hf, S, 3.60f, out.norm);
     return out;
 }
 

@@ -110,6 +110,7 @@
 #include "BanyaSim.h"
 #include "CasinoSim.h"
 #include "CasinoAnimation.h"
+#include "CasinoAnim2.h"
 #include "ArcadeGames.h"
 #include "SplashIntro.h"
 #include "SDLStartup.h"
@@ -10432,6 +10433,25 @@ private:
     unsigned casinoFlightCursor_ = 0;
     SharedPtr<Text> casinoOutcomeText_;
     CasinoAnimation::Timeline casinoOutcomeClock_;
+
+    // ── Фазовая анимация слота (см. src/CasinoAnim2.h) ──────────────────────
+    // Игрок должен понимать, что происходит, без чтения мелкого текста:
+    // anticipation → spinning → стопы по одному → near-miss → выигрыш → счётчик.
+    int   casinoSlotPhase_ = CasinoAnim2::PH_IDLE;
+    float casinoSlotPhaseT_ = 0.0f;      // время внутри фазы
+    float casinoSlotTotalT_ = 0.0f;      // время с начала спина
+    int   casinoShownSymbols_[3] = { -1, -1, -1 };  // что реально видно в окне
+    bool  casinoNearMiss_ = false;
+    int   casinoMatchMask_ = 0;          // 1=два совпали, 3=тройка
+    float casinoLineFlash_ = 0.0f;       // 0..1 вспышка выигрышной линии
+    float casinoCountT_ = 0.0f;          // прогресс счётчика выигрыша
+    int   casinoCountShown_ = -2147483647;
+    SharedPtr<Text> casinoSlotPayTable_;          // постоянная таблица выплат 777
+    bool  casinoMatchReel_[3] = { false, false, false };  // какие барабаны совпали
+    SharedPtr<Node> casinoWinLineNode_;           // золотая линия через окно
+    SharedPtr<Material> casinoWinLineMat_;
+    SharedPtr<Node> casinoDrumWinGlow_[3];        // нимб над совпавшим барабаном
+    SharedPtr<Material> casinoDrumWinGlowMat_[3];
     int casinoOutcome_ = 0, casinoOutcomeNet_ = 0, casinoOutcomeShown_ = -2147483647;
     bool casinoOutcomeActive_ = false, casinoOutcomeJackpot_ = false;
     struct CardMotion {
@@ -10460,12 +10480,28 @@ private:
         f.sprite->SetPosition((int)from.x_-S(14), (int)from.y_-S(14));
     }
 
+    // Кто с кем совпал. Нужно, чтобы подсветить РОВНО выигравшие барабаны,
+    // а не все три подряд: игрок должен видеть источник выигрыша.
+    void ComputeSlotMatch(int a, int b, int c) {
+        const bool ab = (a == b), ac = (a == c), bc = (b == c);
+        casinoMatchReel_[0] = (ab && ac) || ab || ac;
+        casinoMatchReel_[1] = (ab && ac) || ab || bc;
+        casinoMatchReel_[2] = (ab && ac) || ac || bc;
+        if (!(ab || ac || bc)) { casinoMatchReel_[0] = casinoMatchReel_[1] = casinoMatchReel_[2] = false; }
+    }
+
     void CasinoOutcome(int stake, int payout, bool jackpot = false) {
         casinoOutcome_ = CasinoAnimation::Outcome(stake, payout);
         casinoOutcomeNet_ = payout-stake; casinoOutcomeShown_ = -2147483647;
         casinoOutcomeJackpot_ = jackpot && casinoOutcome_ > 0;
         casinoOutcomeClock_.Reset(casinoOutcomeJackpot_ ? 2.8 : 1.8);
         casinoOutcomeActive_ = true;
+        // Любой исход (слот/рулетка/блекджек) идёт через фазу REVEAL → COUNTUP:
+        // сначала «что выпало», потом тикающая сумма. Читается одинаково везде.
+        casinoSlotPhase_ = CasinoAnim2::PH_REVEAL;
+        casinoSlotPhaseT_ = 0.0f;
+        casinoCountT_ = 0.0f;
+        casinoCountShown_ = -2147483647;
         if (casinoOutcomeText_) {
             casinoOutcomeText_->SetVisible(true);
             casinoOutcomeText_->SetColor(casinoOutcome_ > 0 ? Color(0.6f,0.95f,0.7f) :
@@ -10508,7 +10544,42 @@ private:
             }
             if (m.clock.Done()) { m.node->SetPosition(m.target); m.node->SetRotation(Quaternion::IDENTITY); casinoCardMotions_.Erase(i); }
         }
-        if (casinoOutcomeActive_ && casinoOutcomeText_) {
+        // Счётчик выигрыша: цифры «догоняют» результат по ease-out кривой.
+        // Раньше сумма появлялась одним скачком и её никто не успевал прочитать.
+        if (casinoSlotPhase_ == CasinoAnim2::PH_REVEAL || casinoSlotPhase_ == CasinoAnim2::PH_COUNTUP) {
+            const float dur = casinoOutcomeJackpot_ ? CasinoAnim2::Timing::kCountUpJackpot
+                                                    : CasinoAnim2::Timing::kCountUpWin;
+            casinoCountT_ = Min(1.0f, casinoCountT_ + dt / Max(0.05f, dur));
+            if (casinoSlotPhase_ == CasinoAnim2::PH_REVEAL &&
+                casinoSlotPhaseT_ >= CasinoAnim2::Timing::kReveal) {
+                casinoSlotPhase_ = CasinoAnim2::PH_COUNTUP;
+                casinoSlotPhaseT_ = 0.0f;
+            }
+            const int shown = CasinoAnim2::CountUpValue(casinoOutcomeNet_, casinoCountT_);
+            if (shown != casinoCountShown_) {
+                casinoCountShown_ = shown;
+                if (casinoOutcomeText_) {
+                    String head = casinoOutcomeJackpot_ ? "ДЖЕКПОТ!" :
+                                  casinoOutcome_ > 0 ? "ВЫИГРЫШ" :
+                                  casinoOutcome_ < 0 ? "ПРОИГРЫШ" : "ВОЗВРАТ";
+                    casinoOutcomeText_->SetText(head + "\n" + (shown > 0 ? "+" : "") + String(shown) + " ¤");
+                }
+                PlayCasinoSound(casinoChipSound_, 0.35f);   // тикающий щелчок счётчика
+            }
+            // Держим итог на экране kRevealHold после конца отсчёта, затем убираем.
+            if (casinoCountT_ >= 1.0f && casinoSlotPhase_ == CasinoAnim2::PH_COUNTUP &&
+                casinoSlotPhaseT_ >= dur + CasinoAnim2::Timing::kRevealHold) {
+                casinoSlotPhase_ = CasinoAnim2::PH_IDLE;
+                casinoSlotPhaseT_ = 0.0f;
+                casinoOutcomeActive_ = false;
+                casinoOutcomeClock_.Reset(0.0f);
+                if (casinoOutcomeText_) casinoOutcomeText_->SetVisible(false);
+            }
+        }
+
+        const bool countUpOwns = (casinoSlotPhase_ == CasinoAnim2::PH_REVEAL ||
+                                  casinoSlotPhase_ == CasinoAnim2::PH_COUNTUP);
+        if (casinoOutcomeActive_ && casinoOutcomeText_ && !countUpOwns) {
             casinoOutcomeClock_.Step(dt);
             const float t = casinoOutcomeClock_.Progress();
             int display = (int)(casinoOutcomeNet_*CasinoAnimation::Ease(Min(1.0f,t*3)));
@@ -10600,6 +10671,7 @@ private:
     void ResetCasinoUIPointers() {
         for (auto& f : casinoFlights_) { f.sprite = nullptr; f.active=false; }
         casinoOutcomeText_ = nullptr; casinoOutcomeActive_ = false;
+        casinoSlotPayTable_ = nullptr;
         bettingLayout_ = nullptr; bettingSummary_ = nullptr;
         bettingUndo_ = nullptr; bettingClear_ = nullptr; bettingAdd_ = nullptr;
         for (int i=0; i<49; ++i) {
@@ -11154,6 +11226,21 @@ private:
             addObj(casinoSlotMachineNode_.Get(), "SlotBeacon", Vector3(side, ly, -0.52f), Vector3(0.08f, 0.08f, 0.08f), sphereModel_, bm.Get(), Quaternion::IDENTITY, false);
         }
 
+        // Выигрышная линия и нимбы: единственный «настоящий» ответ на вопрос
+        // «что выиграло». Раньше в 3D вообще не было ни линии, ни подсветки.
+        casinoWinLineMat_ = MakeHDRGlow(Color(0.0f, 0.0f, 0.0f, 1.0f));
+        casinoWinLineNode_ = SharedPtr<Node>(addObj(casinoSlotMachineNode_.Get(), "SlotWinLine",
+            Vector3(0.0f, 1.56f, -0.46f), Vector3(1.40f, 0.028f, 0.02f), boxModel_,
+            casinoWinLineMat_.Get(), Quaternion::IDENTITY, false));
+        casinoWinLineNode_->SetEnabled(false);
+        for (int k = 0; k < 3; ++k) {
+            casinoDrumWinGlowMat_[k] = MakeHDRGlow(Color(0.0f, 0.0f, 0.0f, 1.0f));
+            casinoDrumWinGlow_[k] = SharedPtr<Node>(addObj(casinoSlotMachineNode_.Get(), "SlotDrumWinGlow",
+                Vector3(-0.40f + (float)k * 0.40f, 1.90f, -0.30f), Vector3(0.26f, 0.05f, 0.26f), cylModel_,
+                casinoDrumWinGlowMat_[k].Get(), Quaternion::IDENTITY, false));
+            casinoDrumWinGlow_[k]->SetEnabled(false);
+        }
+
         // Россыпь золотых монет в лотке автомата
         for (int tc = 0; tc < 9; ++tc) {
             float cx = -0.44f + (float)tc * 0.11f;
@@ -11353,30 +11440,126 @@ private:
             casinoDollyNode_->SetRotation(Quaternion(0.0f, timeAcc_ * 65.0f, 0.0f));
         }
 
-        // 5. Анимация 3D Автомата «777»: 3 барабана + рычаг + лампочки!
-        if (casinoSlotsMode_ && casinoSpinTimer_ > 0.0f) {
-            float elapsed = casinoSpinDur_ - casinoSpinTimer_;
-            const float stopAt[3] = { 0.68f, 1.15f, 1.60f };
-            for (int k = 0; k < 3; ++k) {
-                if (elapsed < stopAt[k]) {
-                    float u = Clamp(elapsed / stopAt[k], 0.0f, 1.0f);
-                    float speed = Lerp(1180.0f, 240.0f, u * u);
-                    casinoSlotAngle_[k] = fmodf(casinoSlotAngle_[k] + speed * dt, 360.0f);
-                } else {
-                    if (!casinoSlotStopped_[k]) {
-                        casinoSlotStopped_[k] = true;
-                        casinoSlotAngle_[k] = casinoSlotTargetAngle_[k];
-                        PlayCasinoSound(casinoSlotStopSound_, 0.90f);
+        // 5. Анимация 3D Автомата «777»: фазовая машина (CasinoAnim2).
+        //    Каждая фаза имеет свой акцент в свете и лампах, поэтому игрок
+        //    понимает «сейчас крутится / сейчас остановился / почти / выиграл»
+        //    без чтения мелкого текста.
+        {
+            const bool spinningPhase = casinoSlotsMode_ &&
+                (casinoSlotPhase_ == CasinoAnim2::PH_ANTICIPATION ||
+                 casinoSlotPhase_ == CasinoAnim2::PH_SPINNING ||
+                 casinoSlotPhase_ == CasinoAnim2::PH_REELS_STOPPING);
+
+            if (spinningPhase) {
+                casinoSlotTotalT_ += dt;
+                casinoSlotPhaseT_ += dt;
+                for (int k = 0; k < 3; ++k) {
+                    const float stopAt = CasinoAnim2::ReelStopTime(k);
+                    if (casinoSlotTotalT_ < stopAt) {
+                        // Скорость из общей модели: разгон → крейсер → торможение.
+                        const float revPerSec = CasinoAnim2::ReelSpeed(casinoSlotTotalT_, stopAt);
+                        casinoSlotAngle_[k] = fmodf(casinoSlotAngle_[k] + revPerSec * 360.0f * dt, 360.0f);
+                        if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k], 0.0f, 0.0f));
+                    } else {
+                        if (!casinoSlotStopped_[k]) {
+                            casinoSlotStopped_[k] = true;
+                            casinoSlotAngle_[k] = casinoSlotTargetAngle_[k];
+                            casinoShownSymbols_[k] = slotPendingReels_[k];   // символ виден!
+                            PlayCasinoSound(casinoSlotStopSound_, 0.90f);
+                            // Импульс пыли из окна барабана в момент стопа.
+                            SpawnCasino3DParticle(Vector3(-0.40f + (float)k * 0.40f, 1.56f, -0.24f),
+                                                  Vector3(0.0f, 0.55f, 0.35f), 0.45f, 0.5f, 1);
+                        }
+                        // Затухающий отскок — барабан «прилипает», а не встаёт рывком.
+                        const float bounce = CasinoAnim2::StopBounce(casinoSlotTotalT_ - stopAt);
+                        if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k] + bounce, 0.0f, 0.0f));
                     }
-                    float bounce = expf(-(elapsed - stopAt[k]) * 14.0f) * sinf((elapsed - stopAt[k]) * 38.0f) * 8.0f;
-                    if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k] + bounce, 0.0f, 0.0f));
-                    continue;
                 }
-                if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k], 0.0f, 0.0f));
+                // Фазы: anticipation (все дрожат) → spinning → остановки по одной.
+                if (casinoSlotTotalT_ >= CasinoAnim2::ReelStopTime(0)) {
+                    const int newPhase = (casinoSlotTotalT_ >= CasinoAnim2::ReelStopTime(2))
+                        ? (casinoNearMiss_ ? CasinoAnim2::PH_NEAR_MISS : CasinoAnim2::PH_REVEAL)
+                        : CasinoAnim2::PH_REELS_STOPPING;
+                    if (newPhase != casinoSlotPhase_) { casinoSlotPhase_ = newPhase; casinoSlotPhaseT_ = 0.0f; }
+                } else if (casinoSlotTotalT_ >= CasinoAnim2::Timing::kAnticipation) {
+                    if (casinoSlotPhase_ != CasinoAnim2::PH_SPINNING) {
+                        casinoSlotPhase_ = CasinoAnim2::PH_SPINNING; casinoSlotPhaseT_ = 0.0f;
+                    }
+                }
+                // В фазе anticipation барабаны только вздрагивают на месте.
+                if (casinoSlotPhase_ == CasinoAnim2::PH_ANTICIPATION) {
+                    const float shake = sinf(casinoSlotPhaseT_ * 46.0f) * 1.4f;
+                    for (int k = 0; k < 3; ++k)
+                        if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k] + shake, 0.0f, 0.0f));
+                }
+            } else {
+                if (casinoSlotPhase_ == CasinoAnim2::PH_REELS_STOPPING) {
+                    // Последний барабан встал — держим паузу near-miss, если есть.
+                    casinoSlotPhase_ = casinoNearMiss_ ? CasinoAnim2::PH_NEAR_MISS : CasinoAnim2::PH_REVEAL;
+                    casinoSlotPhaseT_ = 0.0f;
+                }
+                casinoSlotPhaseT_ += dt;
+                if (casinoSlotPhase_ == CasinoAnim2::PH_NEAR_MISS &&
+                    casinoSlotPhaseT_ >= CasinoAnim2::Timing::kNearMissHold) {
+                    casinoSlotPhase_ = CasinoAnim2::PH_REVEAL;
+                    casinoSlotPhaseT_ = 0.0f;
+                }
+                for (int k = 0; k < 3; ++k)
+                    if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k], 0.0f, 0.0f));
             }
-        } else {
+
+            // Медленный «ритм» символов после спина: они живут, а не застыли.
+            if (casinoSlotPhase_ == CasinoAnim2::PH_IDLE && casinoSlotsMode_) {
+                for (int k = 0; k < 3; ++k) {
+                    if (casinoSlotDrum_[k]) {
+                        const float idle = sinf(timeAcc_ * 1.15f + (float)k * 1.9f) * 1.6f;
+                        casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k] + idle, 0.0f, 0.0f));
+                    }
+                }
+            }
+
+            // Вспышка выигрышной линии затухает плавно.
+            if (casinoLineFlash_ > 0.0f) casinoLineFlash_ = Max(0.0f, casinoLineFlash_ - dt * 0.85f);
+
+            // Золотая линия через окно + нимбы над совпавшими барабанами.
+            // Тянется слева-направо по мере «осознания» выигрыша, не мигает.
+            if (casinoWinLineNode_ && casinoWinLineMat_) {
+                const bool lineOn = casinoSlotsMode_ && casinoMatchMask_ > 0 &&
+                    (casinoSlotPhase_ == CasinoAnim2::PH_REVEAL ||
+                     casinoSlotPhase_ == CasinoAnim2::PH_COUNTUP ||
+                     casinoSlotPhase_ == CasinoAnim2::PH_NEAR_MISS);
+                casinoWinLineNode_->SetEnabled(lineOn);
+                if (lineOn) {
+                    const float grow = (casinoSlotPhase_ == CasinoAnim2::PH_NEAR_MISS)
+                        ? 0.65f : 1.0f;
+                    const float breathe = 0.72f + 0.28f * sinf(timeAcc_ * 7.0f);
+                    const float amp = (casinoMatchMask_ == 3 ? 5.2f : 3.0f) * breathe *
+                                      (0.45f + 0.55f * casinoLineFlash_) * grow;
+                    const Color lineCol = (casinoMatchMask_ == 3)
+                        ? Color(amp * 1.0f, amp * 0.90f, amp * 0.42f, 1.0f)
+                        : Color(amp * 0.55f, amp * 1.0f, amp * 0.72f, 1.0f);
+                    casinoWinLineMat_->SetShaderParameter("MatDiffColor", Variant(lineCol));
+                    // Протяжка слева-направо: линия «прочерчивается» по окну,
+                    // а не появляется целиком — глаз успевает проследить совпадение.
+                    const float wipe = 0.10f + 0.90f * (1.0f - casinoLineFlash_);
+                    casinoWinLineNode_->SetScale(Vector3(wipe, 1.0f, 1.0f));
+                    casinoWinLineNode_->SetPosition(Vector3(-0.70f * (1.0f - wipe), 1.56f, -0.46f));
+                }
+            }
             for (int k = 0; k < 3; ++k) {
-                if (casinoSlotDrum_[k]) casinoSlotDrum_[k]->SetRotation(Quaternion(casinoSlotAngle_[k], 0.0f, 0.0f));
+                if (!casinoDrumWinGlow_[k] || !casinoDrumWinGlowMat_[k]) continue;
+                const bool glowOn = casinoSlotsMode_ && casinoMatchReel_[k] && casinoMatchMask_ > 0 &&
+                    casinoSlotPhase_ != CasinoAnim2::PH_SPINNING &&
+                    casinoSlotPhase_ != CasinoAnim2::PH_ANTICIPATION;
+                casinoDrumWinGlow_[k]->SetEnabled(glowOn);
+                if (glowOn) {
+                    const float beat = 0.55f + 0.45f * sinf(timeAcc_ * 9.0f + (float)k * 0.7f);
+                    const float amp = (casinoMatchMask_ == 3 ? 4.0f : 2.2f) * beat;
+                    casinoDrumWinGlowMat_[k]->SetShaderParameter("MatDiffColor",
+                        Variant(Color(amp * 1.0f, amp * 0.88f, amp * 0.38f, 1.0f)));
+                    const float sc = 0.22f + 0.06f * beat;
+                    casinoDrumWinGlow_[k]->SetScale(Vector3(sc, 0.05f, sc));
+                }
             }
         }
         if (casinoLeverPull_ > 0.0f) casinoLeverPull_ = Max(0.0f, casinoLeverPull_ - dt * 1.45f);
@@ -11384,12 +11567,30 @@ private:
             float pullAng = sinf(Clamp(casinoLeverPull_, 0.0f, 1.0f) * 3.14159f) * 58.0f;
             casinoSlotLever_->SetRotation(Quaternion(-pullAng, 0.0f, 0.0f));
         }
-        for (unsigned lb = 0; lb < (unsigned)casinoSlotBeaconMats_.Size(); ++lb) {
-            if (!casinoSlotBeaconMats_[lb]) continue;
-            bool lit = (casinoResultFlash_ > 0.0f && casinoOutcome_ > 0)
-                ? (((int)(timeAcc_ * 12.0f) + (int)lb) % 2 == 0)
-                : (((int)(timeAcc_ * 4.5f) + (int)lb) % 5 == 0);
-            casinoSlotBeaconMats_[lb]->SetShaderParameter("MatDiffColor", Variant(lit ? Color(3.2f, 2.35f, 0.55f, 1.0f) : Color(0.55f, 0.32f, 0.12f, 1.0f)));
+        // Лампы рамки: раньше они мигали по случайному модулю и ничего не значили.
+        // Теперь это индикатор фазы — бегущий огонь со скоростью фазы и её цветом.
+        {
+            const auto phasePal = CasinoAnim2::PaletteForPhase(casinoSlotPhase_, casinoOutcomeJackpot_);
+            const float marqueeSpeed = (casinoSlotPhase_ == CasinoAnim2::PH_ANTICIPATION) ? 2.2f
+                                     : (casinoSlotPhase_ == CasinoAnim2::PH_SPINNING) ? 1.5f
+                                     : (casinoSlotPhase_ == CasinoAnim2::PH_REELS_STOPPING) ? 0.9f
+                                     : (casinoSlotPhase_ == CasinoAnim2::PH_NEAR_MISS) ? 0.45f
+                                     : 0.75f;
+            const int lampCount = (int)casinoSlotBeaconMats_.Size();
+            const float flashBoost = 1.0f + casinoLineFlash_ * 2.4f;
+            for (int lb = 0; lb < lampCount; ++lb) {
+                if (!casinoSlotBeaconMats_[lb]) continue;
+                const float pulse = CasinoAnim2::MarqueePulse(lb, lampCount, timeAcc_, marqueeSpeed);
+                // В фазе REVEAL/COUNTUP все лампы горят ровно — «победа».
+                const bool solidOn = (casinoSlotPhase_ == CasinoAnim2::PH_REVEAL ||
+                                      casinoSlotPhase_ == CasinoAnim2::PH_COUNTUP) && casinoMatchMask_ > 0;
+                const float k = solidOn ? (0.75f + 0.25f * sinf(timeAcc_ * 6.0f)) : pulse;
+                const float amp = (0.32f + 2.9f * k) * flashBoost * phasePal.pulse;
+                Color lamp(phasePal.accentR * amp + 0.10f,
+                           phasePal.accentG * amp + 0.08f,
+                           phasePal.accentB * amp + 0.04f, 1.0f);
+                casinoSlotBeaconMats_[lb]->SetShaderParameter("MatDiffColor", Variant(lamp));
+            }
         }
 
         // 6. Кочет-Крупье «Дон Чикено»
@@ -11484,6 +11685,7 @@ private:
         label(casinoQuickRedBtn_, blackjackMode_ ? "Ещё" : "Красное");
         label(casinoQuickBlackBtn_, blackjackMode_ ? "Хватит" : "Чёрное");
         label(casinoQuickZeroBtn_, blackjackMode_ ? "Дабл" : "0");
+        if (casinoSlotPayTable_) casinoSlotPayTable_->SetVisible(casinoSlotsMode_ && !spinning);
         casinoQuickRedBtn_->SetVisible(!casinoSlotsMode_);
         casinoQuickBlackBtn_->SetVisible(!casinoSlotsMode_);
         casinoQuickZeroBtn_->SetVisible(!casinoSlotsMode_);
@@ -11498,8 +11700,33 @@ private:
                 (blackjackActive_ ? String("?") : String(Casino::HandValue(blackjackDealer_, blackjackD_))));
             casinoResultText_->SetText(blackjackActive_ ? "Ваш ход" : "Возврат  " + String(casinoLastPayout_) + " ¤");
         } else if (casinoSlotsMode_) {
-            casinoWheelText_->SetText(spinning ? "…" : String(Casino::SlotLabel(slotReels_[0])) + "  " +
-                Casino::SlotLabel(slotReels_[1]) + "  " + Casino::SlotLabel(slotReels_[2]));
+            // Показываем РОВНО то, что видно в 3D-окне: крупный символ + множитель.
+            // Так игрок сразу читает комбинацию и её цену — без таблицы в справке.
+            auto glyph = [](int sym) -> const char* {
+                switch (sym) {
+                    case Casino::SYM_CHERRY:  return "🍒";
+                    case Casino::SYM_ROOSTER: return "🐔";
+                    case Casino::SYM_DIAMOND: return "💎";
+                    case Casino::SYM_STAR:    return "⭐";
+                    case Casino::SYM_CROWN:   return "👑";
+                    case Casino::SYM_SEVEN:   return "7️⃣";
+                    default:                  return "?";
+                }
+            };
+            if (spinning) {
+                String dots;
+                const int n = 1 + (int)(casinoSlotTotalT_ * 3.0f) % 3;
+                for (int i = 0; i < n; ++i) dots += "•";
+                casinoWheelText_->SetText(dots);
+            } else {
+                const int mult = Casino::SlotsMultiplier(slotReels_[0], slotReels_[1], slotReels_[2]);
+                String line = String(glyph(slotReels_[0])) + "  " + glyph(slotReels_[1]) + "  " + glyph(slotReels_[2]);
+                if (mult > 0) line += "   ×" + String(mult);
+                casinoWheelText_->SetText(line);
+                casinoWheelText_->SetColor(mult >= 20 ? Color(1.0f, 0.86f, 0.30f, 1.0f)
+                                         : mult > 0   ? Color(0.55f, 1.0f, 0.72f, 1.0f)
+                                                      : Color(0.86f, 0.90f, 0.96f, 1.0f));
+            }
         } else {
             casinoWheelText_->SetText(spinning ? "…" : (casinoLastResult_ >= 0 ? String(casinoLastResult_) : String()));
         }
@@ -11588,6 +11815,18 @@ private:
         casinoWheelText_->SetWidth(mbw - S(24));
         casinoWheelText_->SetColor(Color(1.0f, 0.90f, 0.45f, 1.0f));
         StyleCrispText(casinoWheelText_, true);
+
+        // Постоянная таблица выплат (только в режиме 777): новичок видит,
+        // за что сколько платят, и не лезет в справку посреди спина.
+        casinoSlotPayTable_ = midBadge->CreateChild<Text>();
+        casinoSlotPayTable_->SetFont(font_, SF(13));
+        casinoSlotPayTable_->SetTextAlignment(HA_CENTER);
+        casinoSlotPayTable_->SetPosition(S(12), S(62));
+        casinoSlotPayTable_->SetWidth(mbw - S(24));
+        casinoSlotPayTable_->SetColor(Color(1.0f, 0.84f, 0.42f, 0.96f));
+        casinoSlotPayTable_->SetText("7️⃣ ×50   👑 ×20   ⭐ ×12\n💎 ×8   🐔 ×6   🍒 ×4\nпара 2–3×");
+        casinoSlotPayTable_->SetVisible(false);
+        StyleCrispText(casinoSlotPayTable_);
 
         casinoResultText_ = midBadge->CreateChild<Text>();
         casinoResultText_->SetFont(font_, SF(16));
@@ -11791,8 +12030,23 @@ private:
                 casinoSlotStartAngle_[r] = casinoSlotAngle_[r];
                 casinoSlotTargetAngle_[r] = (float)slotPendingReels_[r] * 60.0f;
                 casinoSlotStopped_[r] = false;
+                casinoShownSymbols_[r] = -1;   // спин: окно пустое, символы смазаны
             }
-            casinoSpinDur_ = 1.85f;
+            // Near-miss распознаём ЗАРАНЕЕ: если два символа совпали, а третий нет —
+            // это «почти», и зал должен ахнуть (драматическая пауза + янтарный свет).
+            casinoNearMiss_ = CasinoAnim2::IsNearMiss(slotPendingReels_[0], slotPendingReels_[1], slotPendingReels_[2]);
+            casinoMatchMask_ = CasinoAnim2::IsTriple(slotPendingReels_[0], slotPendingReels_[1], slotPendingReels_[2]) ? 3 :
+                               (casinoNearMiss_ ? 1 : 0);
+            casinoLineFlash_ = 0.0f;
+            casinoCountT_ = 0.0f;
+            casinoCountShown_ = -2147483647;
+            for (int r = 0; r < 3; ++r) casinoMatchReel_[r] = false;
+            casinoSlotPhase_ = CasinoAnim2::PH_ANTICIPATION;
+            casinoSlotPhaseT_ = 0.0f;
+            casinoSlotTotalT_ = 0.0f;
+            // Спин длится ровно до последнего стопа: дальше эстафету берут
+            // фазы REVEAL/COUNTUP, иначе между «встал» и «выпало» была мёртвая пауза.
+            casinoSpinDur_ = CasinoAnim2::ReelStopTime(2) + CasinoAnim2::Timing::kReelSettle;
             casinoSpinTimer_ = casinoSpinDur_;
             casinoLeverPull_ = 1.0f;
             PlayCasinoSound(casinoChipSound_, 0.85f);
@@ -11815,7 +12069,16 @@ private:
                 casinoSlotStopped_[r] = true;
             }
             int payout = Casino::SlotsPayout(casinoBet_.amount, slotReels_[0], slotReels_[1], slotReels_[2]);
+            for (int r = 0; r < 3; ++r) casinoShownSymbols_[r] = slotReels_[r];
+            casinoMatchMask_ = CasinoAnim2::IsTriple(slotReels_[0], slotReels_[1], slotReels_[2]) ? 3 :
+                               (CasinoAnim2::IsNearMiss(slotReels_[0], slotReels_[1], slotReels_[2]) ? 1 : 0);
+            casinoNearMiss_ = (casinoMatchMask_ == 1);
+            ComputeSlotMatch(slotReels_[0], slotReels_[1], slotReels_[2]);
+            casinoLineFlash_ = (casinoMatchMask_ > 0) ? 1.0f : 0.0f;
             CasinoOutcome(casinoBet_.amount, payout, payout >= casinoBet_.amount*20);
+            // CasinoOutcome выставляет REVEAL; для «почти» держим янтарную паузу,
+            // и только потом выигрышная линия и счёт.
+            if (casinoNearMiss_) { casinoSlotPhase_ = CasinoAnim2::PH_NEAR_MISS; casinoSlotPhaseT_ = 0.0f; }
             casinoLastPayout_ = payout;
             casinoResultFlash_ = 2.6f;
             if (payout > 0) {
