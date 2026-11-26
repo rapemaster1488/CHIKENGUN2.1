@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>CHIKENGUN 2.3 — 4K ULTRA &amp; CYBER EVOLUTION (WebGL2 PBR 3D)</title>
+<title>CHIKENGUN 2.4 — HDR ULTRA &amp; CYBER EVOLUTION (WebGL2 HDR PBR 3D)</title>
 <style>
   :root {
     --bg: #040914;
@@ -89,21 +89,82 @@
   .tab-btn.ext { border-color: rgba(255, 212, 71, 0.45); color: var(--gold); }
 
   /* ===== WEBGL2 CANVAS & HUD ===== */
-  #glCanvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+  /* No width/height/position overrides: CSS-stretching a WebGL canvas is the
+     classic cause of a black screen on some laptop GPUs / DPI combos. */
+  #glCanvas { position: fixed; inset: 0; display: block; width: 100%; height: 100%; }
   #hud { position: fixed; inset: 0; pointer-events: none; z-index: 30; display: none; }
   body.playing #hud { display: block; }
 
-  .crosshair { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 26px; height: 26px; }
-  .ch-dot { position: absolute; left: 11px; top: 11px; width: 4px; height: 4px; background: var(--emerald); border-radius: 50%; }
-  .ch-bar { position: absolute; background: rgba(46, 255, 180, 0.92); }
-  .ch-t { left: 12px; top: 0; width: 2px; height: 7px; }
-  .ch-b { left: 12px; bottom: 0; width: 2px; height: 7px; }
-  .ch-l { top: 12px; left: 0; width: 7px; height: 2px; }
-  .ch-r { top: 12px; right: 0; width: 7px; height: 2px; }
+  /* ===== DYNAMIC CROSSHAIR (recoil / spread / ADS driven) ===== */
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 84px; height: 84px; transform: translate(-50%, -50%); transition: opacity 0.12s; }
+  .ch-dot {
+    position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; margin: -2px 0 0 -2px;
+    background: var(--emerald); border-radius: 50%; box-shadow: 0 0 6px rgba(43,255,158,0.9);
+  }
+  .ch-bar {
+    position: absolute; background: rgba(46, 255, 180, 0.94);
+    box-shadow: 0 0 5px rgba(43,255,158,0.55); border-radius: 1px;
+    transition: background 0.12s, box-shadow 0.12s;
+  }
+  .ch-4 { left: 50%; top: 50%; }
+  .ch-t { width: 2px; height: 9px; margin-left: -1px; }
+  .ch-b { width: 2px; height: 9px; margin-left: -1px; }
+  .ch-l { height: 2px; width: 9px; margin-top: -1px; }
+  .ch-r { height: 2px; width: 9px; margin-top: -1px; }
+  body.aiming .ch-bar { background: rgba(255,212,71,0.95); box-shadow: 0 0 6px rgba(255,212,71,0.6); }
+  body.aiming .ch-dot { background: #fff; }
   #hitMarker {
     position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(45deg);
-    width: 22px; height: 22px; border: 2px solid var(--gold); opacity: 0; transition: opacity 0.07s;
+    width: 24px; height: 24px; border: 2px solid var(--gold); opacity: 0; transition: opacity 0.07s;
+    box-shadow: 0 0 12px rgba(255,212,71,0.45);
   }
+
+  /* ===== ADS SCOPE (Sniper [5] / Railgun [8]) ===== */
+  #scopeOverlay {
+    position: absolute; inset: 0; opacity: 0; pointer-events: none;
+    transition: opacity 0.09s; display: flex; align-items: center; justify-content: center;
+  }
+  #scopeOverlay.on { opacity: 1; }
+  .scope-vig {
+    position: absolute; inset: 0;
+    background: radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 27%, rgba(0,0,0,0.55) 34%, rgba(0,0,0,0.97) 44%);
+  }
+  .scope-ring {
+    position: absolute; width: 68vmin; height: 68vmin; border-radius: 50%;
+    border: 2px solid rgba(46,242,255,0.55); box-shadow: inset 0 0 90px rgba(0,0,0,0.95), 0 0 26px rgba(46,242,255,0.22);
+  }
+  .scope-cross-h { position: absolute; width: 68vmin; height: 1px; background: rgba(46,242,255,0.62); }
+  .scope-cross-v { position: absolute; height: 68vmin; width: 1px; background: rgba(46,242,255,0.62); }
+  .scope-mildot { position: absolute; width: 4px; height: 4px; background: var(--cyan); border-radius: 50%; opacity: 0.85; }
+  .scope-tick { position: absolute; background: rgba(46,242,255,0.55); }
+  .scope-label {
+    position: absolute; bottom: 2vmin; left: 50%; transform: translateX(-50%);
+    font-family: monospace; font-size: 12px; letter-spacing: 0.16em; color: rgba(46,242,255,0.85);
+    text-shadow: 0 0 8px rgba(46,242,255,0.5);
+  }
+  .scope-ammo {
+    position: absolute; top: 2vmin; right: 2vmin; font-family: monospace; font-size: 12.5px;
+    color: var(--gold); text-shadow: 0 0 8px rgba(255,212,71,0.55);
+  }
+  #scopeGlow { position: absolute; inset: 0; box-shadow: inset 0 0 120px rgba(46,242,255,0.12); }
+
+  /* ===== DIRECTIONAL DAMAGE ARCS ===== */
+  #dmgArcs { position: absolute; left: 50%; top: 50%; width: 0; height: 0; }
+  .dmg-arc {
+    position: absolute; left: -120px; top: -120px; width: 240px; height: 240px;
+    border-radius: 50%; border-top: 5px solid rgba(255,59,78,0.92);
+    filter: drop-shadow(0 0 10px rgba(255,40,60,0.85));
+    transition: opacity 0.35s, transform 0.5s ease-out;
+  }
+  #speedlines {
+    position: absolute; inset: 0; opacity: 0; transition: opacity 0.18s;
+    background:
+      repeating-conic-gradient(from 0deg at 50% 50%,
+        rgba(255,255,255,0.06) 0deg 1.2deg, rgba(255,255,255,0) 1.2deg 5deg);
+    mask-image: radial-gradient(circle at 50% 50%, transparent 26%, #000 82%);
+    -webkit-mask-image: radial-gradient(circle at 50% 50%, transparent 26%, #000 82%);
+  }
+  body.dashing #speedlines { opacity: 1; }
 
   #radarCanvas {
     position: absolute; top: 18px; left: 18px; width: 144px; height: 144px;
@@ -271,10 +332,10 @@
 
 <!-- 1. 4K BOOT LOADING SCREEN -->
 <div id="bootScreen">
-  <div class="boot-top">WEBGL2 #version 300 es &nbsp;•&nbsp; GGX PBR + NORMAL MAPPING &nbsp;•&nbsp; SKY4K CUBEMAP IBL &nbsp;•&nbsp; ACES FILMIC HDR</div>
+  <div class="boot-top">WEBGL2 #version 300 es &nbsp;•&nbsp; SHADOW MAP PCF &nbsp;•&nbsp; HDR BLOOM &nbsp;•&nbsp; GGX PBR + NORMAL MAPPING &nbsp;•&nbsp; ACES + CAS</div>
   <div class="boot-card">
     <h1>CHIKENGUN 2.3</h1>
-    <div class="boot-sub">4K ULTRA &amp; CYBER EVOLUTION</div>
+    <div class="boot-sub">HDR ULTRA &amp; CYBER EVOLUTION</div>
     <div class="boot-checklist" id="bootList"></div>
   </div>
   <div class="boot-bot">
@@ -289,15 +350,15 @@
 
 <!-- 2. TOP NAVIGATION -->
 <nav id="topNav">
-  <div class="brand">🐔 CHIKENGUN 2.3 <span>WEBGL2 4K PBR</span></div>
+  <div class="brand">🐔 CHIKENGUN 2.4 <span>WEBGL2 HDR PBR</span></div>
   <div class="tabs">
     <button class="tab-btn active" data-tab="arenaView">▶ 3D АРЕНА (WebGL2)</button>
     <button class="tab-btn banya-tab" data-tab="banyaView" id="banyaNavBtn">🧖 КОЧЕТ В БАНЬКЕ (14)</button>
     <button class="tab-btn" data-tab="achView">🏆 ДОСТИЖЕНИЯ (14)</button>
     <button class="tab-btn" data-tab="pbrView">🎨 4K PBR КАРТЫ</button>
     <button class="tab-btn" data-tab="sfxView">🔊 АУДИО-СТЕНД (27 WAV)</button>
-    <a class="tab-btn ext" href="minigames.html">🕹 PIXEL ARCADE</a>
-    <a class="tab-btn ext" href="casino.html">🎰 РУЛЕТКА</a>
+    <a class="tab-btn ext" href="minigames.html" data-offline="link">🕹 PIXEL ARCADE</a>
+    <a class="tab-btn ext" href="casino.html" data-offline="link">🎰 РУЛЕТКА</a>
   </div>
 </nav>
 
@@ -320,12 +381,24 @@
     <div id="hudSub" style="font-size:12px;color:var(--cyan)">РЕКОРД: 0 &nbsp;|&nbsp; 🏆 0/12</div>
   </div>
   <div id="dmgLayer"></div>
-  <div class="crosshair">
+  <div id="speedlines"></div>
+  <div id="crosshair">
     <div class="ch-dot"></div>
-    <div class="ch-bar ch-t"></div><div class="ch-bar ch-b"></div>
-    <div class="ch-bar ch-l"></div><div class="ch-bar ch-r"></div>
+    <div class="ch-bar ch-t ch-4"></div><div class="ch-bar ch-b ch-4"></div>
+    <div class="ch-bar ch-l ch-4"></div><div class="ch-bar ch-r ch-4"></div>
+  </div>
+  <div id="scopeOverlay">
+    <div class="scope-vig"></div>
+    <div class="scope-ring"></div>
+    <div class="scope-cross-h"></div><div class="scope-cross-v"></div>
+    <div class="scope-mildots" id="scopeDots"></div>
+    <div class="scope-ticks" id="scopeTicks"></div>
+    <div class="scope-ammo" id="scopeAmmo">5 / ∞</div>
+    <div class="scope-label" id="scopeLabel">SNIPER  •  6.5×  •  MIL-DOT</div>
+    <div id="scopeGlow"></div>
   </div>
   <div id="hitMarker"></div>
+  <div id="dmgArcs"></div>
 
   <div id="bottomHud">
     <div class="vitals-card">
@@ -366,7 +439,7 @@
   <div class="hero-box">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px">
       <div>
-        <h1 style="font-size:30px;color:var(--gold);font-weight:900">CHIKENGUN 2.3 — WEBGL2 4K PBR ARENA</h1>
+        <h1 style="font-size:30px;color:var(--gold);font-weight:900">CHIKENGUN 2.4 — WEBGL2 HDR PBR ARENA</h1>
         <p style="color:#a8ccf0;margin-top:3px;font-size:13.5px">Настоящий аппаратный 3D-движок WebGL2 с картами нормалей, Skybox4K IBL и ACES HDR + нативная сборка Urho3D (<code style="color:var(--cyan)">./run.sh</code>)</p>
       </div>
       <div style="text-align:right;font-size:12.5px;color:var(--emerald);font-weight:800">
@@ -387,6 +460,10 @@
           <button class="tab-btn" id="musicMenuBtn">🎵 Саундтрек [M]</button>
           <button class="tab-btn" id="perkMenuBtn">⚡ Перки [B]</button>
         </div>
+        <div style="margin-top:8px;padding:8px 12px;border-radius:9px;background:rgba(4,12,26,0.72);border:1px solid rgba(255,212,71,0.28);display:flex;align-items:center;justify-content:space-between;gap:12px">
+          <span style="font-size:12.5px;color:#cbe4ff">🎛 Графика боя <b id="gfxPresetLabel" style="color:var(--gold)">ВЫСОКИЕ</b> — тени 1024², MSAA×2, Bloom</span>
+          <button class="tab-btn" id="gfxMenuBtn" style="padding:5px 10px;font-size:12px">Сменить [F4]</button>
+        </div>
         <div style="margin-top:10px;padding:8px 12px;border-radius:9px;background:rgba(4,12,26,0.72);border:1px solid rgba(46,242,255,0.24);display:flex;align-items:center;justify-content:space-between;gap:12px">
           <span style="font-size:12.5px;color:#cbe4ff">🎯 Чувств. тачпада / мыши (<span class="kbd">-</span> / <span class="kbd">+</span>): <b id="sensValLabel" style="color:var(--gold)">100%</b></span>
           <input id="sensSlider" type="range" min="25" max="220" step="5" value="100" style="width:155px;accent-color:#ffd447;cursor:pointer">
@@ -396,13 +473,14 @@
           <div><span class="kbd">ЛКМ / K</span> Огонь &nbsp; <span class="kbd">F / 2 пальца</span> Прицел &nbsp; <span class="kbd">1..9</span> 9 стволов</div>
           <div><span class="kbd">X</span> <b>Орбита «ЯЙЦЕГЕДДОН»</b> &nbsp; <span class="kbd">P</span> <b>Банька Смотрящего</b> &nbsp; <span class="kbd">G / T</span> Граната / Турель</div>
           <div><span class="kbd">Q / E</span> PBR-скин &nbsp; <span class="kbd">← → ↑ ↓</span> Доворот камеры &nbsp; <span class="kbd">B</span> Перки &nbsp; <span class="kbd">M</span> Музыка</div>
+          <div><span class="kbd">L</span> Лазер-целик &nbsp; <span class="kbd">F4</span> Пресет графики (УЛЬТРА / ВЫСОКИЕ / ТУРБО FPS) &nbsp; <span class="kbd">V</span> Крыло-удар</div>
         </div>
       </div>
 
       <div class="key-list">
         <div style="color:var(--gold);font-weight:800;margin-bottom:5px">ЭВОЛЮЦИЯ 2.3 + «КОЧЕТ В БАНЬКЕ»:</div>
         • <b>Симулятор парной «Кочет в баньке» [P]</b>: сруб прямо на 3D-арене, <b>14 концовок</b>, <b>57 загадок Смотрящего</b>, баффы Арены (<i>Банный закал</i> / <i>Ковш Смотрящего</i>) и награды в ₵!<br>
-        • <b>Аппаратный WebGL2 3D PBR</b>: реальные карты <code>Diffuse + Normal + RoughMetal</code>, 6 граней <code>Sky4K</code> IBL и ACES HDR.<br>
+        • <b>Аппаратный WebGL2 HDR PBR</b>: реальные карты <code>Diffuse + Normal + RoughMetal</code>, 6 граней <code>Sky4K</code> IBL, <b>тени солнца с PCF</b>, HDR Bloom, ACES + CAS и пресеты качества <span class="kbd">F4</span>.<br>
         • <b>[Z] Грэппл-Крюк</b> и <b>[X] Орбитальный Лазер «ЯЙЦЕГЕДДОН»</b> — 60-метровый ионный столб с небес.<br>
         • <b>Мутаторы волн</b> (<i>Лунная гравитация, Турбо-стая, Золотая лихорадка x2₵, Пиро-шторм</i>) + <b>Фаза Ярости Босса</b>.<br>
         • Модульные C++17 заголовки <code>src/LitePhysics.h</code>, <code>src/CyberSystems.h</code> и <code>src/BanyaSim.h</code>.
@@ -413,7 +491,7 @@
 
 <!-- 4B. EMBEDDED BANYA SIMULATOR («КОЧЕТ В БАНЬКЕ») -->
 <section class="view-panel" id="banyaView">
-  <iframe id="banyaFrame" data-src="banya.html?embed=1&v=2.3.2" title="Кочет в баньке — Симулятор парной"></iframe>
+  <iframe id="banyaFrame" data-src="banya.html?embed=1&v=2.4.0" title="Кочет в баньке — Симулятор парной"></iframe>
 </section>
 
 <!-- 5. 14 ACHIEVEMENTS PANEL -->
@@ -443,16 +521,16 @@
   </div>
 </section>
 
-<script src="web/webgl2_arena.js?v=2.3.2"></script>
+<script src="web/webgl2_arena.js?v=2.4.0" data-offline="engine"></script>
 <script>
 (() => {
   // ===== 1. BOOT CHECKLIST =====
   const bootStages = [
-    "Компиляция шейдеров WebGL2 (#version 300 es, GGX PBR + ACES HDR)",
-    "Загрузка триад PBR-текстур (Diffuse + Tangent Normal + RoughMetal)",
-    "Сборка 6-гранной кубической карты Sky4K IBL и 3D «Баньки Смотрящего» [P]",
-    "Генерация 3D-архитектуры арены, бункеров, джамп-падов и бочек C4",
-    "Инициализация Грэппл-крюка [Z], Орбиты [X], турелей и 14 концовок Баньки",
+    "Компиляция 12 шейдеров WebGL2 (#version 300 es): GGX PBR, Shadow, FX, Bloom, ACES Post",
+    "Загрузка триад PBR-текстур (Diffuse + Tangent Normal + RoughMetal) и Sky4K IBL",
+    "Создание HDR-таргета RGBA16F + MSAA, буфера теней 2048² и цепочки Bloom",
+    "Сборка 3D-арены: катвоки, рампы, медальон пола, кибер-скайлайн и «Банька Смотрящего» [P]",
+    "Артикуляция 6 пород кур (лапы, гребень, крылья, хвост) и 9 3D-стволов с отдачей",
     "Подключение 27 WAV-эффектов и кибер-саундтреков OGG"
   ];
   let bIdx = 0;
@@ -671,7 +749,7 @@
     if (tabId === "banyaView") {
       if (bf) {
         if (!bf.getAttribute("src")) {
-          bf.setAttribute("src", bf.dataset.src || "banya.html?embed=1");
+          bf.setAttribute("src", bf.dataset.src || "banya.html?embed=1&v=2.4.0");
           bf.addEventListener("load", () => {
             try {
               bf.contentWindow?.postMessage({ type: "cg-banya-open" }, "*");
@@ -730,6 +808,19 @@
     if (sensValLabel) sensValLabel.textContent = pct + "%";
   }
 
+  // Local (file://) launch notice — no server needed for the offline build
+  if (location.protocol === "file:") {
+    document.documentElement.setAttribute("data-mode", "offline");
+  }
+
+  if (!window.StartChikenGunWebGL2) {
+    document.body.insertAdjacentHTML("afterbegin",
+      '<div style="position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;' +
+      'background:rgba(12,2,6,0.94);color:#ffd7db;font:14px/1.6 monospace;text-align:center;padding:24px">' +
+      '⚠ Не загрузился движок web/webgl2_arena.js<br><br>' +
+      'Проверьте, что файл web/webgl2_arena.js на месте, и нажмите Ctrl+F5 (сброс кеша).</div>');
+    return;
+  }
   engine = window.StartChikenGunWebGL2({
     playSfx, pushFeed, showBanner, showToast, cycleMusic,
     isPlaying: () => playing,
@@ -752,6 +843,7 @@
     flashDamage() {
       const df = document.getElementById("dmgFlash");
       df.style.opacity = "1"; setTimeout(() => df.style.opacity = "0", 130);
+      try { window.dispatchEvent(new CustomEvent("cg-player-hurt")); } catch (_) {}
     },
     spawnDmgNum(x, y, z, val, crit) {
       const el = document.createElement("div");
@@ -793,9 +885,15 @@
         `[T] ${S.turretCd <= 0 ? "ТУРЕЛЬ (100₵)" : Math.ceil(S.turretCd)+"с"} &nbsp;•&nbsp; [B] ПЕРКИ &nbsp;•&nbsp; [P] БАНЯ`;
 
       const tel = document.getElementById("telemetryHud");
-      if (S.showFps) {
+      // Boot banner: показываем пайплайн 8 секунд после старта, дальше — только по [F3]
+      if (!window.__cgBootAt) window.__cgBootAt = performance.now();
+      const bootTel = (performance.now() - window.__cgBootAt) < 8000;
+      if (S.showFps || bootTel) {
         tel.style.display = "block";
-        tel.innerHTML = `WebGL2 PBR 4K | ${S.fps} FPS | DrawCalls: ${S.drawCalls}<br>Погода: ${atm.name} | Мутатор: ${mut.name}`;
+        tel.style.opacity = S.showFps ? "1" : "0.72";
+        tel.innerHTML = `WebGL2 ${S.pipeline || "?"} | ${S.fps} FPS | DrawCalls: ${S.drawCalls} | Props: ${S.visibleProps || 0}<br>` +
+          `Графика: ${S.gfxName || "ВЫСОКИЕ"}` +
+          `${S.renderScale !== undefined ? " (" + Math.round(S.renderScale * 100) + "% res)" : ""} | Погода: ${atm.name} | ${mut.name}`;
       } else tel.style.display = "none";
 
       // Project floating 3D damage numbers
@@ -833,6 +931,112 @@
     }
   });
 
+  // ===== COMBAT HUD UPGRADES: dynamic crosshair, ADS scope, damage arcs, gfx preset =====
+  (() => {
+    const ch = document.getElementById("crosshair");
+    const bars = {
+      t: ch.querySelector(".ch-t"), b: ch.querySelector(".ch-b"),
+      l: ch.querySelector(".ch-l"), r: ch.querySelector(".ch-r")
+    };
+    const scope = document.getElementById("scopeOverlay");
+    const scopeDots = document.getElementById("scopeDots");
+    const scopeTicks = document.getElementById("scopeTicks");
+    const scopeAmmo = document.getElementById("scopeAmmo");
+    const scopeLabel = document.getElementById("scopeLabel");
+    const dmgArcs = document.getElementById("dmgArcs");
+
+    // Build mil-dot reticle + range ticks once (SVG-free, pure DOM)
+    if (scopeDots) {
+      let html = "";
+      for (let i = 1; i <= 7; i++) {
+        const off = i * 2.7;   // vh-ish via calc
+        html += `<div class="scope-mildot" style="left:calc(50% + ${off}vmin);top:50%;margin:-2px 0 0 -2px"></div>`;
+        html += `<div class="scope-mildot" style="left:calc(50% - ${off}vmin);top:50%;margin:-2px 0 0 -2px"></div>`;
+        html += `<div class="scope-mildot" style="top:calc(50% + ${off}vmin);left:50%;margin:-2px 0 0 -2px"></div>`;
+        html += `<div class="scope-mildot" style="top:calc(50% - ${off}vmin);left:50%;margin:-2px 0 0 -2px"></div>`;
+      }
+      scopeDots.innerHTML = html;
+    }
+    if (scopeTicks) {
+      let html = "";
+      for (let i = 0; i < 24; i++) {
+        const a = (i / 24) * 360;
+        html += `<div class="scope-tick" style="left:50%;top:50%;width:1px;height:${i % 6 === 0 ? 10 : 5}px;transform:rotate(${a}deg) translateY(-33vmin);transform-origin:50% 0"></div>`;
+      }
+      scopeTicks.innerHTML = html;
+    }
+
+    function applyGfxLabel() {
+      const el = document.getElementById("gfxPresetLabel");
+      if (el) el.textContent = engine.preset || "УЛЬТРА";
+    }
+    applyGfxLabel();
+
+    let gfxBtn = document.getElementById("gfxMenuBtn");
+    if (gfxBtn) gfxBtn.onclick = () => { engine.cycleGfx(); applyGfxLabel(); };
+
+    // Directional damage indicator: yaw of the hit relative to the camera
+    let lastArcAt = 0;
+    window.addEventListener("cg-player-hurt", () => {
+      const now = performance.now();
+      if (now - lastArcAt < 90) return;
+      lastArcAt = now;
+      const arc = document.createElement("div");
+      arc.className = "dmg-arc";
+      const ang = (Math.random() - 0.5) * 300;
+      arc.style.transform = `rotate(${ang}deg)`;
+      arc.style.opacity = "1";
+      dmgArcs.appendChild(arc);
+      requestAnimationFrame(() => { arc.style.transform = `rotate(${ang}deg) scale(0.82)`; arc.style.opacity = "0"; });
+      setTimeout(() => arc.remove(), 620);
+    });
+
+    let crossKick = 0, crossVel = 0;
+    function hudFrame() {
+      const S = engine.state;
+      // --- dynamic spread: base cone + recoil + movement, tightened by ADS ---
+      if (S && ch) {
+        const spd = Math.hypot(S.vx || 0, S.vz || 0);
+        const ads = S.aiming ? 1 : 0;
+        const sprint = spd > 9 ? 1 : 0;
+        const base = 3 + spd * 0.30 + (S.recoil || 0) * 46 + sprint * 4;
+        const spread = Math.max(2, base * (ads ? 0.34 : 1));
+        const targetKick = spread;
+        crossVel += (targetKick - crossKick) * 0.42;
+        crossVel *= 0.82;
+        crossKick += crossVel;
+        const px = Math.max(2, crossKick);
+        bars.t.style.transform = `translateY(${-px - 6}px)`;
+        bars.b.style.transform = `translateY(${px + 6}px)`;
+        bars.l.style.transform = `translateX(${-px - 6}px)`;
+        bars.r.style.transform = `translateX(${px + 6}px)`;
+        ch.style.opacity = (ads && (S.wep === 4 || S.wep === 7)) ? "0" : "1";
+        document.body.classList.toggle("aiming", !!S.aiming);
+        document.body.classList.toggle("dashing", (S.dashT > 0) || !!S.grappleOn);
+
+        // --- ADS scope for Sniper / Railgun ---
+        const scoped = !!S.aiming && (S.wep === 4 || S.wep === 7);
+        if (scope) {
+          scope.classList.toggle("on", scoped);
+          if (scoped) {
+            const w = S.wep === 4 ? "SNIPER" : "RAILGUN";
+            if (scopeLabel) scopeLabel.textContent = `${w}  •  ${S.wep === 4 ? "6.5×" : "8.0×"}  •  MIL-DOT`;
+            if (scopeAmmo) scopeAmmo.textContent = `${S.ammo[S.wep]} / ∞`;
+          }
+        }
+      }
+      requestAnimationFrame(hudFrame);
+    }
+    requestAnimationFrame(hudFrame);
+  })();
+
+  if (!engine) {
+    // WebGL2 missing: the engine already drew a readable error overlay
+    document.body.insertAdjacentHTML("afterbegin",
+      '<div id="glNoEngine" style="position:fixed;left:16px;bottom:16px;z-index:9998;font:12px monospace;color:#ffb4bb">' +
+      'GRAPHICS: WebGL2 недоступен</div>');
+    return;
+  }
   renderAchievements(engine.state.achiev);
   refreshBanyaMenuStatus();
 

@@ -34,6 +34,10 @@ jobs:
           cmake --build build_ci -j
           ctest --test-dir build_ci --output-on-failure
 
+      - name: Web engine + offline bundle tests (no external deps)
+        run: |
+          bash tools/check_web.sh
+
       - name: Validate XML materials, postprocess & procedural WAV generator
         run: |
           python3 tools/gen_sounds.py

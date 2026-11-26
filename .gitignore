@@ -29,3 +29,11 @@ core.*
 # --- генерируемые текстуры (tools/gen_textures.py) ---
 bin/Data/TexturesHD/
 build/Data/TexturesHD/
+
+# --- офлайн-сборка веб-арены (генерируется tools/build_web.py) ---
+CHIKENGUN_OFFLINE.html
+CHIKENGUN_OFFLINE*.html
+
+# --- python кэш (тесты/сборщики) ---
+__pycache__/
+*.pyc
