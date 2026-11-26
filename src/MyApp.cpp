@@ -111,6 +111,7 @@
 #include "CasinoSim.h"
 #include "CasinoAnimation.h"
 #include "CasinoAnim2.h"
+#include "PerfTier.h"
 #include "ArcadeGames.h"
 #include "SplashIntro.h"
 #include "SDLStartup.h"
@@ -673,6 +674,13 @@ private:
     int settingsSel_ = 0;
     static constexpr int SETTINGS_ROW_COUNT = 15;
     int gfxQualityIdx_ = 2;         // 0=НИЗКИЙ 1=СРЕДНИЙ 2=ВЫСОКИЙ PBR (быстрый 4K баланс) 3=4K УЛЬТРА
+
+    // ── Авто-детект железа (см. src/PerfTier.h) ─────────────────────────────
+    // На встройке пресет ставится ДО первого кадра, а не после двух секунд
+    // просадки, как это делал adaptive quality.
+    int   gpuTier_ = Perf::TIER_UNKNOWN;
+    String gpuRendererName_;                 // сырая строка GL_RENDERER для F3
+    bool  settingsFileHasGfx_ = false;       // в settings.ini была секция graphics
     int gfxResIdx_ = 0;             // 0=АВТО(МОНИТОР) 1=3840x2160(4K) 2=2560x1440(2K) 3=1920x1080 4=1280x720
     int gfxDisplayMode_ = 0;        // 0=ОКНО 1=БЕЗ РАМКИ 2=ПОЛНЫЙ ЭКРАН
     int gfxMonitorIdx_ = 0;         // выбранный монитор (для систем с 2+ мониторами)
@@ -1615,6 +1623,10 @@ public:
         // Пользовательские настройки графики/звука (settings.ini) + 4K движок
         LoadSettingsFile();
         ApplyStartupRecovery();
+        // Класс железа определяем ДО первого кадра: на встройке сразу уходим на
+        // низкий пресет и 1600x900, а не ждём двух секунд лагов от adaptive quality.
+        // Если игрок уже сохранял настройки graphics в settings.ini — не трогаем.
+        AutoDetectHardware();
         SetupEngineSettings();
         RefreshUIScale();
 
@@ -3555,6 +3567,35 @@ private:
             AddPart(wingHandL_, Vector3(0.35f, 0.10f, z), Vector3(0.30f, 0.16f, 0.16f), wingMat, sph);
             AddPart(wingHandR_, Vector3(-0.35f, 0.10f, z), Vector3(0.30f, 0.16f, 0.16f), wingMat, sph);
         }
+
+        // ── Экипировка бойца ────────────────────────────────────────────────
+        // Вьюмодель — то, что игрок видит каждую секунду, поэтому «просто крылья»
+        // читались как заглушка. Тактический жилет, наплечники, ремень и кобура
+        // дают силуэт бойца и заодно показывают PBR-металл вблизи.
+        if (!weaponDarkMat_) weaponDarkMat_ = MakeTinted(nullptr, nullptr, Color(35, 35, 40));
+        Material* gear = weaponDarkMat_ ? weaponDarkMat_.Get() : fallbackMat_;
+        Material* gearTrim = weaponAccentMat_ ? weaponAccentMat_.Get() : gear;
+        Model* gcyl = cylModel_ ? cylModel_ : boxModel_;
+
+        // Тактический жилет на предплечьях (два слоя: основа + подсумки)
+        AddPart(weaponNode_, Vector3(-0.10f, -0.05f, -0.16f), Vector3(0.20f, 0.26f, 0.30f), gear, sph);
+        AddPart(weaponNode_, Vector3( 0.10f, -0.05f, -0.16f), Vector3(0.20f, 0.26f, 0.30f), gear, sph);
+        for (int pch = 0; pch < 2; ++pch) {
+            AddPart(weaponNode_, Vector3(-0.10f + (float)pch * 0.20f, -0.035f, -0.02f),
+                    Vector3(0.13f, 0.10f, 0.07f), gearTrim);                       // подсумки
+            AddPart(weaponNode_, Vector3(-0.10f + (float)pch * 0.20f, 0.075f, -0.14f),
+                    Vector3(0.15f, 0.06f, 0.16f), gearTrim);                       // наплечники
+        }
+        // Ремень с пряжкой + кобура на бедре (силуэт «вооружён»)
+        AddPart(weaponNode_, Vector3(0.0f, -0.24f, -0.05f), Vector3(0.34f, 0.055f, 0.16f), gear);
+        AddPart(weaponNode_, Vector3(0.0f, -0.24f, 0.02f), Vector3(0.07f, 0.070f, 0.03f), gearTrim);
+        Node* holster = AddPart(weaponNode_, Vector3(0.20f, -0.20f, 0.02f), Vector3(0.10f, 0.16f, 0.09f), gear);
+        holster->SetRotation(Quaternion(-8.0f, Vector3(1, 0, 0)));
+        AddPart(weaponNode_, Vector3(0.20f, -0.29f, 0.02f), Vector3(0.11f, 0.02f, 0.10f), gearTrim);
+        // Патронная лента на предплечье (6 латунных гильз) — мелкая, но читаемая
+        for (int cs = 0; cs < 6; ++cs)
+            AddPart(weaponNode_, Vector3(-0.155f + (float)cs * 0.021f, -0.115f, -0.10f),
+                    Vector3(0.014f, 0.048f, 0.014f), gearTrim, gcyl);
         
         // Дуло оружия (спереди по +Z)
         Node* muzzleNode = weaponNode_->CreateChild("Muzzle");
@@ -3769,69 +3810,173 @@ private:
         weaponSlideBaseRotation_ = Quaternion::IDENTITY;
 
         switch (type) {
-        case W_PISTOL:
-            AddPart(weaponModelNode_, Vector3(0, 0, 0.10f), Vector3(0.045f, 0.05f, 0.22f), gunMat);
-            AddPart(weaponModelNode_, Vector3(0, -0.075f, 0.02f), Vector3(0.04f, 0.11f, 0.055f), dark);
-            AddPart(weaponModelNode_, Vector3(0, 0.012f, 0.225f), Vector3(0.018f, 0.018f, 0.06f), accent);
+        case W_PISTOL: {
+            // Рельефный пистолет: рамка, затвор, ствол, прицельные, магазин в рукояти.
+            // Раньше это были 3 коробки — силуэт читался как заглушка.
+            AddPart(weaponModelNode_, Vector3(0, 0.012f, 0.10f), Vector3(0.043f, 0.052f, 0.20f), gunMat);   // затвор
+            AddPart(weaponModelNode_, Vector3(0, -0.038f, 0.085f), Vector3(0.040f, 0.042f, 0.185f), dark); // рамка
+            AddPart(weaponModelNode_, Vector3(0, 0.012f, 0.225f), Vector3(0.030f, 0.030f, 0.075f), dark, cyl);  // ствол
+            AddPart(weaponModelNode_, Vector3(0, 0.012f, 0.268f), Vector3(0.036f, 0.036f, 0.014f), accent, cyl); // дульный срез
+            // Пистолетная рукоять под наклоном + пятка магазина
+            Node* grip = AddPart(weaponModelNode_, Vector3(0, -0.105f, 0.012f), Vector3(0.038f, 0.125f, 0.058f), dark);
+            grip->SetRotation(Quaternion(-12.0f, Vector3(1, 0, 0)));
+            AddPart(weaponModelNode_, Vector3(0, -0.155f, -0.004f), Vector3(0.042f, 0.014f, 0.062f), accent);
+            // Прицельные: мушка + целик
+            AddPart(weaponModelNode_, Vector3(0, 0.048f, 0.198f), Vector3(0.007f, 0.014f, 0.010f), accent);
+            AddPart(weaponModelNode_, Vector3(-0.018f, 0.048f, 0.006f), Vector3(0.010f, 0.014f, 0.008f), dark);
+            AddPart(weaponModelNode_, Vector3( 0.018f, 0.048f, 0.006f), Vector3(0.010f, 0.014f, 0.008f), dark);
+            // Спусковая скоба и кнопка затворной задержки
+            AddPart(weaponModelNode_, Vector3(0, -0.062f, 0.082f), Vector3(0.026f, 0.006f, 0.042f), dark);
+            AddPart(weaponModelNode_, Vector3(0.024f, -0.010f, 0.055f), Vector3(0.008f, 0.014f, 0.030f), accent);
+            // Насечки на затворе (5 тонких рёбер — сразу читается как «ствол»)
+            for (int r = 0; r < 5; ++r)
+                AddPart(weaponModelNode_, Vector3(0, 0.038f, 0.020f + (float)r * 0.022f),
+                        Vector3(0.030f, 0.004f, 0.005f), accent);
             break;
-        case W_SMG:
-            AddPart(weaponModelNode_, Vector3(0, 0, 0.16f), Vector3(0.05f, 0.055f, 0.34f), gunMat);
-            AddPart(weaponModelNode_, Vector3(0, -0.09f, 0.04f), Vector3(0.04f, 0.12f, 0.05f), dark);
-            AddPart(weaponModelNode_, Vector3(0, -0.085f, 0.18f), Vector3(0.03f, 0.10f, 0.045f), dark);
-            AddPart(weaponModelNode_, Vector3(0, 0.045f, 0.10f), Vector3(0.02f, 0.02f, 0.16f), accent);
-            AddPart(weaponModelNode_, Vector3(0, 0.0f, 0.36f), Vector3(0.02f, 0.02f, 0.08f), gunMat, cyl);
+        }
+        case W_SMG: {
+            // Компактный ПП: ресивер, перфорированное цевьё, складной приклад, магазин.
+            AddPart(weaponModelNode_, Vector3(0, 0.004f, 0.13f), Vector3(0.048f, 0.056f, 0.26f), gunMat);   // ресивер
+            AddPart(weaponModelNode_, Vector3(0, -0.010f, 0.315f), Vector3(0.040f, 0.044f, 0.145f), dark); // цевьё
+            for (int h = 0; h < 6; ++h)                                                                    // вентиляция
+                AddPart(weaponModelNode_, Vector3(0, 0.014f, 0.258f + (float)h * 0.024f),
+                        Vector3(0.044f, 0.007f, 0.009f), accent);
+            AddPart(weaponModelNode_, Vector3(0, 0.004f, 0.415f), Vector3(0.019f, 0.019f, 0.095f), dark, cyl); // ствол
+            AddPart(weaponModelNode_, Vector3(0, 0.004f, 0.462f), Vector3(0.027f, 0.027f, 0.016f), accent, cyl); // пламегас
+            AddPart(weaponModelNode_, Vector3(0, 0.036f, 0.145f), Vector3(0.020f, 0.011f, 0.20f), dark);   // планка Пикатинни
+            for (int t = 0; t < 7; ++t)
+                AddPart(weaponModelNode_, Vector3(0, 0.045f, 0.060f + (float)t * 0.028f),
+                        Vector3(0.023f, 0.005f, 0.008f), dark);
+            AddPart(weaponModelNode_, Vector3(0, 0.062f, 0.115f), Vector3(0.024f, 0.026f, 0.060f), dark); // коллиматор
+            AddPart(weaponModelNode_, Vector3(0, 0.066f, 0.122f), Vector3(0.018f, 0.018f, 0.006f), accent); // линза
+            Node* smgGrip = AddPart(weaponModelNode_, Vector3(0, -0.098f, 0.030f), Vector3(0.036f, 0.115f, 0.052f), dark);
+            smgGrip->SetRotation(Quaternion(-10.0f, Vector3(1, 0, 0)));
+            AddPart(weaponModelNode_, Vector3(0, -0.108f, 0.155f), Vector3(0.030f, 0.115f, 0.046f), dark);  // магазин
+            AddPart(weaponModelNode_, Vector3(0, -0.052f, 0.300f), Vector3(0.028f, 0.058f, 0.040f), dark);  // передняя рукоять
+            AddPart(weaponModelNode_, Vector3(0, 0.000f, -0.075f), Vector3(0.026f, 0.034f, 0.085f), dark); // труба приклада
+            AddPart(weaponModelNode_, Vector3(0, -0.012f, -0.125f), Vector3(0.042f, 0.070f, 0.022f), dark); // затыльник
             break;
-        case W_RIFLE:
-            AddPart(weaponModelNode_, Vector3(0, 0, 0.24f), Vector3(0.05f, 0.06f, 0.55f), gunMat);
-            AddPart(weaponModelNode_, Vector3(0, -0.10f, 0.06f), Vector3(0.04f, 0.13f, 0.05f), dark);
-            AddPart(weaponModelNode_, Vector3(0, -0.09f, 0.24f), Vector3(0.032f, 0.12f, 0.05f), dark);
-            AddPart(weaponModelNode_, Vector3(0, 0.055f, 0.16f), Vector3(0.024f, 0.028f, 0.20f), accent);
-            AddPart(weaponModelNode_, Vector3(0, 0.055f, 0.28f), Vector3(0.03f, 0.03f, 0.02f), gunMat, cyl);
-            AddPart(weaponModelNode_, Vector3(0, 0.0f, 0.55f), Vector3(0.018f, 0.018f, 0.14f), gunMat, cyl);
-            AddPart(weaponModelNode_, Vector3(0, -0.02f, -0.06f), Vector3(0.045f, 0.06f, 0.14f), dark);
+        }
+        case W_RIFLE: {
+            // Штурмовая винтовка: ресивер, длинное цевьё с вентиляцией, газовая трубка,
+            // приклад с щекой, пистолетная рукоять, магазин, оптика на планке.
+            AddPart(weaponModelNode_, Vector3(0, 0.004f, 0.17f), Vector3(0.050f, 0.058f, 0.30f), gunMat);  // ресивер
+            AddPart(weaponModelNode_, Vector3(0, -0.004f, 0.44f), Vector3(0.043f, 0.050f, 0.26f), dark);  // цевьё
+            for (int h = 0; h < 7; ++h)
+                AddPart(weaponModelNode_, Vector3(0, 0.020f, 0.335f + (float)h * 0.031f),
+                        Vector3(0.046f, 0.008f, 0.010f), accent);
+            AddPart(weaponModelNode_, Vector3(0, 0.030f, 0.44f), Vector3(0.014f, 0.014f, 0.27f), dark, cyl); // газовая трубка
+            AddPart(weaponModelNode_, Vector3(0, 0.002f, 0.625f), Vector3(0.017f, 0.017f, 0.140f), gunMat, cyl); // ствол
+            AddPart(weaponModelNode_, Vector3(0, 0.002f, 0.700f), Vector3(0.024f, 0.024f, 0.026f), accent, cyl); // дульный тормоз
+            AddPart(weaponModelNode_, Vector3(0, 0.040f, 0.20f), Vector3(0.022f, 0.012f, 0.42f), dark);   // планка
+            for (int t = 0; t < 10; ++t)
+                AddPart(weaponModelNode_, Vector3(0, 0.050f, 0.075f + (float)t * 0.033f),
+                        Vector3(0.025f, 0.005f, 0.009f), dark);
+            AddPart(weaponModelNode_, Vector3(0, 0.070f, 0.155f), Vector3(0.026f, 0.030f, 0.115f), dark); // оптика
+            AddPart(weaponModelNode_, Vector3(0, 0.070f, 0.098f), Vector3(0.030f, 0.034f, 0.014f), accent);
+            AddPart(weaponModelNode_, Vector3(0, 0.070f, 0.212f), Vector3(0.030f, 0.034f, 0.014f), accent);
+            Node* rifleGrip = AddPart(weaponModelNode_, Vector3(0, -0.105f, 0.060f), Vector3(0.038f, 0.120f, 0.052f), dark);
+            rifleGrip->SetRotation(Quaternion(-11.0f, Vector3(1, 0, 0)));
+            AddPart(weaponModelNode_, Vector3(0, -0.085f, 0.150f), Vector3(0.032f, 0.135f, 0.058f), dark);  // магазин
+            AddPart(weaponModelNode_, Vector3(0, -0.052f, 0.395f), Vector3(0.030f, 0.062f, 0.042f), dark);  // передняя рукоять
+            AddPart(weaponModelNode_, Vector3(0, 0.000f, -0.075f), Vector3(0.030f, 0.040f, 0.105f), dark);  // труба приклада
+            AddPart(weaponModelNode_, Vector3(0, -0.008f, -0.140f), Vector3(0.044f, 0.080f, 0.026f), dark); // затыльник
+            AddPart(weaponModelNode_, Vector3(0, 0.036f, -0.115f), Vector3(0.034f, 0.022f, 0.070f), dark);  // щека приклада
             break;
-        case W_SHOTGUN:
-            AddPart(weaponModelNode_, Vector3(0, 0.012f, 0.28f), Vector3(0.028f, 0.028f, 0.55f), gunMat, cyl);
-            AddPart(weaponModelNode_, Vector3(0, -0.02f, 0.26f), Vector3(0.03f, 0.03f, 0.5f), gunMat, cyl);
-            AddPart(weaponModelNode_, Vector3(0, -0.015f, 0.10f), Vector3(0.06f, 0.05f, 0.22f), gunMat);
-            AddPart(weaponModelNode_, Vector3(0, -0.07f, 0.02f), Vector3(0.04f, 0.11f, 0.05f), dark);
-            AddPart(weaponModelNode_, Vector3(0, -0.045f, 0.30f), Vector3(0.05f, 0.035f, 0.12f), accent);
-            AddPart(weaponModelNode_, Vector3(0, -0.02f, -0.10f), Vector3(0.05f, 0.07f, 0.16f), dark);
+        }
+        case W_SHOTGUN: {
+            // Помпа: два ствола (гладкий + магазин), цевьё-помпа, ресивер, приклад.
+            AddPart(weaponModelNode_, Vector3(0, 0.016f, 0.34f), Vector3(0.030f, 0.030f, 0.58f), gunMat, cyl); // ствол
+            AddPart(weaponModelNode_, Vector3(0, -0.024f, 0.32f), Vector3(0.028f, 0.028f, 0.52f), dark, cyl);  // трубка магазина
+            AddPart(weaponModelNode_, Vector3(0, 0.016f, 0.625f), Vector3(0.034f, 0.034f, 0.020f), accent, cyl); // дульный срез
+            for (int h = 0; h < 5; ++h)                                                                           // рёбра помпы
+                AddPart(weaponModelNode_, Vector3(0, -0.032f, 0.215f + (float)h * 0.048f),
+                        Vector3(0.034f, 0.009f, 0.011f), accent);
+            AddPart(weaponModelNode_, Vector3(0, -0.030f, 0.320f), Vector3(0.036f, 0.040f, 0.170f), dark);  // цевьё-помпа
+            AddPart(weaponModelNode_, Vector3(0, -0.010f, 0.105f), Vector3(0.058f, 0.056f, 0.230f), gunMat); // ресивер
+            AddPart(weaponModelNode_, Vector3(0, 0.026f, 0.105f), Vector3(0.014f, 0.012f, 0.150f), dark);   // верхний гребень
+            AddPart(weaponModelNode_, Vector3(0, 0.045f, 0.180f), Vector3(0.009f, 0.012f, 0.010f), accent);  // мушка
+            AddPart(weaponModelNode_, Vector3(0, -0.100f, 0.030f), Vector3(0.042f, 0.120f, 0.056f), dark); // пистолетная рукоять
+            AddPart(weaponModelNode_, Vector3(0, -0.030f, -0.115f), Vector3(0.050f, 0.078f, 0.180f), dark); // приклад
+            AddPart(weaponModelNode_, Vector3(0, -0.045f, -0.205f), Vector3(0.054f, 0.092f, 0.024f), accent); // затыльник
+            AddPart(weaponModelNode_, Vector3(0, -0.070f, 0.135f), Vector3(0.030f, 0.048f, 0.062f), dark);  // спусковая рама
             break;
-        case W_SNIPER:
-            AddPart(weaponModelNode_, Vector3(0, 0, 0.30f), Vector3(0.04f, 0.05f, 0.7f), gunMat);
-            AddPart(weaponModelNode_, Vector3(0, 0.0f, 0.72f), Vector3(0.015f, 0.015f, 0.2f), gunMat, cyl);
-            AddPart(weaponModelNode_, Vector3(0, 0.07f, 0.26f), Vector3(0.028f, 0.028f, 0.26f), dark, cyl);
-            AddPart(weaponModelNode_, Vector3(0, 0.07f, 0.40f), Vector3(0.036f, 0.036f, 0.02f), accent, cyl);
-            AddPart(weaponModelNode_, Vector3(0, -0.10f, 0.08f), Vector3(0.04f, 0.12f, 0.05f), dark);
-            AddPart(weaponModelNode_, Vector3(0, -0.02f, -0.12f), Vector3(0.05f, 0.07f, 0.2f), dark);
-            AddPart(weaponModelNode_, Vector3(0, -0.05f, 0.5f), Vector3(0.02f, 0.06f, 0.02f), dark);
+        }
+        case W_SNIPER: {
+            // Болтовка: длинный ствол, тяжёлая ложа, большая оптика с блендой, сошки.
+            AddPart(weaponModelNode_, Vector3(0, 0.002f, 0.19f), Vector3(0.046f, 0.054f, 0.34f), gunMat);  // ресивер
+            AddPart(weaponModelNode_, Vector3(0, 0.002f, 0.62f), Vector3(0.019f, 0.019f, 0.52f), gunMat, cyl); // ствол
+            for (int f = 0; f < 4; ++f)                                                                        // долы ствола
+                AddPart(weaponModelNode_, Vector3(0, 0.002f, 0.44f + (float)f * 0.085f),
+                        Vector3(0.026f, 0.026f, 0.012f), dark, cyl);
+            AddPart(weaponModelNode_, Vector3(0, 0.002f, 0.885f), Vector3(0.028f, 0.028f, 0.030f), accent, cyl); // дульный тормоз
+            AddPart(weaponModelNode_, Vector3(0, 0.002f, 0.380f), Vector3(0.040f, 0.046f, 0.150f), dark);   // ложе впереди
+            AddPart(weaponModelNode_, Vector3(0, 0.070f, 0.180f), Vector3(0.030f, 0.032f, 0.330f), dark, cyl); // оптика
+            AddPart(weaponModelNode_, Vector3(0, 0.070f, 0.020f), Vector3(0.038f, 0.038f, 0.030f), accent, cyl); // окуляр
+            AddPart(weaponModelNode_, Vector3(0, 0.070f, 0.350f), Vector3(0.042f, 0.042f, 0.045f), accent, cyl); // объектив
+            for (int a = 0; a < 2; ++a)                                                                         // кольца крепления
+                AddPart(weaponModelNode_, Vector3(0, 0.042f, 0.100f + (float)a * 0.160f),
+                        Vector3(0.034f, 0.030f, 0.018f), dark);
+            AddPart(weaponModelNode_, Vector3(0.030f, 0.036f, 0.120f), Vector3(0.014f, 0.020f, 0.030f), accent); // барабанчик поправок
+            AddPart(weaponModelNode_, Vector3(0, 0.056f, 0.400f), Vector3(0.011f, 0.016f, 0.012f), accent);    // мушка
+            Node* snipGrip = AddPart(weaponModelNode_, Vector3(0, -0.100f, 0.055f), Vector3(0.038f, 0.120f, 0.054f), dark);
+            snipGrip->SetRotation(Quaternion(-10.0f, Vector3(1, 0, 0)));
+            AddPart(weaponModelNode_, Vector3(0, -0.030f, -0.135f), Vector3(0.048f, 0.082f, 0.210f), dark);  // приклад
+            AddPart(weaponModelNode_, Vector3(0, -0.048f, -0.238f), Vector3(0.052f, 0.098f, 0.026f), accent); // затыльник
+            AddPart(weaponModelNode_, Vector3(0, -0.078f, 0.150f), Vector3(0.034f, 0.042f, 0.070f), dark);   // магазин
+            // Сошки: две ноги вперёд-вниз
+            for (int lg = -1; lg <= 1; lg += 2) {
+                Node* leg = AddPart(weaponModelNode_, Vector3((float)lg * 0.030f, -0.095f, 0.430f),
+                                    Vector3(0.009f, 0.105f, 0.009f), dark, cyl);
+                leg->SetRotation(Quaternion((float)lg * 22.0f, Vector3(0, 0, 1)));
+            }
             break;
+        }
         case W_MINIGUN: {
             // Корпус и барабан из 6 стволов
-            AddPart(weaponModelNode_, Vector3(0, -0.01f, 0.14f), Vector3(0.09f, 0.10f, 0.34f), gunMat);
+            AddPart(weaponModelNode_, Vector3(0, -0.012f, 0.13f), Vector3(0.092f, 0.102f, 0.32f), gunMat);  // корпус
+            AddPart(weaponModelNode_, Vector3(0, 0.062f, 0.14f), Vector3(0.052f, 0.052f, 0.24f), dark);     // верхний кожух
+            AddPart(weaponModelNode_, Vector3(0, -0.098f, 0.010f), Vector3(0.050f, 0.120f, 0.072f), dark);  // рукоять
+            AddPart(weaponModelNode_, Vector3(0, -0.092f, 0.200f), Vector3(0.062f, 0.100f, 0.105f), dark);  // магазин-короб
+            // Вращающийся блок стволов: 6 стволов + передний/задний обод + кожух
+            weaponSpinNode_ = weaponModelNode_->CreateChild("MinigunBarrelBlock");
+            weaponSpinNode_->SetPosition(Vector3(0, -0.012f, 0.42f));
             for (int i = 0; i < 6; ++i) {
-                float ang = i * 60.0f;
-                Quaternion rot(ang, Vector3(1, 0, 0));
-                Vector3 off = rot * Vector3(0, 0.045f, 0);
-                Node* barrel = AddPart(weaponModelNode_, Vector3(off.x_, off.y_, 0.48f), Vector3(0.02f, 0.02f, 0.34f), accent, cyl);
-                barrel->SetRotation(rot);
-                barrel->SetPosition(Vector3(off.x_, off.y_, 0.48f));
+                const float ang = (float)i * 60.0f;
+                const Quaternion rot(ang, Vector3(0, 0, 1));
+                const Vector3 off = rot * Vector3(0, 0.044f, 0);
+                Node* barrel = AddPart(weaponSpinNode_, Vector3(off.x_, off.y_, 0.010f),
+                                       Vector3(0.017f, 0.017f, 0.34f), accent, cyl);
+                (void)barrel;
             }
-            AddPart(weaponModelNode_, Vector3(0, -0.10f, 0.02f), Vector3(0.05f, 0.12f, 0.07f), dark);      // рукоять
-            AddPart(weaponModelNode_, Vector3(0, -0.09f, 0.20f), Vector3(0.06f, 0.10f, 0.10f), dark);      // магазин-короб
-            AddPart(weaponModelNode_, Vector3(0, 0.06f, 0.14f), Vector3(0.05f, 0.05f, 0.22f), dark);       // верхний кожух
+            for (int r = 0; r < 2; ++r)                                                                     // ободы
+                AddPart(weaponSpinNode_, Vector3(0, 0, -0.100f + (float)r * 0.210f),
+                        Vector3(0.108f, 0.108f, 0.014f), gunMat, cyl);
+            AddPart(weaponModelNode_, Vector3(0, -0.012f, 0.42f), Vector3(0.105f, 0.105f, 0.020f), dark, cyl); // защитный кожух
+            AddPart(weaponModelNode_, Vector3(0, 0.086f, 0.05f), Vector3(0.030f, 0.016f, 0.060f), accent);  // рукоять переноски
             break;
         }
         case W_LAUNCHER: {
             // Труба гранатомёта + прицел + рукояти
-            AddPart(weaponModelNode_, Vector3(0, 0.02f, 0.30f), Vector3(0.075f, 0.075f, 0.62f), gunMat, cyl);
-            AddPart(weaponModelNode_, Vector3(0, 0.02f, 0.63f), Vector3(0.09f, 0.09f, 0.06f), accent, cyl);  // раструб
-            AddPart(weaponModelNode_, Vector3(0, 0.11f, 0.22f), Vector3(0.03f, 0.05f, 0.16f), dark);          // кронштейн прицела
-            AddPart(weaponModelNode_, Vector3(0, 0.15f, 0.22f), Vector3(0.045f, 0.03f, 0.12f), accent);       // оптика
-            AddPart(weaponModelNode_, Vector3(0, -0.09f, 0.06f), Vector3(0.04f, 0.12f, 0.05f), dark);         // пистолетная рукоять
-            AddPart(weaponModelNode_, Vector3(0, -0.06f, 0.34f), Vector3(0.04f, 0.06f, 0.10f), dark);         // передняя рукоять
-            AddPart(weaponModelNode_, Vector3(0, -0.01f, -0.05f), Vector3(0.07f, 0.09f, 0.14f), dark);        // затыльник
+            AddPart(weaponModelNode_, Vector3(0, 0.020f, 0.30f), Vector3(0.074f, 0.074f, 0.60f), gunMat, cyl); // труба
+            AddPart(weaponModelNode_, Vector3(0, 0.020f, 0.62f), Vector3(0.094f, 0.094f, 0.070f), accent, cyl); // раструб
+            AddPart(weaponModelNode_, Vector3(0, 0.020f, 0.585f), Vector3(0.088f, 0.088f, 0.012f), dark, cyl);  // кольцо раструба
+            for (int h = 0; h < 4; ++h)                                                                       // окна вентиляции
+                AddPart(weaponModelNode_, Vector3(0, 0.020f, 0.170f + (float)h * 0.085f),
+                        Vector3(0.078f, 0.026f, 0.014f), dark);
+            AddPart(weaponModelNode_, Vector3(0, 0.112f, 0.220f), Vector3(0.030f, 0.050f, 0.160f), dark);     // кронштейн
+            AddPart(weaponModelNode_, Vector3(0, 0.152f, 0.220f), Vector3(0.046f, 0.032f, 0.130f), accent);   // оптика
+            AddPart(weaponModelNode_, Vector3(0, 0.152f, 0.285f), Vector3(0.038f, 0.038f, 0.016f), dark, cyl); // объектив
+            AddPart(weaponModelNode_, Vector3(0, 0.152f, 0.152f), Vector3(0.034f, 0.034f, 0.014f), dark, cyl); // окуляр
+            AddPart(weaponModelNode_, Vector3(0, -0.092f, 0.060f), Vector3(0.042f, 0.122f, 0.052f), dark);    // пистолетная рукоять
+            AddPart(weaponModelNode_, Vector3(0, -0.058f, 0.340f), Vector3(0.040f, 0.062f, 0.105f), dark);    // передняя рукоять
+            AddPart(weaponModelNode_, Vector3(0, -0.010f, -0.070f), Vector3(0.072f, 0.092f, 0.150f), dark);   // затыльник
+            AddPart(weaponModelNode_, Vector3(0, 0.096f, 0.060f), Vector3(0.030f, 0.014f, 0.055f), accent);   // рукоять переноски
+            for (int lg = -1; lg <= 1; lg += 2) {                                                             // сошки
+                Node* leg = AddPart(weaponModelNode_, Vector3((float)lg * 0.032f, -0.088f, 0.500f),
+                                    Vector3(0.010f, 0.110f, 0.010f), dark, cyl);
+                leg->SetRotation(Quaternion((float)lg * 20.0f, Vector3(0, 0, 1)));
+            }
             break;
         }
         case W_RAILGUN: {
@@ -4438,7 +4583,8 @@ private:
             "FPS: " + String(fps) + "  (" + String(avgMs, 1) + " ms, худший " + String(worstMs, 1) + ")\n"
             "RES: " + String(gfx->GetWidth()) + "x" + String(gfx->GetHeight()) +
             "  MSAA: " + String(gfx->GetMultiSample()) + "x\n"
-            "PRESET: " + String(qNames[Clamp(gfxQualityIdx_, 0, 3)]) + "\n"
+            "PRESET: " + String(qNames[Clamp(gfxQualityIdx_, 0, 3)]) +
+            (gpuTier_ != Perf::TIER_UNKNOWN ? String("  [") + Perf::TierName(gpuTier_) + "]" : String()) + "\n"
             "POST: " + String(gfxSsao_ ? "SSAO4K " : "") + String(gfxGlowIdx_ > 0 ? "BLOOM " : "") +
             String("ACES ") + String(gfxSharpen_ ? "CAS4K " : "") + String(gfxFxaa_ ? "FXAA" : "") + "\n"
             "SHADOW: " + String(gfxShadowIdx_ > 0 ? "on" : "off") + " normal-offset\n"
@@ -8633,6 +8779,9 @@ private:
 
         XMLElement gfx = rootEl.GetChild("graphics");
         if (!gfx) gfx = rootEl;
+        // Запоминаем: если секция есть, настройки выставлял игрок — авто-детект
+        // железа не должен их перетирать.
+        settingsFileHasGfx_ = (bool)gfx && gfx.HasAttribute("qualityPreset");
 
         gfxQualityIdx_  = Clamp(XmlGetInt(gfx, "qualityPreset", gfxQualityIdx_), 0, 3);
         gfxResIdx_      = Clamp(XmlGetInt(gfx, "resPreset",     gfxResIdx_),     0, 4);
@@ -8852,6 +9001,63 @@ private:
 
         if (soundSource_) soundSource_->SetGain(sfxVolume_);
         if (musicSource_) musicSource_->SetGain(musicVolume_);
+    }
+
+    // Строка рендерера OpenGL. У SDL она берётся вызовом glGetString, но тащить
+    // GL-заголовки в MyApp.cpp не хочется (разные платформы, GLES2/GL3), поэтому
+    // спрашиваем SDL тем же инстансом, которым пользуется движок.
+    String QueryRendererName() {
+#if defined(__linux__) && !defined(__ANDROID__)
+        if (const char* r = SDL_GetCurrentVideoDriver()) {
+            // Используем SDL только для строки драйвера: если контекст ещё не создан,
+            // вернёт пусто — тогда сработает безопасный UNKNOWN.
+            (void)r;
+        }
+        if (SDL_WasInit(SDL_INIT_VIDEO)) {
+            SDL_Window* w = SDL_GL_GetCurrentWindow();
+            if (w) {
+                SDL_GLContext ctx = SDL_GL_GetCurrentContext();
+                if (ctx) {
+                    typedef const unsigned char* (*GetStringFn)(unsigned);
+                    // GL_RENDERER = 0x1F01 — единственная константа, которая нужна;
+                    // объявляем локально, чтобы не подключать <GL/gl.h>.
+                    GetStringFn getStr = (GetStringFn)SDL_GL_GetProcAddress("glGetString");
+                    if (getStr) {
+                        const unsigned char* raw = getStr(0x1F01);
+                        if (raw) return String(reinterpret_cast<const char*>(raw));
+                    }
+                }
+            }
+        }
+#endif
+        return String::EMPTY;
+    }
+
+    // Выставить поля из пресета (не трогая индекс пресета, если он задан вручную).
+    void ApplyPerfPreset(const Perf::Preset& p) {
+        gfxMsaaIdx_ = p.msaaIdx;
+        gfxShadowIdx_ = p.shadowIdx;
+        gfxGlowIdx_ = p.glowIdx;
+        gfxAnisoIdx_ = p.anisoIdx;
+        gfxSsao_ = p.ssao;
+        gfxHdr_ = p.hdr;
+        gfxFxaa_ = p.fxaa;
+        gfxSharpen_ = p.sharpen;
+        gfxResIdx_ = p.resIdx;
+    }
+
+    // Авто-настройка под железо. Вызывается ОДИН раз после создания окна и
+    // только если игрок ещё не сохранял настройки (иначе уважаем его выбор).
+    void AutoDetectHardware(bool force = false) {
+        gpuRendererName_ = QueryRendererName();
+        gpuTier_ = Perf::DetectTier(std::string(gpuRendererName_.CString()));
+        if (gpuTier_ == Perf::TIER_UNKNOWN && !force) return;
+        if (settingsFileHasGfx_ && !force) return;   // выбор игрока важнее
+        const Perf::Preset p = Perf::PresetForTier(gpuTier_);
+        gfxQualityIdx_ = p.qualityIdx;
+        ApplyPerfPreset(p);
+        ShowMessage(String("Железо: ") + Perf::TierName(gpuTier_) +
+                    " → пресет " + String(p.qualityIdx) + "  [F7/F9]");
     }
 
     void ApplyQualityPresetDefaults() {
