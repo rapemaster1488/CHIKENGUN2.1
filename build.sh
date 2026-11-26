@@ -219,6 +219,11 @@ if [ "$TESTS_ONLY" -eq 1 ]; then
     "$CXX" -O3 -std=c++17 -pthread "$ROOT/tools/gen_textures_4k.cpp" -o "$ROOT/build/gen_textures_4k${EXE_EXT}"
     "$CXX" -O2 -std=c++17 -Wall -Wextra -Werror -UNDEBUG "$ROOT/tests/test_core.cpp" -o "$ROOT/build/test_core${EXE_EXT}"
     (cd "$ROOT" && CHIKENGUN_DATA_DIR="$ROOT/Data" "$ROOT/build/test_core${EXE_EXT}" "$ROOT/build/gen_textures_4k${EXE_EXT}")
+    echo "[Tests] Компиляция headless-тестов казино и авто-детекта железа..."
+    "$CXX" -O2 -std=c++17 -Wall -Wextra -Werror -UNDEBUG "$ROOT/tests/test_casino_anim.cpp" -o "$ROOT/build/test_casino_anim${EXE_EXT}"
+    "$ROOT/build/test_casino_anim${EXE_EXT}"
+    "$CXX" -O2 -std=c++17 -Wall -Wextra -Werror -UNDEBUG "$ROOT/tests/test_perf_tier.cpp" -o "$ROOT/build/test_perf_tier${EXE_EXT}"
+    "$ROOT/build/test_perf_tier${EXE_EXT}"
     if [ "$OS_NAME" = "Linux" ]; then
         "$CXX" -O2 -std=c++17 -Wall -Wextra -Werror -UNDEBUG -I"$ROOT/tests/fake" \
             "$ROOT/tests/test_sdl_policy.cpp" -o "$ROOT/build/test_sdl_policy"
