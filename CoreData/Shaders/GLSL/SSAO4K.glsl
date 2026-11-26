@@ -26,7 +26,7 @@ void PS()
 #if !defined(GL_ES) || __VERSION__ >= 300
     #ifdef AOCALC
     float dCenter = ReconstructDepth(texture2D(sDepthBuffer, vTexCoord).r);
-    if (dCenter > 0.985)
+    if (dCenter > 0.96)
     {
         gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
         return;
@@ -45,19 +45,19 @@ void PS()
     slopeY /= max(px.y, 1e-6);
 
     float zMeters = max(dCenter * cFarClipPS, 0.8);
-    float baseRadiusPx = clamp((cSSAORadius * 420.0) / zMeters, 2.5, 32.0);
+    float baseRadiusPx = clamp((cSSAORadius * 420.0) / zMeters, 2.5, 28.0);
 
     // Interleaved Gradient Noise rotation
     float ign = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
     float baseAng = ign * 6.2831853;
 
     float occ = 0.0;
-    for (int i = 0; i < 12; ++i)
+    for (int i = 0; i < 8; ++i)
     {
-        float fi = (float(i) + 0.5) / 12.0;
+        float fi = (float(i) + 0.5) / 8.0;
         float ang = baseAng + float(i) * 2.3999632; // Golden angle
         vec2 dir = vec2(cos(ang), sin(ang));
-        vec2 off = dir * (baseRadiusPx * (0.20 + 0.80 * fi)) * px;
+        vec2 off = dir * (baseRadiusPx * (0.22 + 0.78 * fi)) * px;
         vec2 suv = clamp(vTexCoord + off, 0.001, 0.999);
 
         float dSample = ReconstructDepth(texture2D(sDepthBuffer, suv).r);
@@ -69,7 +69,7 @@ void PS()
         occ += hit * rangeCheck;
     }
 
-    float ao = clamp(1.0 - (occ / 12.0) * 1.45, 0.15, 1.0);
+    float ao = clamp(1.0 - (occ / 8.0) * 1.45, 0.15, 1.0);
     // Fade SSAO gracefully into distance fog
     ao = mix(ao, 1.0, smoothstep(0.35, 0.85, dCenter));
     gl_FragColor = vec4(ao, dCenter, 0.0, 1.0);

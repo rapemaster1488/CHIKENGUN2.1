@@ -26,27 +26,41 @@ inline float Dot3(const Vec3& a, const Vec3& b) {
 
 template <typename Vec3>
 inline float RaySphereT(const Vec3& o, const Vec3& d, const Vec3& c, float r) {
+    // Полная квадратичная форма: работает и для ненормализованного луча,
+    // и для старта внутри сферы (нужен дальний корень выхода).
+    const float a = Dot3(d, d);
+    if (a < 1e-12f || r < 0.0f) return -1.0f;
     Vec3 oc(o.x_ - c.x_, o.y_ - c.y_, o.z_ - c.z_);
-    float b = Dot3(oc, d);
-    float cc = Dot3(oc, oc) - r * r;
-    float disc = b * b - cc;
+    const float b = Dot3(oc, d);
+    const float cc = Dot3(oc, oc) - r * r;
+    const float disc = b * b - a * cc;
     if (disc < 0.0f) return -1.0f;
-    float t = -b - std::sqrt(disc);
-    return t > 0.0f ? t : -1.0f;
+    const float root = std::sqrt(disc);
+    const float nearT = (-b - root) / a;
+    if (nearT >= 0.0f) return nearT;
+    const float farT = (-b + root) / a;
+    return farT >= 0.0f ? farT : -1.0f;
 }
 
 template <typename Vec3>
 inline float RayBoxT(const Vec3& o, const Vec3& d, const Vec3& c, const Vec3& h) {
-    // Явное обращение к x_/y_/z_ (без арифметики указателей, т.к. у Urho3D::Vector3 возможно выравнивание).
+    // Полный slab-тест. Не обнуляем tmin заранее: если луч начинается
+    // внутри AABB, возвращаем дальнюю грань (tmax), как RaySphereT делает
+    // с дальним корнем. Это не создаёт ложного попадания в точке старта.
+    // Явное обращение к x_/y_/z_ важно: у Urho3D::Vector3 возможно выравнивание.
     struct Axis { float ox, dx, cx, hx; };
     const Axis axes[3] = {
         { o.x_, d.x_, c.x_, h.x_ },
         { o.y_, d.y_, c.y_, h.y_ },
         { o.z_, d.z_, c.z_, h.z_ },
     };
-    float tmin = 0.0f, tmax = 1e9f;
+    if (std::fabs(d.x_) < 1e-7f && std::fabs(d.y_) < 1e-7f && std::fabs(d.z_) < 1e-7f)
+        return -1.0f;
+
+    float tmin = -1e9f, tmax = 1e9f;
     for (int a = 0; a < 3; ++a) {
         const Axis& A = axes[a];
+        if (A.hx < 0.0f) return -1.0f;
         if (std::fabs(A.dx) < 1e-7f) {
             if (A.ox < A.cx - A.hx || A.ox > A.cx + A.hx) return -1.0f;
         } else {
@@ -59,7 +73,8 @@ inline float RayBoxT(const Vec3& o, const Vec3& d, const Vec3& c, const Vec3& h)
             if (tmin > tmax) return -1.0f;
         }
     }
-    return tmin;
+    if (tmax < 0.0f) return -1.0f;
+    return tmin >= 0.0f ? tmin : tmax;
 }
 
 template <typename Vec3>

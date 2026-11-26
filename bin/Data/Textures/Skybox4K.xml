@@ -1,9 +1,0 @@
-<cubemap>
-    <face name="Sky4K_PosX.png" />
-    <face name="Sky4K_NegX.png" />
-    <face name="Sky4K_PosY.png" />
-    <face name="Sky4K_NegY.png" />
-    <face name="Sky4K_PosZ.png" />
-    <face name="Sky4K_NegZ.png" />
-    <quality low="0" />
-</cubemap>

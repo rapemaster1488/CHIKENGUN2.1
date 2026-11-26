@@ -522,6 +522,85 @@ def gen_banya_door():
     return out
 
 
+def gen_casino_wheel_spin():
+    """VIP-рулетка: плавный шелест трека и затухающие щелчки шарика по алмазным порожкам."""
+    dur = 1.65
+    n = int(SR * dur)
+    rng = random.Random(7771)
+    out = [0.0] * n
+    lp = 0.0
+    click_times = [0.08, 0.17, 0.27, 0.38, 0.50, 0.64, 0.79, 0.96, 1.15, 1.35, 1.52]
+    for i in range(n):
+        t = i / SR
+        noise = rng.random() * 2.0 - 1.0
+        lp = lp * 0.78 + noise * 0.22
+        roll = (lp * 0.25 + 0.10 * math.sin(2 * math.pi * (140.0 + 90.0 * (1.0 - t / dur)) * t)) * env_ad(t, dur, 0.04, 1.3)
+        clicks = 0.0
+        for idx_c, ct in enumerate(click_times):
+            if t >= ct:
+                dt_c = t - ct
+                if dt_c < 0.055:
+                    f_c = 1950.0 + (idx_c % 3) * 280.0
+                    clicks += 0.65 * math.sin(2 * math.pi * f_c * dt_c) * math.exp(-dt_c * 95.0)
+                    clicks += 0.30 * math.sin(2 * math.pi * 620.0 * dt_c) * math.exp(-dt_c * 110.0)
+        out[i] = math.tanh((roll + clicks) * 1.35)
+    return out
+
+
+def gen_casino_chip_click():
+    """Сочный звонкий стук керамических и золотых VIP-фишек."""
+    dur = 0.16
+    n = int(SR * dur)
+    out = [0.0] * n
+    for i in range(n):
+        t = i / SR
+        s1 = (0.55 * math.sin(2 * math.pi * 2450.0 * t) + 0.35 * math.sin(2 * math.pi * 3820.0 * t)) * math.exp(-t * 85.0)
+        s2 = 0.0
+        if t >= 0.045:
+            dt2 = t - 0.045
+            s2 = (0.50 * math.sin(2 * math.pi * 2720.0 * dt2) + 0.30 * math.sin(2 * math.pi * 4120.0 * dt2)) * math.exp(-dt2 * 92.0)
+        out[i] = math.tanh((s1 + s2) * 1.3)
+    return out
+
+
+def gen_casino_slot_stop():
+    """Тяжёлый механический стопор 3D-барабана + короткий латунный дзинь."""
+    dur = 0.20
+    n = int(SR * dur)
+    out = [0.0] * n
+    for i in range(n):
+        t = i / SR
+        thud = 0.65 * math.sin(2 * math.pi * (165.0 * math.exp(-t * 18.0) + 55.0) * t) * math.exp(-t * 32.0)
+        ding = 0.42 * math.sin(2 * math.pi * 1760.0 * t) * math.exp(-t * 24.0)
+        out[i] = math.tanh((thud + ding) * 1.45)
+    return out
+
+
+def gen_casino_jackpot():
+    """Джекпот VIP-казино: торжественный мажорный аккорд и звонкий каскад золотых монет."""
+    dur = 1.45
+    n = int(SR * dur)
+    rng = random.Random(7777)
+    out = [0.0] * n
+    notes = [(0.00, 523.25), (0.09, 659.25), (0.18, 783.99), (0.28, 1046.50), (0.40, 1318.51)]
+    coins = [(0.12 + k * 0.065, 2900.0 + (k % 5) * 410.0) for k in range(18)]
+    for i in range(n):
+        t = i / SR
+        s = 0.0
+        for st, f in notes:
+            if t >= st:
+                lt = t - st
+                s += (0.28 * math.sin(2 * math.pi * f * lt) + 0.12 * math.sin(4 * math.pi * f * lt)) * math.exp(-lt * 2.5)
+        for ct, cf in coins:
+            if t >= ct:
+                lt = t - ct
+                if lt < 0.14:
+                    s += 0.22 * (math.sin(2 * math.pi * cf * lt) + 0.45 * math.sin(2 * math.pi * cf * 1.52 * lt)) * math.exp(-lt * 32.0)
+        s += 0.03 * (rng.random() * 2.0 - 1.0) * env_ad(t, dur, 0.05, 1.8)
+        out[i] = math.tanh(s * 1.35)
+    return out
+
+
 def main():
     targets = ["Data/Sounds", "bin/Data/Sounds"]
     sounds = {
@@ -552,6 +631,10 @@ def main():
         "BanyaVenik.wav":    gen_banya_venik(),
         "BanyaSplash.wav":   gen_banya_splash(),
         "BanyaDoor.wav":     gen_banya_door(),
+        "CasinoWheelSpin.wav": gen_casino_wheel_spin(),
+        "CasinoChipClick.wav": gen_casino_chip_click(),
+        "CasinoSlotStop.wav":  gen_casino_slot_stop(),
+        "CasinoJackpot.wav":   gen_casino_jackpot(),
     }
     for d in targets:
         if os.path.isdir(os.path.dirname(d)) or d == "Data/Sounds":

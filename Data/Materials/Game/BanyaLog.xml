@@ -1,0 +1,11 @@
+<material>
+    <technique name="Techniques/PBR/PBRMetallicRoughDiffNormalSpec.xml" quality="2" />
+    <technique name="Techniques/DiffNormalSpec.xml" quality="1" />
+    <technique name="Techniques/Diff.xml" quality="0" />
+    <texture unit="diffuse" name="Textures/BanyaLogDiffuse.png" />
+    <texture unit="normal" name="Textures/BanyaLogNormal.png" />
+    <texture unit="specular" name="Textures/BanyaLogRoughMetal.png" />
+    <parameter name="Roughness" value="0" />
+    <parameter name="Metallic" value="0" />
+    <parameter name="MatSpecColor" value="0.38 0.34 0.28 24" />
+</material>

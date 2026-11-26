@@ -1,5 +1,5 @@
 // ============================================================================
-// Модульные тесты CHIKENGUN 2.3 [4K ULTRA & CYBER EVOLUTION]
+// Модульные тесты CHIKENGUN 2.5 «ПЕРО СУДЬБЫ» [4K ULTRA]
 // Напрямую подключают и тестируют боевые заголовки src/LitePhysics.h и
 // src/CyberSystems.h (RayBoxT, RaySphereT, ComputeGrapplePullT, кэш FNV-1a,
 // мутаторы волн, заряд орбитального удара «ЯЙЦЕГЕДДОН», экономику перков,
@@ -7,6 +7,7 @@
 // ============================================================================
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -21,6 +22,11 @@
 #include "../src/LitePhysics.h"
 #include "../src/CyberSystems.h"
 #include "../src/BanyaSim.h"
+#include "../src/CasinoSim.h"
+#include "../src/CasinoAnimation.h"
+#include "../src/ArcadeGames.h"
+#include "../src/SplashIntro.h"
+#include "../src/SettingsParsing.h"
 
 namespace fs = std::filesystem;
 
@@ -67,7 +73,11 @@ static void CheckPngFile(const fs::path& p, uint32_t expectW, uint32_t expectH) 
 }
 
 int main(int argc, char** argv) {
-    std::cout << "[test_core] 1/8 Проверка Lite::RayBoxT и HitNormalBoxT (src/LitePhysics.h)..." << std::endl;
+    // Installed tests can run from any directory while still checking the
+    // shipped assets; CTest and the shell builder point this at the source tree.
+    const char* dataEnv = std::getenv("CHIKENGUN_DATA_DIR");
+    const fs::path dataDir = dataEnv && *dataEnv ? fs::path(dataEnv) : fs::path("Data");
+    std::cout << "[test_core] 1/11 Проверка Lite::RayBoxT и HitNormalBoxT (src/LitePhysics.h)..." << std::endl;
     {
         float t = Lite::RayBoxT<TestVec3>({0, 1, -5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1});
         assert(std::fabs(t - 4.0f) < 1e-4f);
@@ -76,9 +86,17 @@ int main(int argc, char** argv) {
 
         assert(Lite::RayBoxT<TestVec3>({0, 5, -5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
         assert(Lite::RayBoxT<TestVec3>({0, 1,  5}, {0, 0, 1}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
+
+        // Изнутри AABB нужен выход, а не нулевая дистанция до самого старта.
+        float inside = Lite::RayBoxT<TestVec3>({0, 1, 0}, {2, 0, 0}, {0, 1, 0}, {1, 1, 1});
+        assert(std::fabs(inside - 0.5f) < 1e-4f);
+        assert(Lite::RayBoxT<TestVec3>({0, 1, 0}, {0, 0, 0}, {0, 1, 0}, {1, 1, 1}) < 0.0f);
+        // На грани луч наружу попадает в t=0, внутрь — до дальней грани.
+        assert(std::fabs(Lite::RayBoxT<TestVec3>({1, 1, 0}, {1, 0, 0}, {0, 1, 0}, {1, 1, 1})) < 1e-4f);
+        assert(std::fabs(Lite::RayBoxT<TestVec3>({1, 1, 0}, {-1, 0, 0}, {0, 1, 0}, {1, 1, 1})) < 1e-4f);
     }
 
-    std::cout << "[test_core] 2/8 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
+    std::cout << "[test_core] 2/11 Проверка Lite::RaySphereT и сквозного луча Рельсотрона..." << std::endl;
     {
         float t1 = Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {0, 1, 10}, 1.0f);
         float t2 = Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {0, 1, 22}, 1.0f);
@@ -86,9 +104,15 @@ int main(int argc, char** argv) {
         assert(std::fabs(t2 - 21.0f) < 1e-4f);
         assert(t1 < t2);
         assert(Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 1}, {5, 1, 10}, 1.0f) < 0.0f);
+
+        // Луч может начинаться внутри коллайдера: возвращаем точку выхода,
+        // а ненормализованный direction не должен менять геометрию попадания.
+        float inside = Lite::RaySphereT<TestVec3>({0, 1, 10}, {0, 0, 2}, {0, 1, 10}, 1.0f);
+        assert(std::fabs(inside - 0.5f) < 1e-4f);
+        assert(Lite::RaySphereT<TestVec3>({0, 1, 0}, {0, 0, 0}, {0, 1, 10}, 1.0f) < 0.0f);
     }
 
-    std::cout << "[test_core] 3/8 Проверка кинематики Грэппл-крюка [Z] и FNV-1a кэша материалов..." << std::endl;
+    std::cout << "[test_core] 3/11 Проверка кинематики Грэппл-крюка [Z] и FNV-1a кэша материалов..." << std::endl;
     {
         bool rel = false;
         TestVec3 pull = Lite::ComputeGrapplePullT<TestVec3>({0, 2, 0}, {0, 2, 20}, 28.0f, 2.0f, rel);
@@ -106,7 +130,7 @@ int main(int argc, char** argv) {
         assert(h1 == h2 && h1 != h3);
     }
 
-    std::cout << "[test_core] 4/8 Проверка систем CyberSystems.h (мутаторы, Орбита [X], перки, 14 достижений)..." << std::endl;
+    std::cout << "[test_core] 4/11 Проверка систем CyberSystems.h (мутаторы, Орбита [X], перки, 14 достижений)..." << std::endl;
     {
         assert(Cyber::PickWaveMutator(1, 42) == Cyber::MUT_STANDARD);
         assert(Cyber::PickWaveMutator(5, 17) == Cyber::MUT_GOLDRUSH);
@@ -126,7 +150,7 @@ int main(int argc, char** argv) {
         assert(Cyber::CountUnlockedAchievements(Cyber::ALL_ACHIEVEMENTS_MASK) == 14);
     }
 
-    std::cout << "[test_core] 5/8 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
+    std::cout << "[test_core] 5/11 Проверка аналитического пола и компакции коллайдеров..." << std::endl;
     {
         TestVec3 orig(0, 2, 0);
         TestVec3 dir = TestVec3(0, -1, 1).Normalized();
@@ -147,26 +171,26 @@ int main(int argc, char** argv) {
         assert(remap[0] == 0 && remap[1] == -1 && remap[2] == 1 && remap[4] == 2);
     }
 
-    std::cout << "[test_core] 6/8 Проверка XML-парсера и наличия 27 WAV-эффектов (вкл. баню)..." << std::endl;
+    std::cout << "[test_core] 6/11 Проверка XML-парсера и WAV-эффектов (вкл. баню и VIP-казино)..." << std::endl;
     {
         assert(ParseXmlIntAttr("true", 0) == 1);
         assert(ParseXmlIntAttr("ON", 0) == 1);
         assert(ParseXmlIntAttr("false", 1) == 0);
         assert(ParseXmlIntAttr("16", 1) == 16);
         assert(ParseXmlIntAttr("", 3) == 3);
-        if (fs::exists("Data/Sounds")) {
-            assert(fs::exists("Data/Sounds/Grapple.wav") && fs::file_size("Data/Sounds/Grapple.wav") > 1000);
-            assert(fs::exists("Data/Sounds/OrbitalStrike.wav") && fs::file_size("Data/Sounds/OrbitalStrike.wav") > 1000);
-            assert(fs::exists("Data/Sounds/Shot_Railgun.wav"));
-            assert(fs::exists("Data/Sounds/Shot_Plasma.wav"));
-            assert(fs::exists("Data/Sounds/BanyaSteam.wav") && fs::file_size("Data/Sounds/BanyaSteam.wav") > 1000);
-            assert(fs::exists("Data/Sounds/BanyaVenik.wav") && fs::file_size("Data/Sounds/BanyaVenik.wav") > 1000);
-            assert(fs::exists("Data/Sounds/BanyaSplash.wav") && fs::file_size("Data/Sounds/BanyaSplash.wav") > 1000);
-            assert(fs::exists("Data/Sounds/BanyaDoor.wav") && fs::file_size("Data/Sounds/BanyaDoor.wav") > 1000);
+        if (fs::exists(dataDir / "Sounds")) {
+            assert(fs::exists(dataDir / "Sounds/Grapple.wav") && fs::file_size(dataDir / "Sounds/Grapple.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/OrbitalStrike.wav") && fs::file_size(dataDir / "Sounds/OrbitalStrike.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/Shot_Railgun.wav"));
+            assert(fs::exists(dataDir / "Sounds/Shot_Plasma.wav"));
+            assert(fs::exists(dataDir / "Sounds/BanyaSteam.wav") && fs::file_size(dataDir / "Sounds/BanyaSteam.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/BanyaVenik.wav") && fs::file_size(dataDir / "Sounds/BanyaVenik.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/BanyaSplash.wav") && fs::file_size(dataDir / "Sounds/BanyaSplash.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/BanyaDoor.wav") && fs::file_size(dataDir / "Sounds/BanyaDoor.wav") > 1000);
         }
     }
 
-    std::cout << "[test_core] 7/8 Проверка симулятора «Кочет в баньке» (src/BanyaSim.h: 14 концовок + 57 загадок)..." << std::endl;
+    std::cout << "[test_core] 7/11 Проверка симулятора «Кочет в баньке» (src/BanyaSim.h: 14 концовок + 57 загадок)..." << std::endl;
     {
         // 57 уникальных загадок без повторов внутри пула и с перемешиванием вариантов
         Banya::Simulator sim(12345u);
@@ -279,24 +303,392 @@ int main(int argc, char** argv) {
         assert(Banya::ComputeCreditsReward(sim.CurrentScore(), Banya::END_STEWARD) > 200);
     }
 
-    std::cout << "[test_core] 8/8 Проверка базовых PBR текстур и генератора..." << std::endl;
-    if (fs::exists("Data/Textures/Skybox4K.xml")) {
-        CheckPngFile("Data/Textures/StoneHDDiffuse.png", 512, 512);
-        CheckPngFile("Data/Textures/Sky4K_PosZ.png", 1024, 1024);
-        CheckPngFile("Data/Textures/LoadingBg4K.png", 1920, 1080);
+    std::cout << "[test_core] 8/11 Проверка нативного казино (src/CasinoSim.h: Рулетка + Слоты 777)..." << std::endl;
+    {
+        // Timelines advance in seconds, not frames; old FPS settings retain meaning.
+        assert(CasinoAnimation::FpsLimit(0) == 60);
+        assert(CasinoAnimation::FpsLimit(1) == 120);
+        assert(CasinoAnimation::FpsLimit(2) == 0);
+        assert(CasinoAnimation::FpsLimit(3) == 240);
+        for (int fps : {30,60,120,240}) {
+            CasinoAnimation::Timeline clock; clock.Reset(2.0);
+            for (int i=0; i<fps; ++i) clock.Step(1.0/fps);
+            assert(std::fabs(clock.Progress()-0.5f) < 0.00001f);
+            assert(std::fabs(CasinoAnimation::Ease(clock.Progress())-0.5f) < 0.00001f);
+            clock.Step(5.0); assert(clock.Done() && clock.Progress() == 1.0f);
+            clock.Step(-1.0); assert(clock.Progress() == 1.0f);
+        }
+        assert(CasinoAnimation::Outcome(100, 50) == -1); // partial return is a loss
+        assert(CasinoAnimation::Outcome(100, 100) == 0);
+        assert(CasinoAnimation::Outcome(100, 200) == 1);
+
+        Casino::Bet red{Casino::BET_RED, 25, 7};
+        assert(Casino::Wins(red, 19));
+        assert(!Casino::Wins(red, 20));
+        assert(!Casino::Wins(red, 0));
+        assert(Casino::Payout(red, 19) == 50);
+        assert(Casino::Net(red, 19) == 25);
+        assert(Casino::Net(red, 20) == -25);
+
+        Casino::Bet exact{Casino::BET_NUMBER, 10, 7};
+        assert(Casino::Wins(exact, 7));
+        assert(Casino::Payout(exact, 7) == 360);
+        assert(!Casino::Wins(exact, 8));
+
+        Casino::Bet dozen{Casino::BET_DOZEN, 10, 24};
+        assert(Casino::Wins(dozen, 24) && !Casino::Wins(dozen, 12));
+        Casino::Bet column{Casino::BET_COLUMN, 10, 2};
+        assert(Casino::Wins(column, 5) && !Casino::Wins(column, 4));
+        Casino::Bet split{Casino::BET_SPLIT, 10, 7};
+        assert(Casino::Wins(split, 7) && Casino::Wins(split, 8) && !Casino::Wins(split, 9));
+        Casino::Bet street{Casino::BET_STREET, 10, 7};
+        assert(Casino::Wins(street, 9) && !Casino::Wins(street, 10));
+        Casino::Bet corner{Casino::BET_CORNER, 10, 4};
+        assert(Casino::Wins(corner, 5) && Casino::Wins(corner, 8) && !Casino::Wins(corner, 9));
+        Casino::Bet sixline{Casino::BET_SIXLINE, 10, 7};
+        assert(Casino::Wins(sixline, 12) && !Casino::Wins(sixline, 13));
+        assert(Casino::PayoutMultiplier(Casino::BET_CORNER) == 9);
+        assert(Casino::ColorName(0) == std::string("ЗЕРО"));
+        assert(Casino::IsBlack(2) && !Casino::IsBlack(1));
+        assert(Casino::NextChipAmount(25, -1) == 10);
+        assert(Casino::NextChipAmount(25, 1) == 50);
+        assert(Casino::ClampNumber(99) == 36 && Casino::ClampNumber(-5) == 0);
+
+        for (int z = 0; z < Casino::kTableZoneCount; ++z) {
+            auto b = Casino::BetForTableZone(z, 25);
+            assert(b.amount == 25);
+            if (z <= 36) {
+                assert(b.number == z && Casino::Payout(b, z) == 900);
+                assert(!Casino::Wins(b, (z+1)%37));
+            }
+        }
+        // Multiple chips are reserved, frozen at spin, and paid exactly once.
+        Casino::RouletteRound round;
+        int wallet = 1000;
+        assert(round.Add(Casino::BetForTableZone(7, 10), wallet));
+        assert(round.Add(Casino::BetForTableZone(7, 25), wallet));
+        assert(round.Add(Casino::BetForTableZone(37, 100), wallet));
+        assert(round.OnZone(7) == 35 && round.Total() == 135 && wallet == 1000);
+        round.Undo(); assert(round.Total() == 35);
+        assert(round.Add(Casino::BetForTableZone(37, 100), wallet));
+        assert(!round.Add(Casino::BetForTableZone(38, 900), wallet));
+        assert(round.Begin(wallet) && wallet == 865);
+        assert(!round.Begin(wallet));
+        round.Undo(); round.Clear(); assert(round.Total() == 135);
+        assert(!round.Add(Casino::BetForTableZone(1, 10), wallet));
+        assert(round.Settle(99) == 0 && round.locked);
+        wallet += round.Settle(7);
+        assert(wallet == 2325 && !round.locked && round.Total() == 0);
+        assert(round.Settle(7) == 0); // no duplicate return on close/reopen
+        assert(!round.Begin(wallet));
+        assert(!round.Add(Casino::BetForTableZone(0, 0), wallet));
+        for (int z=37; z<43; ++z) assert(round.Add(Casino::BetForTableZone(z, 10), wallet));
+        assert(round.Add(Casino::BetForTableZone(0, 10), wallet));
+        assert(round.Begin(wallet));
+        assert(round.Settle(0) == 360); // outside bets all lose to zero
+        assert(round.Add(Casino::BetForTableZone(1, 10), wallet));
+        round.Clear(); assert(round.Total() == 0);
+        assert(!round.Add(Casino::BetForTableZone(1, 1000001), 100000000));
+
+        // Cross-check overlapping inside/outside bets for every wheel pocket.
+        for (int result=0; result<=36; ++result) {
+            Casino::RouletteRound mixed;
+            int cash = 10000, expected = 0;
+            for (int z : {0, 7, 19, 37, 38, 43, 46}) {
+                auto bet = Casino::BetForTableZone(z, 25);
+                assert(mixed.Add(bet, cash));
+                expected += Casino::Payout(bet, result);
+            }
+            int insufficient = mixed.Total()-1;
+            assert(!mixed.Begin(insufficient) && !mixed.locked);
+            assert(mixed.Begin(cash) && cash == 9825);
+            assert(mixed.Settle(result) == expected);
+        }
+        Casino::RouletteRound capped;
+        for (int i=0; i<512; ++i) assert(capped.Add(Casino::BetForTableZone(1, 10), 1000000));
+        assert(!capped.Add(Casino::BetForTableZone(1, 10), 1000000));
+        capped.Clear();
+        assert(capped.Add(Casino::BetForTableZone(1, 1000000), 100000000));
+        assert(!capped.Add(Casino::BetForTableZone(1, 1), 100000000));
+
+        Casino::Card aces[] = {{1,0}, {1,1}, {9,2}};
+        Casino::Card natural[] = {{1,0}, {13,1}};
+        Casino::Card seventeen[] = {{1,0}, {6,1}};
+        Casino::Card bust[] = {{10,0}, {10,1}, {5,2}};
+        assert(Casino::HandValue(aces, 3) == 21);
+        assert(Casino::IsSoftHand(aces, 3));
+        assert(!Casino::DealerMustHit(seventeen, 2));
+        assert(Casino::BlackjackPayout(100, natural, 2, seventeen, 2) == 250);
+        assert(Casino::BlackjackPayout(25, natural, 2, seventeen, 2) == 62);
+        assert(Casino::BlackjackPayout(100, natural, 2, natural, 2) == 100);
+        assert(Casino::BlackjackPayout(100, seventeen, 2, bust, 3) == 200);
+        assert(Casino::BlackjackPayout(100, bust, 3, bust, 3) == 0);
+        Casino::Card deck[52];
+        Casino::MakeDeck(deck);
+        uint32_t seed = 0;
+        Casino::ShuffleDeck(deck, 52, seed);
+        bool seenCard[52] = {};
+        for (const auto& c : deck) {
+            int index = c.suit * 13 + c.rank - 1;
+            assert(index >= 0 && index < 52 && !seenCard[index]);
+            seenCard[index] = true;
+        }
+
+        // Кибер-Слоты 777
+        assert(Casino::SlotsMultiplier(Casino::SYM_SEVEN, Casino::SYM_SEVEN, Casino::SYM_SEVEN) == 50);
+        assert(Casino::SlotsPayout(100, Casino::SYM_SEVEN, Casino::SYM_SEVEN, Casino::SYM_SEVEN) == 5000);
+        assert(Casino::SlotsMultiplier(Casino::SYM_CROWN, Casino::SYM_CROWN, Casino::SYM_CROWN) == 20);
+        assert(Casino::SlotsMultiplier(Casino::SYM_SEVEN, Casino::SYM_CHERRY, Casino::SYM_SEVEN) == 3);
+        assert(Casino::SlotsMultiplier(Casino::SYM_DIAMOND, Casino::SYM_CHERRY, Casino::SYM_DIAMOND) == 2);
+        assert(Casino::SlotsPayout(50, Casino::SYM_CHERRY, Casino::SYM_ROOSTER, Casino::SYM_STAR) == 0);
+        assert(std::string(Casino::SlotLabel(Casino::SYM_SEVEN)) == "[ 777 ]");
+
+        // Проверка порядка 37 секторов европейской рулетки и рофл-дисклеймера
+        bool seenSector[37] = {};
+        for (int i = 0; i < 37; ++i) {
+            int n = Casino::kEuropeanWheelOrder[i];
+            assert(n >= 0 && n <= 36 && !seenSector[n]);
+            seenSector[n] = true;
+            assert(Casino::WheelIndexForNumber(n) == i);
+        }
+        assert(Casino::WheelSectorAngleDeg(0) == 0.0f);
+        assert(std::string(Casino::RoflDisclaimerShort()).find("ПОНАРОШКУ") != std::string::npos);
+        assert(std::string(Casino::RoflStatusTitle(0)).find("Банкрот") != std::string::npos);
+        if (fs::exists(dataDir / "Sounds")) {
+            assert(fs::exists(dataDir / "Sounds/CasinoWheelSpin.wav") && fs::file_size(dataDir / "Sounds/CasinoWheelSpin.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/CasinoChipClick.wav") && fs::file_size(dataDir / "Sounds/CasinoChipClick.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/CasinoSlotStop.wav") && fs::file_size(dataDir / "Sounds/CasinoSlotStop.wav") > 1000);
+            assert(fs::exists(dataDir / "Sounds/CasinoJackpot.wav") && fs::file_size(dataDir / "Sounds/CasinoJackpot.wav") > 1000);
+        }
+    }
+
+    std::cout << "[test_core] 9/11 Проверка Pixel Arcade (src/ArcadeGames.h: все 6 игр вкл. Flappy и Тетрис)..." << std::endl;
+    {
+        Arcade::PixelArcadeSim sim;
+        sim.Reset(Arcade::GAME_SNAKE);
+        sim.snakeFood = {11, 8};
+        for (int s = 0; s < 3; ++s) sim.Step(0.05f, 1, 0, false);
+        assert(sim.score == 15 && sim.snakeBody.size() == 4);
+        // Защита от мгновенного разворота на 180 градусов
+        sim.SetSnakeDir(-1, 0);
+        assert(sim.snakeNextX == 1);
+
+        sim.Reset(Arcade::GAME_DINO);
+        sim.Step(0.016f, 0, 0, true);
+        assert(!sim.dinoOnGround && sim.dinoY < 240.0f);
+
+        sim.Reset(Arcade::GAME_BREAKOUT);
+        assert(sim.bricks.size() == 32);
+        sim.Step(0.05f, 1, 0, false);
+        assert(sim.padX > 198.0f && !sim.BuildDrawRects().empty());
+
+        sim.Reset(Arcade::GAME_PONG);
+        assert(Arcade::PixelArcadeSim::ComputeCreditsReward(100, true) == 20);
+
+        // 05. Flappy Кочет: взмах + пролёт трубы + начисление очков
+        sim.Reset(Arcade::GAME_FLAPPY);
+        float y0 = sim.flappyY;
+        sim.FlappyFlap();
+        sim.Step(0.03f, 0, 0, false);
+        assert(sim.flappyY < y0 && !sim.over);
+        sim.pipes.push_back(Arcade::PixelArcadeSim::Pipe{110.0f, 50.0f, 180.0f, false});
+        sim.flappyY = 120.0f;
+        for (int s = 0; s < 20 && !sim.over; ++s) sim.Step(0.04f, 0, 0, false);
+        assert(sim.score >= 20 && !sim.BuildDrawRects().empty());
+
+        // 06. Кибер-Тетрис: 7 фигур, сдвиг/поворот, hard drop и сжигание линии
+        sim.Reset(Arcade::GAME_TETRIS);
+        int x0 = sim.tetX;
+        sim.TetrisMove(-1);
+        assert(sim.tetX == x0 - 1);
+        sim.TetrisRotate();
+        // Заполняем нижний ряд без 2 ячеек и сбрасываем O-фигуру прямо в проём
+        sim.tetBoard.fill(0);
+        for (int x = 0; x < Arcade::PixelArcadeSim::TET_W; ++x) {
+            if (x != 4 && x != 5) sim.tetBoard[(size_t)((Arcade::PixelArcadeSim::TET_H - 1) * Arcade::PixelArcadeSim::TET_W + x)] = 1;
+            if (x != 4 && x != 5) sim.tetBoard[(size_t)((Arcade::PixelArcadeSim::TET_H - 2) * Arcade::PixelArcadeSim::TET_W + x)] = 1;
+        }
+        sim.tetCurType = 1; // O-блок 2x2
+        sim.tetRot = 0;
+        sim.tetX = 3; // биты 1,2 в 4x4 -> колонки 4 и 5
+        sim.tetY = 0;
+        sim.TetrisHardDrop();
+        assert(sim.tetLines >= 2 && sim.score >= 300 && !sim.BuildDrawRects().empty());
+    }
+
+    std::cout << "[test_core] 10/11 Проверка PBR текстур, материалов баньки и VIP-казино и генератора..." << std::endl;
+    if (fs::exists(dataDir / "Textures/Skybox4K.xml")) {
+        CheckPngFile(dataDir / "Textures/StoneHDDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaLogDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaLogNormal.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaLogRoughMetal.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaRoosterDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaRoosterNormal.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaRoosterRoughMetal.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaPlankDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaStoneDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaCopperDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/BanyaBirchDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoFeltDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoGoldDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoMarbleDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/CasinoMahoganyDiffuse.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/Sky4K_PosZ.png", 1024, 1024);
+        CheckPngFile(dataDir / "Textures/LoadingBg4K.png", 1920, 1080);
+        assert(fs::exists(dataDir / "Materials/Game/BanyaLog.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaRooster.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaPlank.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaStone.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaCopper.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/BanyaBirch.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoFelt.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoGold.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoMarble.xml"));
+        assert(fs::exists(dataDir / "Materials/Game/CasinoMahogany.xml"));
     }
     if (argc > 1 && fs::exists(argv[1])) {
-        fs::path tmpOut = fs::temp_directory_path() / "chikengun_test_tex";
-        fs::remove_all(tmpOut);
-        std::string cmd = std::string("\"") + argv[1] + "\" \"" + tmpOut.string() + "\" 256 > /dev/null";
+        // Separate concurrent runs (e.g. CTest and build.sh) so they do not
+        // overwrite or delete each other's generated textures.
+        fs::path tmpOut;
+        const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+        for (unsigned attempt = 0; attempt < 100; ++attempt) {
+            const fs::path candidate = fs::temp_directory_path() /
+                ("chikengun_test_tex_" + std::to_string(stamp) + "_" + std::to_string(attempt));
+            std::error_code error;
+            if (fs::create_directory(candidate, error)) { tmpOut = candidate; break; }
+            if (error) break;
+        }
+        assert(!tmpOut.empty() && "Не удалось создать временный каталог для текстур");
+#ifdef _WIN32
+        std::string cmd = std::string("\"\"") + argv[1] + "\" \"" + tmpOut.string() + "\" 256 > NUL\"";
+#else
+        std::string cmd = std::string("\"") + argv[1] + "\" \"" + tmpOut.string() + "\" 256 >/dev/null";
+#endif
         int rc = std::system(cmd.c_str());
         assert(rc == 0 && "gen_textures_4k завершился с ошибкой");
         CheckPngFile(tmpOut / "StoneHDDiffuse.png", 256, 256);
         CheckPngFile(tmpOut / "HazardMetalRoughMetal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaLogDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaLogNormal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaLogRoughMetal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaRoosterDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaRoosterNormal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaRoosterRoughMetal.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaPlankDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaStoneDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaCopperDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "BanyaBirchDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoFeltDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoGoldDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoGoldNormal.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoGoldRoughMetal.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoMarbleDiffuse.png", 256, 256);
+        CheckPngFile(tmpOut / "CasinoMahoganyDiffuse.png", 256, 256);
         assert(fs::exists(tmpOut / "Skybox4K.xml"));
         fs::remove_all(tmpOut);
     }
 
-    std::cout << "[test_core] ВСЕ 8 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
+    std::cout << "[test_core] 11/11 Проверка медленного интро, затухания и пропуска..." << std::endl;
+    {
+        // Saved zero music/SFX levels must remain zero, including when the
+        // XML attribute is represented by a temporary string.
+        assert(SettingsParsing::Float(std::string("0").c_str(), 0.35f, 0.0f, 1.0f) == 0.0f);
+        assert(std::fabs(SettingsParsing::Float("0.35", 0.8f, 0.0f, 1.0f) - 0.35f) < 0.0001f);
+        assert(SettingsParsing::Float("2", 0.8f, 0.0f, 1.0f) == 1.0f);
+        assert(SettingsParsing::Float("-2", 0.8f, 0.0f, 1.0f) == 0.0f);
+        assert(SettingsParsing::Float("invalid", 0.8f, 0.0f, 1.0f) == 0.8f);
+        assert(SettingsParsing::Float("nan", 0.8f, 0.0f, 1.0f) == 0.8f);
+        assert(SettingsParsing::Float(nullptr, 0.8f, 0.0f, 1.0f) == 0.8f);
+
+        using namespace SplashIntro;
+        assert(std::string(kStages[1].text) == "powered by fall.os");
+        assert(std::string(kStages[2].text) == "CHICKENCUM 2.1");
+        float fullDuration = kExitDuration;
+        for (int stage = 0; stage < kStageCount; ++stage) {
+            const Stage& s = kStages[stage];
+            const int last = static_cast<int>(std::strlen(s.text)) - 1;
+            const float revealEnd = s.glyphDelay + last * s.glyphStagger + s.glyphDuration;
+            assert(s.duration >= 3.5f);
+            assert(s.fadeOutAt - revealEnd >= 0.5f); // the whole line is legible before fading
+            assert(GlyphProgress(stage, 0, 0.0f) == 0.0f);
+            assert(GlyphProgress(stage, last, revealEnd + 0.001f) == 1.0f);
+            assert(StageVisibility(stage, s.fadeOutAt) == 1.0f);
+            assert(StageVisibility(stage, s.duration) == 0.0f);
+            assert(s.sweepAt >= s.glyphDelay && s.sweepAt + s.sweepDuration <= s.fadeOutAt + 0.1f);
+            float previousFade = 1.0f, previousGlyph = 0.0f;
+            for (int sample = 0; sample <= 200; ++sample) {
+                const float time = s.duration * sample / 200.0f;
+                const float fade = StageVisibility(stage, time);
+                const float glyph = GlyphProgress(stage, last, time);
+                assert(fade <= previousFade && fade >= 0.0f);
+                assert(glyph >= previousGlyph && glyph <= 1.0f);
+                previousFade = fade;
+                previousGlyph = glyph;
+            }
+            fullDuration += s.duration;
+        }
+        assert(fullDuration > 15.0f);
+        // Movement covers less distance in each successive equal time interval.
+        assert(EaseOut(0.33f) > EaseOut(0.66f) - EaseOut(0.33f));
+        assert(EaseOut(0.66f) - EaseOut(0.33f) > 1.0f - EaseOut(0.66f));
+
+        Timeline clock;
+        assert(!clock.Advance(kStages[0].duration - 0.01f).stageChanged);
+        const auto next = clock.Advance(0.025f);
+        assert(next.stageChanged && clock.CurrentStage() == 1);
+        assert(std::fabs(clock.StageTime() - 0.015f) < 0.001f); // no lost frame at the boundary
+        clock.Advance(kStages[1].duration - clock.StageTime() + 0.02f);
+        assert(clock.CurrentStage() == 2 && std::fabs(clock.StageTime() - 0.02f) < 0.001f);
+        clock.Advance(kStages[2].duration - clock.StageTime() + 0.20f);
+        assert(clock.IsExiting() && clock.OverlayOpacity() > 0.0f && clock.OverlayOpacity() < 1.0f);
+        const float beforeSkip = clock.OverlayOpacity();
+        clock.Advance(0.0f, true); // skipping the natural fade must not jump
+        assert(std::fabs(clock.OverlayOpacity() - beforeSkip) < 0.0001f);
+        assert(!clock.Advance(kSkipDuration * 0.5f).finished);
+        assert(clock.OverlayOpacity() < beforeSkip);
+        assert(clock.Advance(kSkipDuration * 0.5f + 0.001f).finished);
+
+        for (int stage = 0; stage < kStageCount; ++stage) {
+            Timeline skipped;
+            float start = 0.5f;
+            for (int prev = 0; prev < stage; ++prev) start += kStages[prev].duration;
+            skipped.Advance(start);
+            assert(skipped.CurrentStage() == stage);
+            assert(!skipped.Advance(0.0f, true).finished);
+            assert(skipped.IsExiting() && skipped.OverlayOpacity() == 1.0f);
+            const float beforeMove = skipped.StageTime();
+            assert(!skipped.Advance(0.1f).finished);
+            assert(skipped.StageTime() > beforeMove && skipped.CurrentStage() == stage);
+            assert(skipped.Advance(kSkipDuration + 0.001f).finished);
+        }
+        Timeline skipAtBoundary;
+        skipAtBoundary.Advance(kStages[0].duration - 0.05f);
+        skipAtBoundary.Advance(0.1f, true);
+        assert(skipAtBoundary.CurrentStage() == 0 && skipAtBoundary.StageTime() == kStages[0].duration);
+        assert(skipAtBoundary.Advance(kSkipDuration).finished);
+        Timeline oversizedStep;
+        assert(oversizedStep.Advance(fullDuration + 0.1f).finished);
+        Timeline invalidTime;
+        invalidTime.Advance(-1.0f);
+        invalidTime.Advance(std::nanf(""));
+        assert(invalidTime.StageTime() == 0.0f && invalidTime.Elapsed() == 0.0f);
+        for (float fps : {30.0f, 60.0f, 144.0f}) {
+            Timeline sampled;
+            int changes = 0;
+            bool finished = false;
+            while (!finished && sampled.Elapsed() < fullDuration + 1.0f) {
+                const auto frame = sampled.Advance(1.0f / fps);
+                changes += frame.stageChanged ? 1 : 0;
+                finished = frame.finished;
+            }
+            assert(finished && changes == kStageCount - 1);
+            assert(std::fabs(sampled.Elapsed() - fullDuration) <= 1.0f / fps + 0.002f);
+        }
+        CheckPngFile(dataDir / "Textures/SplashGlow.png", 512, 512);
+        CheckPngFile(dataDir / "Textures/SplashSheen.png", 256, 64);
+        assert(fs::exists(dataDir / "Fonts/BlueHighway.ttf"));
+    }
+
+    std::cout << "[test_core] ВСЕ 11 НАБОРОВ ТЕСТОВ УСПЕШНО ПРОЙДЕНЫ!" << std::endl;
     return 0;
 }
