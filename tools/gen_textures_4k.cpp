@@ -558,8 +558,8 @@ PbrSet genFloor4K(int S) {
 
                 // Полированные зоны и потёртости дают живую игру света при движении камеры
                 float wearPolish = smoothstep(0.42f, 0.72f, scuff);
-                rough = clamp01(0.38f - wearPolish * 0.14f + (stoneFine - 0.5f) * 0.12f);
-                metal = lerpf(0.06f, 0.45f, trimLine * 0.45f);
+                rough = clamp01(0.48f - wearPolish * 0.10f + (stoneFine - 0.5f) * 0.12f);
+                metal = lerpf(0.0f, 0.65f, trimLine);
                 h = 0.48f + bevel * 0.22f + vein * 0.08f + (stoneFine - 0.5f) * 0.05f;
             }
 
@@ -703,7 +703,7 @@ PbrSet genBrushedMetal4K(int S) {
             float crossHone = tileFbmXY(u, v, 40, 24, 2, 953u);
             float patina    = tileWarpedFbm(u, v, 4, 3, 0.06f, 977u);
 
-            float h = 0.45f + (brushFine - 0.5f) * 0.24f + (brushMed - 0.5f) * 0.16f + (crossHone - 0.5f) * 0.08f;
+            float h = 0.45f + (brushFine - 0.5f) * 0.08f + (brushMed - 0.5f) * 0.06f + (crossHone - 0.5f) * 0.03f;
             hf[static_cast<size_t>(y) * S + x] = h;
 
             float val = 0.74f + (brushFine - 0.5f) * 0.12f + (brushMed - 0.5f) * 0.09f + (patina - 0.5f) * 0.09f;
@@ -712,7 +712,7 @@ PbrSet genBrushedMetal4K(int S) {
             out.diff[idx + 1] = toByte(val * 0.99f);
             out.diff[idx + 2] = toByte(val * 1.04f);
 
-            out.roughMetal[idx + 0] = toByte(clamp01(0.24f + (1.0f - brushFine) * 0.12f + (patina - 0.5f) * 0.08f));
+            out.roughMetal[idx + 0] = toByte(clamp01(0.33f + (1.0f - brushFine) * 0.13f + (patina - 0.5f) * 0.10f));
             out.roughMetal[idx + 1] = toByte(0.92f);
             out.roughMetal[idx + 2] = toByte(1.0f);
         }
@@ -819,7 +819,7 @@ PbrSet genCrateWood4K(int S) {
                 b = tone * 0.42f;
                 rough = clamp01(0.68f + (1.0f - rings) * 0.12f + poreStreak * 0.10f);
                 metal = 0.0f;
-                h = 0.40f + plankBevel * 0.22f + rings * 0.08f - poreStreak * 0.07f;
+                h = 0.40f + plankBevel * 0.22f + rings * 0.035f - poreStreak * 0.045f;
             }
 
             hf[static_cast<size_t>(y) * S + x] = h;
@@ -899,7 +899,7 @@ PbrSet genFeather4K(int S) {
             float fluff = tileFbm(u, v, 32, 3, 1249u);
 
             float h = 0.24f + 0.44f * smoothstep(0.0f, 0.46f, bestEdge) * (1.0f - bestPy * 0.14f)
-                      + shaft * 0.18f + barbs * 0.08f + microBarbs * 0.04f + fluff * 0.03f;
+                      + shaft * 0.12f + barbs * 0.04f + microBarbs * 0.015f + fluff * 0.03f;
             hf[static_cast<size_t>(y) * S + x] = h;
 
             float underAO = 0.78f + 0.22f * smoothstep(0.0f, 0.28f, bestEdge);
@@ -910,7 +910,7 @@ PbrSet genFeather4K(int S) {
             out.diff[idx + 1] = toByte(shade * 0.992f);
             out.diff[idx + 2] = toByte(shade * 0.978f);
 
-            out.roughMetal[idx + 0] = toByte(clamp01(0.56f - shaft * 0.18f + (1.0f - barbs) * 0.12f));
+            out.roughMetal[idx + 0] = toByte(clamp01(0.62f - shaft * 0.10f + (1.0f - barbs) * 0.12f));
             out.roughMetal[idx + 1] = toByte(0.0f);
             out.roughMetal[idx + 2] = toByte(underAO);
         }
@@ -1074,7 +1074,7 @@ PbrSet genBanyaLog4K(int S) {
             float hSeam = 0.10f + juteTwist * 0.09f + juteFibers * 0.04f;
             float h = lerpf(hWood, hSeam, seamMask);
 
-            float roughWood = clamp01(0.64f - ringWave * 0.10f - steamPatina * 0.34f);
+            float roughWood = clamp01(0.69f - ringWave * 0.08f - steamPatina * 0.20f);
             float rough = lerpf(roughWood, 0.94f, seamMask);
             float ao = clamp01((0.58f + 0.42f * cyl) * lerpf(1.0f, 0.45f, seamMask));
 
@@ -1183,8 +1183,8 @@ PbrSet genBanyaRooster4K(int S) {
 
             float h = 0.24f + 0.45f * smoothstep(0.0f, 0.48f, bestEdge) * (1.0f - bestPy * 0.20f)
                       + shaft * 0.20f + barbs * 0.07f + microBarbs * 0.03f;
-            float rough = clamp01(0.36f - shaft * 0.16f + (1.0f - barbs) * 0.12f);
-            float metal = lerpf(0.08f, 0.18f, (1.0f - mixVal) * barbs);
+            float rough = clamp01(0.51f - shaft * 0.10f + (1.0f - barbs) * 0.12f);
+            float metal = 0.0f; // Feather keratin is not metal.
             float ao = clamp01(edgeShadow);
 
             hf[static_cast<size_t>(y) * S + x] = h;
@@ -1255,7 +1255,7 @@ PbrSet genBanyaPlank4K(int S) {
             float b = baseT * 0.56f;
 
             float h = 0.25f + groove * 0.45f + bevel * 0.12f + ring * 0.04f + fiber * 0.03f - microPores * 0.02f - endJoint * 0.30f;
-            float rough = lerpf(0.60f - ring * 0.08f, 0.14f, wetMask);
+            float rough = lerpf(0.66f - ring * 0.08f, 0.30f, wetMask);
             rough = lerpf(0.92f, rough, groove);
 
             hf[static_cast<size_t>(y) * S + x] = h;
@@ -1332,8 +1332,8 @@ PbrSet genBanyaStone4K(int S) {
             b *= (1.0f - rareCrack * 0.55f);
 
             float h = 0.22f + ridge * 0.34f + rockMacro * 0.24f + rockDetail * 0.12f + (microGrain - 0.5f) * 0.05f - rareCrack * 0.18f;
-            float rough = clamp01(0.76f - micaSpark * 0.34f - quartzVein * 0.20f - bevel1 * 0.10f + rareCrack * 0.20f);
-            float metal = clamp01(micaSpark * 0.30f);
+            float rough = clamp01(0.78f - micaSpark * 0.14f - quartzVein * 0.12f - bevel1 * 0.08f + rareCrack * 0.20f);
+            float metal = 0.0f; // Silicate inclusions are dielectric.
 
             hf[static_cast<size_t>(y) * S + x] = h;
             size_t idx = (static_cast<size_t>(y) * S + x) * 3;
@@ -1380,9 +1380,14 @@ PbrSet genBanyaCopper4K(int S) {
 
             // Рельеф мягкой ручной выколотки + микроцарапины полировки
             float h = 0.52f + hammerFacet * 0.14f - dish * 0.09f + (brush - 0.5f) * 0.05f + (fineSpin - 0.5f) * 0.025f;
-            // Roughness от 0.17 (зеркальный полированный блик) до 0.34 (слегка матовая медь в патине)
-            float rough = clamp01(0.18f + (1.0f - hammerFacet) * 0.08f + (1.0f - brush) * 0.06f + warmWear * 0.05f);
-            float metal = 0.96f;
+            // Satin copper with localized rough, oxidized areas.
+            float rough = clamp01(0.30f + (1.0f - hammerFacet) * 0.08f + (1.0f - brush) * 0.06f + warmWear * 0.05f);
+            float oxide = smoothstep(0.50f, 0.72f, warmWear) * 0.5f;
+            r = lerpf(r, 0.15f, oxide);
+            g = lerpf(g, 0.27f, oxide);
+            b = lerpf(b, 0.20f, oxide);
+            rough = lerpf(rough, 0.68f, oxide);
+            float metal = lerpf(0.96f, 0.10f, oxide);
 
             hf[static_cast<size_t>(y) * S + x] = h;
             size_t idx = (static_cast<size_t>(y) * S + x) * 3;
@@ -1484,7 +1489,7 @@ PbrSet genBanyaBirch4K(int S) {
 
                 float h = 0.35f + 0.42f * edgeRim + midRib * 0.12f + sideRib * 0.05f + bestSeed * 0.06f;
                 float dew = smoothstep(0.78f, 0.90f, tileFbm(u, v, 28, 2, 1373u));
-                float rough = clamp01(lerpf(0.42f, 0.14f, dew));
+                float rough = clamp01(lerpf(0.52f, 0.28f, dew));
 
                 hf[static_cast<size_t>(y) * S + x] = h;
                 size_t idx = (static_cast<size_t>(y) * S + x) * 3;
@@ -1502,49 +1507,33 @@ PbrSet genBanyaBirch4K(int S) {
     return out;
 }
 
-// 14. CasinoFelt — элитное изумрудное сукно VIP-стола (саржевое плетение, золотая разметка ромбами, бархатный ворс)
+// 14. CasinoFelt — матовое сукно: мелкое плетение и ворс, без металлических ромбов
 PbrSet genCasinoFelt4K(int S) {
     PbrSet out;
     out.diff.resize(static_cast<size_t>(S) * S * 3);
     out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
     std::vector<float> hf(static_cast<size_t>(S) * S);
 
+    // Integer, resolution-aware weave frequency: repeatable and below Nyquist.
+    const int threads = std::max(8, std::min(180, S / 6));
     parallelRows(S, [&](int y) {
         float v = float(y) / S;
         for (int x = 0; x < S; ++x) {
             float u = float(x) / S;
-            float twill = 0.5f + 0.5f * std::sin((u * 180.0f + v * 180.0f) * TAU) * 0.5f
-                        + 0.25f * std::sin((u * 180.0f - v * 180.0f) * TAU);
-            float microWool = tileFbm(u, v, 36, 3, 1409u);
-            float velvet = tileFbm(u, v, 8, 3, 1423u);
-
-            // Тончайшая золотая сетка-ромбы VIP-сукна и двойная нить по краю
-            float d1 = std::fabs(std::fmod(u * 4.0f + v * 4.0f + 8.0f, 1.0f) - 0.5f);
-            float d2 = std::fabs(std::fmod(u * 4.0f - v * 4.0f + 8.0f, 1.0f) - 0.5f);
-            float line = std::max(smoothstep(0.010f, 0.002f, d1), smoothstep(0.010f, 0.002f, d2));
-            float borderLine = smoothstep(0.008f, 0.002f, std::fabs(std::fabs(u - 0.5f) - 0.46f));
-            float goldThread = clamp01(line * 0.42f + borderLine * 0.68f);
-
-            float r = lerpf(0.022f, 0.055f, velvet * 0.65f + microWool * 0.35f) + twill * 0.010f;
-            float g = lerpf(0.245f, 0.375f, velvet * 0.70f + microWool * 0.30f) + twill * 0.032f;
-            float b = lerpf(0.118f, 0.195f, velvet * 0.65f + microWool * 0.35f) + twill * 0.016f;
-
-            r = lerpf(r, 0.86f, goldThread);
-            g = lerpf(g, 0.69f, goldThread);
-            b = lerpf(b, 0.22f, goldThread);
-
-            float h = 0.40f + twill * 0.16f + microWool * 0.28f + goldThread * 0.18f;
-            float rough = lerpf(0.88f, 0.32f, goldThread);
-            float metal = goldThread * 0.75f;
-
-            hf[static_cast<size_t>(y) * S + x] = h;
+            float weave = 0.5f + 0.25f * std::sin((u + v) * threads * TAU)
+                               + 0.25f * std::sin((u - v) * threads * TAU);
+            float wool = tileFbm(u, v, 24, 3, 1409u);
+            float nap = tileFbm(u, v, 6, 3, 1423u);
+            // Dye and fibre variation, not gold paint baked into playing cloth.
+            float tone = 0.83f + nap * 0.16f + wool * 0.05f;
             size_t idx = (static_cast<size_t>(y) * S + x) * 3;
-            out.diff[idx + 0] = toByte(r);
-            out.diff[idx + 1] = toByte(g);
-            out.diff[idx + 2] = toByte(b);
-            out.roughMetal[idx + 0] = toByte(rough);
-            out.roughMetal[idx + 1] = toByte(metal);
-            out.roughMetal[idx + 2] = toByte(0.76f + microWool * 0.20f);
+            out.diff[idx] = toByte(0.035f * tone);
+            out.diff[idx+1] = toByte(0.26f * tone + weave * 0.008f);
+            out.diff[idx+2] = toByte(0.14f * tone);
+            hf[static_cast<size_t>(y)*S+x] = 0.5f + weave*0.025f + wool*0.045f;
+            out.roughMetal[idx] = toByte(0.82f + wool*0.12f);
+            out.roughMetal[idx+1] = 0;
+            out.roughMetal[idx+2] = toByte(0.94f + weave*0.06f);
         }
     });
     applyCavityAO(hf, S, 0.22f, out.diff);
@@ -1563,23 +1552,20 @@ PbrSet genCasinoGold4K(int S) {
         float v = float(y) / S;
         for (int x = 0; x < S; ++x) {
             float u = float(x) / S;
-            float cx = u - 0.5f, cy = v - 0.5f;
-            float rad = std::sqrt(cx * cx + cy * cy);
-            float ang = std::atan2(cy, cx);
-
-            float guilloche = 0.5f + 0.5f * std::sin(rad * 16.0f * TAU + std::sin(ang * 12.0f) * 0.8f);
+            // Periodic engraving avoids seams from polar angle/radius at UV borders.
+            float guilloche = 0.5f + 0.5f * std::sin(u * 12.0f * TAU + std::sin(v * 8.0f * TAU) * 0.5f);
             float brush = tileFbmXY(u, v, 96, 8, 3, 1511u);
             float fineBrush = tileFbmXY(u, v, 140, 12, 2, 1517u);
             float patina = tileFbm(u, v, 8, 3, 1523u);
-            float rimRing = smoothstep(0.012f, 0.002f, std::fabs(std::fmod(rad * 4.0f, 1.0f) - 0.5f));
+            float rimRing = std::pow(0.5f + 0.5f * std::cos(v * 4.0f * TAU), 24.0f);
 
             float tone = 0.80f + 0.05f * guilloche + 0.11f * brush + 0.05f * fineBrush - patina * 0.05f;
             float r = clamp01(0.99f * tone);
             float g = clamp01(0.79f * tone + rimRing * 0.06f);
             float b = clamp01(0.28f * tone + rimRing * 0.05f);
 
-            float h = 0.48f + guilloche * 0.10f + rimRing * 0.24f + brush * 0.14f + fineBrush * 0.06f;
-            float rough = clamp01(0.12f + patina * 0.10f - rimRing * 0.04f + (1.0f - brush) * 0.05f);
+            float h = 0.48f + guilloche * 0.018f + rimRing * 0.03f + brush * 0.035f + fineBrush * 0.015f;
+            float rough = clamp01(0.29f + patina * 0.12f - rimRing * 0.025f + (1.0f - brush) * 0.07f);
 
             hf[static_cast<size_t>(y) * S + x] = h;
             size_t idx = (static_cast<size_t>(y) * S + x) * 3;
@@ -1639,8 +1625,8 @@ PbrSet genCasinoMarble4K(int S) {
             b = lerpf(b, 0.14f, grout * 0.55f);
 
             float h = 0.62f - grout * 0.38f + goldVein * 0.04f + baseStone * 0.06f;
-            float rough = clamp01(0.11f + baseStone * 0.09f + grout * 0.45f);
-            float metal = clamp01(goldVein * 0.62f);
+            float rough = clamp01(0.26f + baseStone * 0.12f + grout * 0.40f);
+            float metal = 0.0f; // Ochre mineral veins are dielectric, not metallic foil.
 
             hf[static_cast<size_t>(y) * S + x] = h;
             size_t idx = (static_cast<size_t>(y) * S + x) * 3;
@@ -1683,8 +1669,8 @@ PbrSet genCasinoMahogany4K(int S) {
             float g = lerpf(0.052f, 0.140f, t) * (1.0f - bevel * 0.30f);
             float b = lerpf(0.028f, 0.072f, t) * (1.0f - bevel * 0.30f);
 
-            float h = 0.56f - bevel * 0.28f + fiber * 0.14f + pore * 0.06f;
-            float rough = clamp01(0.15f + (1.0f - fiber) * 0.09f + bevel * 0.16f);
+            float h = 0.56f - bevel * 0.20f + fiber * 0.045f + pore * 0.025f;
+            float rough = clamp01(0.28f + (1.0f - fiber) * 0.12f + bevel * 0.16f);
 
             hf[static_cast<size_t>(y) * S + x] = h;
             size_t idx = (static_cast<size_t>(y) * S + x) * 3;
@@ -1692,7 +1678,7 @@ PbrSet genCasinoMahogany4K(int S) {
             out.diff[idx + 1] = toByte(g);
             out.diff[idx + 2] = toByte(b);
             out.roughMetal[idx + 0] = toByte(rough);
-            out.roughMetal[idx + 1] = toByte(0.04f);
+            out.roughMetal[idx + 1] = toByte(0.0f);
             out.roughMetal[idx + 2] = toByte(1.0f - bevel * 0.35f);
         }
     });
@@ -1976,6 +1962,11 @@ int main(int argc, char** argv) {
     saveSet("CasinoGold",     S, genCasinoGold4K(S));
     saveSet("CasinoMarble",   S,         genCasinoMarble4K(S));
     saveSet("CasinoMahogany", S,         genCasinoMahogany4K(S));
+
+    if (argc > 3 && std::string(argv[3]) == "--pbr-only") {
+        std::printf("[PBR Generator] Material maps complete (no sky/loading stamp).\n");
+        return 0;
+    }
 
     int cubeS = 1024;
     genSkyCubemap(outDir, cubeS);

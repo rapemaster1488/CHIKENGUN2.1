@@ -31,6 +31,15 @@ set_tests_properties(CorePhysicsAndAssets PROPERTIES
     ENVIRONMENT "CHIKENGUN_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Data"
 )
 
+add_executable(test_texture_materials tests/test_texture_materials.cpp)
+target_link_libraries(test_texture_materials PRIVATE Threads::Threads)
+if(MSVC)
+    target_compile_options(test_texture_materials PRIVATE /O2 /UNDEBUG /D_CRT_SECURE_NO_WARNINGS /DNOMINMAX)
+else()
+    target_compile_options(test_texture_materials PRIVATE -O2 -Wall -Wextra -UNDEBUG)
+endif()
+add_test(NAME TextureMaterials COMMAND test_texture_materials)
+
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
     add_test(NAME ChipAtlas COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/test_chip_atlas.py")
