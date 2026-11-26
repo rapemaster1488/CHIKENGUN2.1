@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -1009,98 +1010,98 @@ PbrSet genHazardMetal4K(int S) {
     return out;
 }
 
-// 8. BanyaLog — оцилиндрованный сруб липы/кедра с естественными сучками (без клякс!) и кручёной паклей
+// 8. BanyaLog — поверхность оцилиндрованного бревна северной сосны.
+// ОДНО бревно на тайл: U идёт вдоль ствола, V — по окружности. Это критично:
+// когда в тайле было два бревна, UV-масштаб на стене подбирался невозможным
+// образом, и рисунок либо растягивался, либо рвался по вертикали. Теперь
+// тайлинг по U задаёт длину, по V — окружность, и волокна всегда идут вдоль
+// венца. Шов между венцами даёт геометрия сруба, а не полоса в текстуре.
 PbrSet genBanyaLog4K(int S) {
     PbrSet out;
     out.diff.resize(static_cast<size_t>(S) * S * 3);
     out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
     std::vector<float> hf(static_cast<size_t>(S) * S);
 
-    const int numLogs = 5;
+    const float ringFreq = 7.0f;   // колец на оборот ствола
     parallelRows(S, [&](int y) {
         float v = float(y) / S;
-        float logPos = v * numLogs;
-        int logIdx = static_cast<int>(std::floor(logPos)) % numLogs;
-        float ly = logPos - std::floor(logPos);
-        float cy = ly - 0.5f;
+        float cy = v - 0.5f;                          // -0.5..0.5 по окружности
+        float edge = std::fabs(cy) * 2.0f;
 
-        float edgeDist = std::fabs(cy) * 2.0f;
-        float cyl = std::sqrt(std::max(0.0f, 1.0f - std::min(1.0f, edgeDist * edgeDist * 0.92f)));
-        float seamMask = smoothstep(0.83f, 0.95f, edgeDist);
-        float logRand  = hash01(logIdx, 3, 16, 16, 701u);
+        // Оцилиндровка: к «краям» (там, где бревно уходит в паз к соседнему)
+        // яркость мягко падает. Резкой щели в текстуре нет — она в геометрии.
+        float cyl = std::sqrt(std::max(0.0f, 1.0f - std::min(1.0f, edge * edge * 0.72f)));
+        float seamShadow = smoothstep(0.72f, 1.0f, edge);
 
-        float ku1 = hash01(logIdx, 7, 16, 16, 751u);
-        float kv1 = 0.34f + 0.32f * hash01(logIdx, 9, 16, 16, 761u);
-        float ku2 = std::fmod(ku1 + 0.46f + 0.16f * hash01(logIdx, 13, 16, 16, 769u), 1.0f);
-        float kv2 = 0.34f + 0.32f * hash01(logIdx, 15, 16, 16, 773u);
+        const float phase = 0.37f;
+        // Сучок: один, вытянутый вдоль ствола, со смещением по окружности.
+        const float ku = 0.62f;
+        const float kv = 0.44f;
 
         for (int x = 0; x < S; ++x) {
             float u = float(x) / S;
-            float uShift = std::fmod(u + logRand * 0.67f, 1.0f);
 
-            // Естественный сучок с обтекающими древесными кольцами (чёткое ядро, без размытого пятна)
-            auto evalKnot = [&](float ku, float kv) {
-                float du = std::fmod(u - ku + 1.5f, 1.0f) - 0.5f;
-                float dv = (ly - kv) * 0.24f;
-                return std::sqrt(du * du + dv * dv * 12.0f);
-            };
-            float kd = std::min(evalKnot(ku1, kv1), evalKnot(ku2, kv2));
-            float knotDeflect = std::exp(-kd * 16.0f) * 0.36f;
-            float knotCore = smoothstep(0.038f, 0.012f, kd);
-            float knotRing = smoothstep(0.055f, 0.032f, kd) * (1.0f - knotCore);
+            float du = std::fmod(u - ku + 1.5f, 1.0f) - 0.5f;
+            float dv = (cy - (kv - 0.5f)) * 0.34f;
+            float kd = std::sqrt(du * du * 0.35f + dv * dv * 8.0f);
+            float knotCore = smoothstep(0.018f, 0.005f, kd);
+            float knotRing = smoothstep(0.042f, 0.016f, kd) * (1.0f - knotCore);
+            float knotDeflect = std::exp(-kd * 26.0f) * 0.55f;
 
-            float warp = tileFbmXY(uShift, v * 2.0f, 4, 16, 4, 709u + static_cast<uint32_t>(logIdx) * 23u);
-            float ringWave = 0.5f + 0.5f * std::sin(((cy * 3.8f + (warp - 0.5f) * 2.4f + knotDeflect * 6.0f)) * TAU + logRand * TAU);
-            ringWave = std::pow(ringWave, 0.72f);
+            // Годовые кольца на поверхности бревна ложатся почти прямыми линиями
+            // вдоль оси. Искажение — только от сучка и от смоляных участков.
+            float warp = tileFbmXY(u + phase, cy * 2.0f, 4, 14, 4, 709u);
+            float ringPos = cy * ringFreq + (warp - 0.5f) * 1.15f + knotDeflect * 6.0f + phase * 3.0f;
+            float ring = 0.5f + 0.5f * std::sin(ringPos * TAU);
+            // Поздняя древесина — узкая тёмная полоса, ранняя — широкий светлый слой.
+            float lateWood = smoothstep(0.78f, 0.97f, ring);
+            float earlyWood = 1.0f - lateWood;
 
-            float fiber = tileFbmXY(uShift, v, 14, 128, 3, 719u);
-            // Продольные трещины усушки строго вдоль волокон древесины (без извилистых полос)
-            float splitLine = tileFbmXY(uShift, v, 4, 84, 3, 743u);
-            float crack = smoothstep(0.76f, 0.86f, splitLine) * smoothstep(0.45f, 0.72f, fiber) * 0.65f;
+            // Волокна сосны: длинные тонкие линии, а не пятна. Высокая частота
+            // только по вертикали (поперёк бревна), по горизонтали — почти ноль,
+            // поэтому штрихи тянутся вдоль ствола.
+            float fiber = tileFbmXY(u + phase, v, 2, 46, 3, 719u);
+            float fine  = tileFbmXY(u, v, 3, 180, 2, 723u);
+            float resin = smoothstep(0.72f, 0.90f, tileFbmXY(u + phase, v, 2, 30, 3, 727u))
+                        * smoothstep(0.55f, 0.90f, lateWood);
 
-            // Кручёная золотистая пакля / джут (конопатка) в глубоком пазу
-            float juteTwist = 0.5f + 0.5f * std::sin((u * 42.0f + ly * 18.0f + tileFbm(u, v, 16, 2, 727u) * 3.0f) * TAU);
-            float juteFibers = tileFbmXY(u, v, 32, 96, 3, 731u);
-            float steamPatina = smoothstep(0.55f, 0.80f, tileFbm(u, v, 6, 3, 739u));
+            // Трещины усушки — короткие, строго вдоль волокна, не у самого шва.
+            float splitMask = tileFbmXY(u, v, 3, 110, 3, 743u);
+            float crack = smoothstep(0.815f, 0.895f, splitMask)
+                        * smoothstep(0.42f, 0.70f, fine)
+                        * (1.0f - smoothstep(0.50f, 0.82f, edge)) * 0.9f;
 
-            float woodTone = 0.54f + (logRand - 0.5f) * 0.08f + (ringWave - 0.5f) * 0.16f + (fiber - 0.5f) * 0.08f;
-            woodTone = lerpf(woodTone, 0.38f, knotRing * 0.55f);
-            woodTone = lerpf(woodTone, 0.24f, knotCore * 0.78f);
-            woodTone *= (1.0f - crack * 0.45f) * (0.64f + 0.36f * cyl) * lerpf(1.0f, 0.84f, steamPatina * 0.50f);
+            // Тон: ядро сосны тёплое, поздние кольца заметно темнее.
+            float wood = 0.63f + (earlyWood - 0.5f) * 0.17f
+                       + (fine - 0.5f) * 0.030f + (fiber - 0.5f) * 0.055f;
+            wood = lerpf(wood, 0.29f, knotCore * 0.75f);
+            wood = lerpf(wood, 0.58f, knotRing * 0.35f);
+            wood = lerpf(wood, 0.44f, resin * 0.50f);
+            wood *= (1.0f - crack * 0.55f);
+            wood *= lerpf(0.62f, 1.0f, cyl) * lerpf(1.0f, 0.72f, seamShadow);
 
-            float wr = woodTone * 1.12f;
-            float wg = woodTone * 0.76f;
-            float wb = woodTone * 0.41f;
+            float r = wood * 1.10f + resin * 0.05f;
+            float g = wood * 0.80f;
+            float b = wood * 0.53f;
 
-            float jt = 0.30f + juteTwist * 0.12f + (juteFibers - 0.5f) * 0.10f;
-            float mr = jt * 1.15f;
-            float mg = jt * 0.88f;
-            float mb = jt * 0.45f;
+            float h = 0.16f + cyl * 0.56f + (lateWood - 0.35f) * 0.045f + fiber * 0.045f
+                    - crack * 0.17f - knotCore * 0.09f;
 
-            float r = lerpf(wr, mr, seamMask);
-            float g = lerpf(wg, mg, seamMask);
-            float b = lerpf(wb, mb, seamMask);
+            float rough = clamp01(0.72f - earlyWood * 0.04f + lateWood * 0.05f
+                                  - resin * 0.26f + crack * 0.10f);
 
-            float hWood = 0.22f + cyl * 0.62f + ringWave * 0.07f + fiber * 0.05f - crack * 0.13f;
-            float hSeam = 0.10f + juteTwist * 0.09f + juteFibers * 0.04f;
-            float h = lerpf(hWood, hSeam, seamMask);
-
-            float roughWood = clamp01(0.64f - ringWave * 0.10f - steamPatina * 0.34f);
-            float rough = lerpf(roughWood, 0.94f, seamMask);
-            float ao = clamp01((0.58f + 0.42f * cyl) * lerpf(1.0f, 0.45f, seamMask));
-
-            hf[static_cast<size_t>(y) * S + x] = h;
-            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            hf[(size_t)y * S + x] = h;
+            size_t idx = ((size_t)y * S + x) * 3;
             out.diff[idx + 0] = toByte(r);
             out.diff[idx + 1] = toByte(g);
             out.diff[idx + 2] = toByte(b);
             out.roughMetal[idx + 0] = toByte(rough);
             out.roughMetal[idx + 1] = toByte(0.0f);
-            out.roughMetal[idx + 2] = toByte(ao);
+            out.roughMetal[idx + 2] = toByte(1.0f);
         }
     });
-    applyCavityAO(hf, S, 0.30f, out.diff);
-    heightToNormal(hf, S, 3.00f, out.norm);
+    applyCavityAO(hf, S, 0.22f, out.diff);
+    heightToNormal(hf, S, 2.40f, out.norm);
     return out;
 }
 
@@ -1212,79 +1213,75 @@ PbrSet genBanyaRooster4K(int S) {
     return out;
 }
 
-// 10. BanyaPlank — распаренная липовая вагонка и доски полка с фасками и каплями влаги
+// 10. BanyaPlank — ОДНА доска на тайл: липа/абаши для вагонки и полка.
+// UV-соглашение: U идёт ВДОЛЬ доски (1 тайл = 1 м длины), V — ПОПЕРЁК, от 0 до
+// 1 на всю ширину доски. Прошлая версия клала в тайл 6 досок, и при UV в
+// метрах доска 6 метров длиной получала 24 «доски» поперёк — на стене это
+// читалось как решётка из щепок. Теперь край доски с фаской живёт в V, а
+// волокно тянется вдоль U.
 PbrSet genBanyaPlank4K(int S) {
     PbrSet out;
     out.diff.resize(static_cast<size_t>(S) * S * 3);
     out.roughMetal.resize(static_cast<size_t>(S) * S * 3);
     std::vector<float> hf(static_cast<size_t>(S) * S);
 
-    const int numPlanks = 6;
     parallelRows(S, [&](int y) {
         float v = float(y) / S;
-        float plankPos = v * numPlanks;
-        int pIdx = static_cast<int>(std::floor(plankPos)) % numPlanks;
-        float py = plankPos - std::floor(plankPos);
-        float cy = py - 0.5f;
-        float edgeDist = std::fabs(cy) * 2.0f;
+        float cv = v - 0.5f;
+        float edge = std::fabs(cv) * 2.0f;          // 0 в центре доски, 1 у кромок
 
-        // Шпунтовая доска: глубокий аккуратный паз и фаска
-        float groove = 1.0f - smoothstep(0.84f, 0.96f, edgeDist);
-        float bevel  = 1.0f - smoothstep(0.76f, 0.89f, edgeDist);
-        float pRand  = hash01(pIdx, 5, numPlanks, 16, 1009u);
-
-        // Тёплый оттенок каждой планки липы/абаши (медовый -> кремово-липовый)
-        float toneShift = (pRand - 0.5f) * 0.14f;
+        // Фаска по обеим кромкам — именно она даёт шов между досками в наборе,
+        // когда доски стоят рядом. Никаких чёрных линий: только наклон и тень.
+        float bevel = smoothstep(0.90f, 0.995f, edge);
 
         for (int x = 0; x < S; ++x) {
             float u = float(x) / S;
-            float uShift = std::fmod(u + pRand * 0.73f, 1.0f);
 
-            // Вертикальный стык досок (разбежка по длине)
-            float seamU = std::fmod(0.27f + pRand * 0.61f, 1.0f);
-            float duSeam = std::fabs(std::fmod(u - seamU + 1.5f, 1.0f) - 0.5f);
-            float endJoint = smoothstep(0.008f, 0.002f, duSeam);
+            // Липа: шёлковый почти прямослойный рисунок, слабые годовые кольца.
+            float warp  = tileFbmXY(u, cv * 2.0f, 3, 8, 3, 1013u);
+            float ring  = 0.5f + 0.5f * std::sin((cv * 9.0f + (warp - 0.5f) * 1.5f) * TAU);
+            ring = std::pow(ring, 0.55f);
+            float fiber = tileFbmXY(u, cv, 2, 40, 3, 1019u);       // вдоль доски
+            float pore  = tileFbmXY(u, cv, 3, 150, 2, 1021u);
 
-            // Шелковистая прямослойная липа + тонкие годовые кольца
-            float warp = tileFbmXY(uShift, v * 1.5f, 3, 12, 3, 1013u + static_cast<uint32_t>(pIdx) * 19u);
-            float ring = 0.5f + 0.5f * std::sin((cy * 5.5f + (warp - 0.5f) * 2.1f) * TAU + pRand * TAU);
-            ring = std::pow(ring, 0.65f);
-            float fiber = tileFbmXY(uShift, v, 10, 140, 3, 1019u);
-            float microPores = tileFbmXY(uShift, v, 36, 220, 2, 1021u);
+            // Влажные разводы от пара: редкие, очень мягкие.
+            float wet = smoothstep(0.70f, 0.90f, tileWarpedFbm(u, v, 3, 4, 0.05f, 1031u)) * 0.55f;
 
-            // Мокрые пятна брызг воды и конденсата на полке (резко снижают roughness!)
-            float wetBlob = smoothstep(0.56f, 0.72f, tileWarpedFbm(u, v, 5, 4, 0.06f, 1031u));
-            float wetDroplet = smoothstep(0.68f, 0.82f, tileFbm(u, v, 24, 3, 1033u));
-            float wetMask = clamp01(wetBlob * 0.80f + wetDroplet * 0.35f);
+            // Кремовая липа: R 0.83, G 0.75, B 0.62 — не оранжевая, не жёлтая.
+            float base = 0.845f + (ring - 0.5f) * 0.040f
+                       + (fiber - 0.5f) * 0.062f + (pore - 0.5f) * 0.018f;
+            base *= lerpf(1.0f, 0.82f, wet);
+            base *= lerpf(1.0f, 0.74f, bevel);      // кромка уходит в тень набора
 
-            float baseT = 0.64f + toneShift + (ring - 0.5f) * 0.13f + (fiber - 0.5f) * 0.07f;
-            baseT *= lerpf(1.0f, 0.72f, wetMask * 0.65f); // мокрое дерево темнее и глубже!
-            baseT *= lerpf(0.28f, 1.0f, groove) * (1.0f - endJoint * 0.68f);
+            float r = base * 1.020f;
+            float g = base * 0.905f;
+            float b = base * 0.740f;
 
-            float r = baseT * 1.08f;
-            float g = baseT * 0.84f;
-            float b = baseT * 0.56f;
+            float h = 0.70f - bevel * 0.34f
+                    + ring * 0.010f + fiber * 0.014f - pore * 0.007f;
+            float rough = lerpf(0.60f - ring * 0.04f, 0.24f, wet);
+            rough = lerpf(rough, 0.72f, bevel);
 
-            float h = 0.25f + groove * 0.45f + bevel * 0.12f + ring * 0.04f + fiber * 0.03f - microPores * 0.02f - endJoint * 0.30f;
-            float rough = lerpf(0.60f - ring * 0.08f, 0.14f, wetMask);
-            rough = lerpf(0.92f, rough, groove);
-
-            hf[static_cast<size_t>(y) * S + x] = h;
-            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            hf[(size_t)y * S + x] = h;
+            size_t idx = ((size_t)y * S + x) * 3;
             out.diff[idx + 0] = toByte(r);
             out.diff[idx + 1] = toByte(g);
             out.diff[idx + 2] = toByte(b);
             out.roughMetal[idx + 0] = toByte(clamp01(rough));
             out.roughMetal[idx + 1] = toByte(0.0f);
-            out.roughMetal[idx + 2] = toByte(clamp01(0.45f + 0.55f * groove));
+            out.roughMetal[idx + 2] = toByte(1.0f);
         }
     });
-    applyCavityAO(hf, S, 0.32f, out.diff);
-    heightToNormal(hf, S, 2.90f, out.norm);
+    applyCavityAO(hf, S, 0.16f, out.diff);
+    heightToNormal(hf, S, 2.10f, out.norm);
     return out;
 }
 
-// 11. BanyaStone — колотый банный габбро-диабаз и жадеит (натуральные сколы породы без «панцирной сетки»)
+// 11. BanyaStone — колотый банный камень (габбро-диабаз / жадеит).
+// Прошлая версия была битой кладкой: чёрные «обводки» по швам сколов делали
+// поверхность похожей на чешую и давали на стене сетку из грязи. Настоящая
+// каменка — это разновысотные сколы без обводок: перепад читается нормалью и
+// затенением, а не цветом. Плюс редкие минеральные прожилки и слюда.
 PbrSet genBanyaStone4K(int S) {
     PbrSet out;
     out.diff.resize(static_cast<size_t>(S) * S * 3);
@@ -1296,67 +1293,81 @@ PbrSet genBanyaStone4K(int S) {
         for (int x = 0; x < S; ++x) {
             float u = float(x) / S;
 
-            // Органические деформации координат для рваных природных сколов породы
-            float wu = u + (tileFbm(u, v, 5, 4, 1103u) - 0.5f) * 0.14f;
-            float wv = v + (tileFbm(u + 0.37f, v + 0.21f, 5, 4, 1109u) - 0.5f) * 0.14f;
-            float w1_f1, w1_f2, w2_f1, w2_f2;
-            tileWorley2(wu, wv, 5,  1117u, w1_f1, w1_f2);
-            tileWorley2(wu + 0.19f, wv + 0.43f, 11, 1123u, w2_f1, w2_f2);
+            // Широкое искажение координат: сколы получаются органичными.
+            float wu = u + (tileFbm(u, v, 4, 4, 1103u) - 0.5f) * 0.20f;
+            float wv = v + (tileFbm(u + 0.37f, v + 0.21f, 4, 4, 1109u) - 0.5f) * 0.20f;
 
-            // Разновысотные сколотые плоскости (бесшовный перепад рельефа без чёрных обводок)
-            float bevel1 = clamp01((w1_f2 - w1_f1) * 3.8f);
-            float bevel2 = clamp01((w2_f2 - w2_f1) * 4.5f);
-            float ridge  = bevel1 * 0.65f + bevel2 * 0.35f;
+            // Два масштаба сколов: крупные блоки + мелкая разделка.
+            float a1, a2, b1, b2;
+            tileWorley2(wu, wv, 3,  1117u, a1, a2);
+            tileWorley2(wu + 0.19f, wv + 0.43f, 7, 1123u, b1, b2);
+            // Плоскость скола: у края плавно уходит вниз (никаких чёрных швов!).
+            float facetBig  = clamp01((a2 - a1) * 1.9f);
+            float facetFine = clamp01((b2 - b1) * 2.4f);
+            float plane = facetBig * 0.72f + facetFine * 0.28f;
 
-            float rockMacro = tileWarpedFbm(u, v, 6, 5, 0.11f, 1129u);
-            float rockDetail = tileFbm(u, v, 24, 4, 1141u);
-            float microGrain = tileGradNoise(u, v, 160, 1151u);
+            // Микрорельеф породы.
+            float grain = tileFbm(u, v, 48, 4, 1141u);
+            float micro = tileGradNoise(u, v, 220, 1151u);
+            float macro = tileWarpedFbm(u, v, 5, 4, 0.10f, 1129u);
 
-            // Редкая природная трещина только по напряжённым участкам
-            float stressMask = smoothstep(0.58f, 0.80f, tileFbm(u, v, 4, 3, 1171u));
-            float rareCrack  = (1.0f - smoothstep(0.0f, 0.028f, w1_f2 - w1_f1)) * stressMask * 0.65f;
+            // Трещины: только по напряжённым зонам и очень редко.
+            float stress = smoothstep(0.68f, 0.88f, tileFbm(u, v, 3, 3, 1171u));
+            float crack  = (1.0f - smoothstep(0.0f, 0.012f, a2 - a1)) * stress;
 
-            // Прожилки нефрита/жадеита и кристаллы белого кварца + искры слюды
-            float veinBand = smoothstep(0.62f, 0.80f, tileWarpedFbm(u, v, 3, 4, 0.16f, 1153u));
-            float quartzVein = (1.0f - smoothstep(0.0f, 0.022f, std::fabs(tileWarpedFbm(u, v, 4, 4, 0.14f, 1163u) - 0.50f)))
-                             * smoothstep(0.45f, 0.75f, rockMacro);
-            float micaSpark = smoothstep(0.76f, 0.90f, microGrain) * smoothstep(0.48f, 0.70f, rockDetail);
+            // Прожилки кварца: тонкие, прерывистые, только в отдельных зонах.
+            // Сплошная светлая линия по всей текстуре читается как светящийся
+            // червяк, поэтому прожилку рвём маской и сужаем до 2–3 пикселей.
+            float veinField = std::fabs(tileWarpedFbm(u, v, 3, 5, 0.22f, 1163u) - 0.5f);
+            float veinBand = (1.0f - smoothstep(0.0f, 0.0065f, veinField))
+                           * smoothstep(0.52f, 0.78f, macro)
+                           * smoothstep(0.44f, 0.62f, tileFbm(u, v, 9, 3, 1187u));
+            float mica = smoothstep(0.80f, 0.93f, micro) * smoothstep(0.45f, 0.70f, grain);
 
-            // Натуральный глубокий серый габбро-диабаз с тёплым минеральным оттенком
-            float baseTone = 0.21f + rockMacro * 0.17f + rockDetail * 0.10f + bevel1 * 0.07f + (microGrain - 0.5f) * 0.06f;
-            float r = baseTone * 0.97f;
-            float g = baseTone * 1.00f;
-            float b = baseTone * 1.03f;
+            // Тон габбро: тёмно-серый, слегка синеватый, тёплый по сколам.
+            float tone = 0.115f + macro * 0.075f + plane * 0.155f
+                       + (grain - 0.5f) * 0.035f + (micro - 0.5f) * 0.030f;
+            float r = tone * 1.00f;
+            float g = tone * 1.02f;
+            float b = tone * 1.06f;
 
-            // Вкрапления зелёного банного жадеита
-            r = lerpf(r, 0.15f, veinBand * 0.45f);
-            g = lerpf(g, 0.28f, veinBand * 0.45f);
-            b = lerpf(b, 0.20f, veinBand * 0.45f);
+            // Минеральные вкрапления: приглушённый жадеит, не изумруд.
+            float jade = smoothstep(0.62f, 0.86f, tileWarpedFbm(u, v, 4, 4, 0.13f, 1153u))
+                       * 0.22f;
+            r = lerpf(r, 0.085f, jade);
+            g = lerpf(g, 0.135f, jade);
+            b = lerpf(b, 0.105f, jade);
 
-            // Светлая кварцевая жилка и слюда
-            r = lerpf(r, 0.54f, quartzVein * 0.52f) + micaSpark * 0.12f;
-            g = lerpf(g, 0.55f, quartzVein * 0.52f) + micaSpark * 0.12f;
-            b = lerpf(b, 0.51f, quartzVein * 0.52f) + micaSpark * 0.12f;
+            // Кварцевая прожилка и слюдяные искры.
+            r += veinBand * 0.13f + mica * 0.07f;
+            g += veinBand * 0.13f + mica * 0.07f;
+            b += veinBand * 0.12f + mica * 0.07f;
 
-            r *= (1.0f - rareCrack * 0.55f);
-            g *= (1.0f - rareCrack * 0.55f);
-            b *= (1.0f - rareCrack * 0.55f);
+            // Кромка скола: очень узкая полутень по границе плоскостей. Именно
+            // она даёт «колотый» вид, но без чёрных обводок — 12% затемнения.
+            float facetEdge = (1.0f - smoothstep(0.0f, 0.045f, a2 - a1)) * 0.12f;
 
-            float h = 0.22f + ridge * 0.34f + rockMacro * 0.24f + rockDetail * 0.12f + (microGrain - 0.5f) * 0.05f - rareCrack * 0.18f;
-            float rough = clamp01(0.76f - micaSpark * 0.34f - quartzVein * 0.20f - bevel1 * 0.10f + rareCrack * 0.20f);
-            float metal = clamp01(micaSpark * 0.30f);
+            // Трещина — затемнение только в самой щели и мягко.
+            float crackShade = 1.0f - crack * 0.45f - facetEdge;
+            r *= crackShade; g *= crackShade; b *= crackShade;
 
-            hf[static_cast<size_t>(y) * S + x] = h;
-            size_t idx = (static_cast<size_t>(y) * S + x) * 3;
+            float h = 0.18f + plane * 0.46f + macro * 0.18f
+                    + (grain - 0.5f) * 0.10f + (micro - 0.5f) * 0.045f - crack * 0.14f;
+            float rough = clamp01(0.86f - mica * 0.30f - veinBand * 0.16f
+                                  - plane * 0.06f + crack * 0.10f);
+            float metal = clamp01(mica * 0.22f);
+
+            hf[(size_t)y * S + x] = h;
+            size_t idx = ((size_t)y * S + x) * 3;
             out.diff[idx + 0] = toByte(r);
             out.diff[idx + 1] = toByte(g);
             out.diff[idx + 2] = toByte(b);
             out.roughMetal[idx + 0] = toByte(rough);
             out.roughMetal[idx + 1] = toByte(metal);
-            out.roughMetal[idx + 2] = toByte(clamp01(0.65f + 0.35f * ridge));
+            out.roughMetal[idx + 2] = toByte(1.0f);
         }
     });
-    applyCavityAO(hf, S, 0.28f, out.diff);
+    applyCavityAO(hf, S, 0.30f, out.diff);
     heightToNormal(hf, S, 2.70f, out.norm);
     return out;
 }
@@ -1972,7 +1983,24 @@ int main(int argc, char** argv) {
         std::printf("  [OK] %-14s (%dx%d Diffuse + Normal + RoughMetal)\n", name, textureSize, textureSize);
     };
 
+    // Частичная генерация: аргумент 3 = фильтр по имени набора.
+    // Нужен, чтобы перегенерировать только баню, не тратя минуты на остальные 16 наборов.
+    const std::string only = (argc > 3) ? argv[3] : "";
+    const bool banyaOnly = (only == "banya");
+    std::string onlyLower = only;
+    for (char& ch : onlyLower) ch = (char)std::tolower((unsigned char)ch);
+    auto want = [&](const char* name) {
+        if (onlyLower.empty()) return true;
+        std::string lower(name);
+        for (char& ch : lower) ch = (char)std::tolower((unsigned char)ch);
+        return lower.find(onlyLower) != std::string::npos;
+    };
+
     const int smallSize = std::min(S, 2048);
+    if (banyaOnly) {
+        std::printf("[4K PBR Generator] Частичная генерация: %s\n", only.c_str());
+    }
+    if (!banyaOnly) {
     saveSet("StoneHD",      S,         genStone4K(S));
     saveSet("FloorTile",    S,         genFloor4K(S));
     saveSet("MetalPanel",   S,         genMetalPanel4K(S));
@@ -1980,16 +2008,24 @@ int main(int argc, char** argv) {
     saveSet("CrateWood",    S,         genCrateWood4K(S));
     saveSet("FeatherPBR",   smallSize, genFeather4K(smallSize));
     saveSet("HazardMetal",  smallSize, genHazardMetal4K(smallSize));
-    saveSet("BanyaLog",     S,         genBanyaLog4K(S));
-    saveSet("BanyaRooster", S,         genBanyaRooster4K(S));
-    saveSet("BanyaPlank",   S,         genBanyaPlank4K(S));
-    saveSet("BanyaStone",     S,         genBanyaStone4K(S));
-    saveSet("BanyaCopper",    S, genBanyaCopper4K(S));
-    saveSet("BanyaBirch",     S, genBanyaBirch4K(S));
     saveSet("CasinoFelt",     S, genCasinoFelt4K(S));
     saveSet("CasinoGold",     S, genCasinoGold4K(S));
     saveSet("CasinoMarble",   S,         genCasinoMarble4K(S));
     saveSet("CasinoMahogany", S,         genCasinoMahogany4K(S));
+    } // !banyaOnly
+
+    // Баня генерируется всегда (это её и переделываем), кроме случая фильтра по другому имени.
+    if (want("BanyaLog"))     saveSet("BanyaLog",     S, genBanyaLog4K(S));
+    if (want("BanyaRooster")) saveSet("BanyaRooster", S, genBanyaRooster4K(S));
+    if (want("BanyaPlank"))   saveSet("BanyaPlank",   S, genBanyaPlank4K(S));
+    if (want("BanyaStone"))   saveSet("BanyaStone",   S, genBanyaStone4K(S));
+    if (want("BanyaCopper"))  saveSet("BanyaCopper",  S, genBanyaCopper4K(S));
+    if (want("BanyaBirch"))   saveSet("BanyaBirch",   S, genBanyaBirch4K(S));
+
+    if (banyaOnly) {
+        std::printf("[4K PBR Generator] Готово (частично).\n");
+        return 0;
+    }
 
     int cubeS = 1024;
     genSkyCubemap(outDir, cubeS);

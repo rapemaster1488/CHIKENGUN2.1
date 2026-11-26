@@ -113,6 +113,7 @@
 #include "CasinoAnim2.h"
 #include "PerfTier.h"
 #include "Feel.h"
+#include "BanyaUv.h"
 #include "MaterialTier.h"
 #include "ArcadeGames.h"
 #include "SplashIntro.h"
@@ -591,6 +592,8 @@ private:
     bool rebuildingUI_ = false;
     float uiRebuildDelay_ = 0.0f;
     bool windowFocusLost_ = false;
+    bool focusedOnce_ = false;      // окно хоть раз получало фокус (для восстановления ввода)
+    float bootElapsed_ = 0.0f;      // сколько секунд идёт загрузка (сторожевой таймер)
     float lastCrosshairGap_ = -1.0f;
     int uiWidth_ = 0;
     int uiHeight_ = 0;
@@ -5467,9 +5470,41 @@ private:
                !helpOpen_ && !armoryOpen_ && !perkShopOpen_ && !windowFocusLost_;
     }
 
+    // Возврат фокуса окну. Пока окно было не в фокусе, ОС не отдаёт нажатия
+    // клавиш — это и есть «клава не работает»: игрок кликает обратно, но
+    // предыдущий цикл мог оставить клавиши залипшими (W держится, игрок едет).
+    // Поэтому при получении фокуса сбрасываем состояние ввода принудительно.
+    void RepairInputFocus() {
+        auto* input = GetSubsystem<Input>();
+        auto* gfx = GetSubsystem<Graphics>();
+        if (!input) return;
+        if (gfx) {
+            // Центр экрана: без этого после MM_RELATIVE курсор остаётся за краем,
+            // и клики по меню уходят «мимо».
+            input->SetMousePosition(IntVector2(gfx->GetWidth() / 2, gfx->GetHeight() / 2));
+        }
+        // Снимаем «залипшие» клавиши движения/стрельбы.
+        isSprinting_ = false;
+        isAiming_ = false;
+        playerVelocity_ = Vector3::ZERO;
+        SyncMouseLock();
+    }
+
+    // Меню: курсор обязан быть видимым. Дублирующий вызов из HandleKeyDown на
+    // случай, если фокус пришёл без события (например, после alt-tab).
+    void RestoreMenuCursorOnce() {
+        auto* input = GetSubsystem<Input>();
+        if (!input) return;
+        if (!input->IsMouseVisible()) input->SetMouseVisible(true);
+        if (input->GetMouseMode() != MM_ABSOLUTE) input->SetMouseMode(MM_ABSOLUTE);
+    }
+
     void SyncMouseLock() {
         auto* input = GetSubsystem<Input>();
         if (!input) return;
+        // Порядок важен: сначала режим, потом видимость. Раньше они переключались
+        // в двух ветках подряд, и на некоторых драйверах SetMouseVisible(true)
+        // сбрасывал MM_RELATIVE обратно — курсор пропадал в бою.
         if (ShouldLockMouse()) {
             if (input->GetMouseMode() != MM_RELATIVE)
                 input->SetMouseMode(MM_RELATIVE);
@@ -5520,7 +5555,12 @@ private:
         if (windowFocusLost_) {
             isSprinting_ = false;
             isAiming_ = false;
+            playerVelocity_ = Vector3::ZERO;
+        } else if (focusedOnce_) {
+            // Фокус вернулся (alt-tab, клик по окну) — чиним ввод.
+            RepairInputFocus();
         }
+        focusedOnce_ = focusedOnce_ || !windowFocusLost_;
         SyncMouseLock();
     }
 
@@ -5573,6 +5613,12 @@ private:
 
         // Пошаговая 4K-загрузка игры с живой отрисовкой прогресс-бара на GPU
         if (loadingScreenActive_) {
+            bootElapsed_ += dt;
+            // Сторожевой таймер. Если мир уже собран, но загрузчик почему-то
+            // не закрылся (не дошла очередь шага, подвисла затухающая панель),
+            // игрок не должен остаться без управления навсегда.
+            if (!splashActive_ && loadStepIndex_ >= 5 && bootElapsed_ > 25.0f)
+                HideLoadingScreen();
             RebuildLoadingScreenIfResized();
             if (splashActive_) UpdateSplashIntro(dt);
             else {
@@ -5866,8 +5912,23 @@ private:
     void HandleKeyDown(StringHash eventType, VariantMap& eventData) {
         using namespace KeyDown;
         (void)eventType;
-        if (loadingScreenActive_) return;
-        
+
+        if (loadingScreenActive_) {
+            // Аварийный выход из загрузки. Раньше здесь был голый `return`:
+            // если загрузочный экран залипал (не доходила очередь шагов или
+            // фаза затухания не тикала), игра выглядела полностью мёртвой —
+            // ни меню, ни ESC, ни WASD (движение тоже блокируется флагом).
+            // Теперь любая клавиша после того, как мир уже создан (шаг 5 —
+            // это UI и меню), закрывает загрузочный экран.
+            const int key = VarToInt(eventData[P_KEY]);
+            if (!splashActive_ && loadStepIndex_ >= 5 &&
+                (key == KEY_ESCAPE || key == KEY_RETURN || key == KEY_SPACE)) {
+                HideLoadingScreen();
+                ShowMainMenu(true);
+            }
+            return;
+        }
+
         int key = VarToInt(eventData[P_KEY]);
 
         // Глобальные горячие клавиши 4K Ultra & Cyber Overload
@@ -5966,6 +6027,10 @@ private:
 
         // ===== Главное меню (7 пунктов: вкл. Баньку, Рулетку, Миниигры) и 15-строчные 4K настройки =====
         if (inMenu_) {
+            // Курсор в меню должен быть видим и в абсолютном режиме, иначе игрок
+            // не понимает, что от него хотят. Дублируем здесь, потому что
+            // SyncMouseLock вызывается только при входе в меню и при потере фокуса.
+            RestoreMenuCursorOnce();
             if (inSettings_) {
                 const int kRows = SETTINGS_ROW_COUNT;
                 if (key == KEY_UP || key == KEY_W) { settingsSel_ = (settingsSel_ + kRows - 1) % kRows; PlayUISound(); UpdateSettingsDisplay(); }
@@ -5976,9 +6041,9 @@ private:
                 else if (key == KEY_ESCAPE) { ShowSettings(false); }
                 return;
             }
-            if (key == KEY_P) { PlayUISound(); OpenBanyaSimulator(true); return; }
-            if (key == KEY_J) { PlayUISound(); OpenCasino(true); return; }
-            if (key == KEY_K) { PlayUISound(); OpenArcade(true); return; }
+            // Раньше P/J/K здесь мгновенно проваливались в баню/казино/аркаду,
+            // минуя выбор пункта. Теперь в меню работают ровно те клавиши, что
+            // написаны в подсказке снизу: стрелки/WASD, ENTER и ESC.
             if (key == KEY_UP || key == KEY_W) { menuSel_ = (menuSel_ + 6) % 7; PlayUISound(); UpdateMainMenuSelection(); }
             else if (key == KEY_DOWN || key == KEY_S) { menuSel_ = (menuSel_ + 1) % 7; PlayUISound(); UpdateMainMenuSelection(); }
             else if (key == KEY_RETURN || key == KEY_SPACE) {
@@ -12862,30 +12927,273 @@ private:
             return p;
         };
 
-        // 5. Пол (10 липовых половиц) и тёплый потолок с балками-матицами
+        // ─── Собственная геометрия сруба ──────────────────────────────────
+        // Box.mdl и Cylinder.mdl из Urho3D дают ОДИН тайл текстуры на грань и
+        // на всю окружность. Для сруба это приговор: 6-метровое бревно и
+        // 40-сантиметровая стойка получают одинаковую картинку, волокна
+        // растягиваются в полосу. Поэтому брёвна, доски полка и половицы
+        // собираются здесь вручную, с UV в метрах: 1 тайл = 0.5 м вдоль
+        // ствола и 1 оборот по окружности.
+        // Тайлинг берётся из BanyaUv: там же его проверяет test_banya_uv, чтобы
+        // однажды снова не отрендерить 6-метровое бревно одной картинкой.
+        // LOG_TILE_U используется внутри addLogRun через BanyaUv::LogU().
+        const float PLANK_TILE = BanyaUv::PlankTileMeters();
+
+        auto addLogRun = [&](CustomGeometry* cg, const Vector3& a, const Vector3& b,
+                             float radius, int around, bool caps) {
+            const Vector3 dir = (b - a);
+            const float len = dir.Length();
+            if (len < 1e-4f) return;
+            const Vector3 axis = dir / len;
+            // Базис сечения: up/side перпендикулярны оси ствола.
+            const Vector3 ref = (std::fabs(axis.y_) < 0.9f) ? Vector3::UP : Vector3::RIGHT;
+            const Vector3 side = (axis.CrossProduct(ref)).Normalized();
+            const Vector3 up = side.CrossProduct(axis).Normalized();
+
+            // Профиль оцилиндровки: снизу сечение чуть срезано (бревно лежит в
+            // пазу на нижнем венце), сверху — полный круг.
+            auto radiusAt = [&](float ang) {
+                const float c = std::cos(ang);
+                return (c < -0.35f) ? radius * (1.0f - (std::fabs(c) - 0.35f) * 0.5f) : radius;
+            };
+            auto pointAt = [&](float ang, float t) {
+                const Vector3 radial = (up * std::sin(ang) + side * std::cos(ang));
+                return a + axis * (t * len) + radial * radiusAt(ang);
+            };
+
+            const int segs = Max(2, (int)(len / 0.35f));   // шаг вдоль ствола
+            const float twoPi = 2.0f * 3.14159265f;
+            for (int ai = 0; ai < around; ++ai) {
+                const float a0 = (float)ai / (float)around * twoPi;
+                const float a1 = (float)(ai + 1) / (float)around * twoPi;
+                const float am = (a0 + a1) * 0.5f;
+                const Vector3 nMid = (up * std::sin(am) + side * std::cos(am));
+
+                for (int si = 0; si < segs; ++si) {
+                    const float t0 = (float)si / (float)segs;
+                    const float t1 = (float)(si + 1) / (float)segs;
+                    const Vector3 p00 = pointAt(a0, t0), p01 = pointAt(a0, t1);
+                    const Vector3 p11 = pointAt(a1, t1), p10 = pointAt(a1, t0);
+
+                    // Обмотку определяем по факту: нормаль треугольника должна
+                    // смотреть туда же, куда радиаль. Иначе бревно выворачивается
+                    // наизнанку и стена исчезает снаружи.
+                    const Vector3 faceN = (p01 - p00).CrossProduct(p11 - p00);
+                    const bool flip = faceN.DotProduct(nMid) < 0.0f;
+
+                    // Знак бинормали для карты нормалей: Urho3D берёт
+                    // B = cross(N, T) * tangent.w. Подбираем w так, чтобы B
+                    // совпал с направлением роста V (по окружности), иначе
+                    // нормаль-мап разворачивается и рельеф «вдавливается».
+                    const Vector3 vDir = (up * std::cos(am) - side * std::sin(am));
+                    const float wSign = (nMid.CrossProduct(axis).DotProduct(vDir) >= 0.0f) ? 1.0f : -1.0f;
+
+                    auto emit = [&](const Vector3& pos, float ang, float t) {
+                        const Vector3 radial = (up * std::sin(ang) + side * std::cos(ang));
+                        cg->DefineVertex(pos);
+                        cg->DefineNormal(radial);
+                        cg->DefineTexCoord(Vector2(BanyaUv::LogU(t * len), BanyaUv::LogV(ang)));
+                        cg->DefineTangent(Vector4(axis.x_, axis.y_, axis.z_, wSign));
+                        cg->DefineColor(Color::WHITE);
+                    };
+                    if (!flip) {
+                        emit(p00, a0, t0); emit(p01, a0, t1); emit(p11, a1, t1);
+                        emit(p00, a0, t0); emit(p11, a1, t1); emit(p10, a1, t0);
+                    } else {
+                        emit(p00, a0, t0); emit(p11, a1, t1); emit(p01, a0, t1);
+                        emit(p00, a0, t0); emit(p10, a1, t0); emit(p11, a1, t1);
+                    }
+                }
+
+                if (caps) {
+                    // Торцы: видны в углах «в чашу». Тоже с проверкой обмотки —
+                    // иначе в углу сруба остаётся дырка.
+                    for (int end = 0; end < 2; ++end) {
+                        const bool atA = (end == 0);
+                        const Vector3 base = atA ? a : b;
+                        const Vector3 nrm = atA ? -axis : axis;
+                        const Vector3 c0 = base + (up * std::sin(a0) + side * std::cos(a0)) * radiusAt(a0);
+                        const Vector3 c1 = base + (up * std::sin(a1) + side * std::cos(a1)) * radiusAt(a1);
+                        const Vector3 faceN = (c0 - base).CrossProduct(c1 - base);
+                        const bool flip = faceN.DotProduct(nrm) < 0.0f;
+                        auto vert = [&](const Vector3& pos, float ang) {
+                            cg->DefineVertex(pos);
+                            cg->DefineNormal(nrm);
+                            cg->DefineTexCoord(Vector2(0.5f + std::cos(ang) * 0.5f,
+                                                       0.5f + std::sin(ang) * 0.5f));
+                            cg->DefineTangent(Vector4(up.x_, up.y_, up.z_, 1.0f));
+                            cg->DefineColor(Color::WHITE);
+                        };
+                        if (!flip) {
+                            vert(base, am); vert(c0, a0); vert(c1, a1);
+                        } else {
+                            vert(base, am); vert(c1, a1); vert(c0, a0);
+                        }
+                    }
+                }
+            }
+        };
+
+        // Узел с одним общим мешем: все брёвна стены = один draw call.
+        auto addLogWall = [&](const char* name, Material* mat) -> CustomGeometry* {
+            Node* n = banyaScene_->CreateChild(name);
+            CustomGeometry* cg = n->CreateComponent<CustomGeometry>();
+            cg->BeginGeometry(0, TRIANGLE_LIST);
+            cg->SetMaterial(mat ? mat : fallbackMat_);
+            cg->SetCastShadows(true);
+            return cg;
+        };
+
+        // Доска с UV в метрах (1 тайл = 1 м). Строится в локальных осях,
+        // поворот и позиция — у узла. UVSwap меняет местами U и V, чтобы
+        // волокно всегда шло вдоль длинной стороны.
+        auto addBoardUV = [&](CustomGeometry* cg, const Vector3& size,
+                              float tileMeters, bool uvSwap) {
+            const float ex = size.x_ * 0.5f;
+            const float ey = size.y_ * 0.5f;
+            const float ez = size.z_ * 0.5f;
+
+            // Одна грань: n — нормаль, u/v — оси на плоскости, hu/hv — полуразмеры.
+            auto face = [&](const Vector3& n, const Vector3& u, const Vector3& v,
+                            float hu, float hv) {
+                // Смещение к плоскости грани. Раньше здесь стояла сумма ВСЕХ
+                // полуразмеров: доска 0.58x0.10x6.2 получала отступ 3.44 м
+                // вместо 0.05, и грани улетали от узла. Берём проекцию на n.
+                const float off = std::fabs(n.x_) * ex + std::fabs(n.y_) * ey + std::fabs(n.z_) * ez;
+                const Vector3 c = n * off;
+                const Vector3 uu = u * hu;
+                const Vector3 vv = v * hv;
+                const float tu = hu * 2.0f / tileMeters;
+                const float tv = hv * 2.0f / tileMeters;
+                auto pt = [&](float su, float sv, float a, float b) {
+                    cg->DefineVertex(c + uu * su + vv * sv);
+                    cg->DefineNormal(n);
+                    cg->DefineTexCoord(uvSwap ? Vector2(b, a) : Vector2(a, b));
+                    cg->DefineTangent(Vector4(u.x_, u.y_, u.z_, 1.0f));
+                    cg->DefineColor(Color::WHITE);
+                };
+                // Обмотка проверяется по знаку тройного произведения, а не
+                // «на глаз»: грань, вывернутая наизнанку, отсекается backface
+                // culling'ом, и доска просто исчезает с одной стороны.
+                const bool flip = (u.CrossProduct(v).DotProduct(n) > 0.0f);
+                if (!flip) {
+                    pt(-1, -1, 0.0f, 0.0f); pt(-1, 1, 0.0f, tv); pt(1, 1, tu, tv);
+                    pt(-1, -1, 0.0f, 0.0f); pt(1, 1, tu, tv); pt(1, -1, tu, 0.0f);
+                } else {
+                    pt(-1, -1, 0.0f, 0.0f); pt(1, 1, tu, tv); pt(-1, 1, 0.0f, tv);
+                    pt(-1, -1, 0.0f, 0.0f); pt(1, -1, tu, 0.0f); pt(1, 1, tu, tv);
+                }
+            };
+
+            face( Vector3::UP,      Vector3::RIGHT,  Vector3::FORWARD, ex, ez);
+            face( Vector3::DOWN,    Vector3::RIGHT,  Vector3::FORWARD, ex, ez);
+            face( Vector3::RIGHT,   Vector3::FORWARD, Vector3::UP,     ez, ey);
+            face( Vector3::LEFT,    Vector3::FORWARD, Vector3::UP,     ez, ey);
+            face( Vector3::FORWARD, Vector3::RIGHT,  Vector3::UP,      ex, ey);
+            face( Vector3::BACK,    Vector3::RIGHT,  Vector3::UP,      ex, ey);
+        };
+
+        auto addBoard = [&](const char* name, Material* mat, const Vector3& center,
+                            const Vector3& size, const Quaternion& rot = Quaternion::IDENTITY,
+                            bool shadow = true, bool uvSwap = false) -> Node* {
+            Node* n = banyaScene_->CreateChild(name);
+            n->SetPosition(center);
+            n->SetRotation(rot);
+            CustomGeometry* cg = n->CreateComponent<CustomGeometry>();
+            cg->BeginGeometry(0, TRIANGLE_LIST);
+            addBoardUV(cg, size, PLANK_TILE, uvSwap);
+            cg->Commit();
+            cg->SetMaterial(mat ? mat : fallbackMat_);
+            cg->SetCastShadows(shadow);
+            return n;
+        };
+
+        // 5. Пол и потолок. Половицы и доски потолка — со своим UV в метрах,
+        // иначе текстура вагонки растягивалась на 6 метров одной доски.
         for (int i = 0; i < 10; ++i) {
             float px = -2.75f + (float)i * 0.61f;
-            addObj(nullptr, "BanyaFloorPlank", Vector3(px, -0.05f, 0.15f), Vector3(0.58f, 0.10f, 6.2f), boxModel_, plankMat, Quaternion::IDENTITY, false);
+            addBoard("BanyaFloorPlank", plankMat, Vector3(px, -0.05f, 0.15f),
+                     Vector3(0.58f, 0.10f, 6.2f), Quaternion::IDENTITY, false, true);
         }
-        addObj(nullptr, "BanyaCeiling", Vector3(0.0f, 3.35f, 0.15f), Vector3(6.6f, 0.18f, 6.4f), boxModel_, plankMat);
-        for (int b = -1; b <= 1; ++b) {
-            addObj(nullptr, "BanyaBeam", Vector3(0.0f, 3.16f, (float)b * 1.45f), Vector3(0.32f, 6.4f, 0.32f), cylModel_, logMat, Quaternion(0, 0, 90));
+        addBoard("BanyaCeiling", plankMat, Vector3(0.0f, 3.35f, 0.15f), Vector3(6.6f, 0.18f, 6.4f));
+        {
+            Node* beams = banyaScene_->CreateChild("BanyaBeams");
+            CustomGeometry* cgBeams = beams->CreateComponent<CustomGeometry>();
+            cgBeams->BeginGeometry(0, TRIANGLE_LIST);
+            // Пять матиц вместо трёх: на широком потолке три балки давали
+            // пролёт больше метра, и потолок читался плоским.
+            for (int b = -2; b <= 2; ++b) {
+                const float bz = (float)b * 1.42f;
+                addLogRun(cgBeams, Vector3(-3.2f, 3.14f, bz), Vector3(3.2f, 3.14f, bz), 0.17f, 12, true);
+            }
+            cgBeams->Commit();
+            cgBeams->SetMaterial(logMat);
+            cgBeams->SetCastShadows(true);
         }
 
-        // 6. Стены из реальных оцилиндрованных брёвен + задняя вагонка
-        addObj(nullptr, "BackPlankCore", Vector3(0.0f, 1.65f, 2.38f), Vector3(6.2f, 3.4f, 0.12f), boxModel_, plankMat);
-        addObj(nullptr, "LeftPlankCore", Vector3(-2.95f, 1.65f, 0.15f), Vector3(0.12f, 3.4f, 6.2f), boxModel_, plankMat);
-        for (int r = 0; r < 8; ++r) {
-            float ry = 0.22f + (float)r * 0.42f;
-            addObj(nullptr, "BackLog", Vector3(0.0f, ry, 2.26f), Vector3(0.44f, 6.3f, 0.44f), cylModel_, logMat, Quaternion(0, 0, 90));
-            addObj(nullptr, "LeftLog", Vector3(-2.82f, ry + 0.18f, 0.15f), Vector3(0.44f, 6.2f, 0.44f), cylModel_, logMat, Quaternion(90, 0, 0));
-            if (r < 3 || r > 6) {
-                addObj(nullptr, "RightLog", Vector3(2.82f, ry + 0.18f, 0.15f), Vector3(0.44f, 6.2f, 0.44f), cylModel_, logMat, Quaternion(90, 0, 0));
-            }
+        // 6. СРУБ: стены из оцилиндрованных брёвен, собранных «в чашу».
+        // Было: плоская подложка-коробка + по одному бревну на венец. Такой сруб
+        // читается как обои с нарисованным бревном, особенно на стыках углов.
+        // Теперь: брёвна идут с чередованием выноса (нечётные венцы выходят за
+        // угол на полдиаметра) — это и есть настоящий замок «в чашу», он даёт
+        // характерную ступенчатую тень в углах парной.
+        const float logR = BanyaUv::LogRadius();   // радиус бревна ≈ 46 см
+        const float logStep = BanyaUv::LogStep();  // шаг венцов (брёвна слегка вжаты)
+        const int   logRows = 8;               // венцов до потолка
+        const float wallZ = 2.30f;             // ось задней стены
+        const float wallX = -2.86f;            // ось левой стены
+        const float wallR = 2.86f;             // ось правой стены
+
+        // Три стены = три меша = три draw call на весь сруб. Венцы чередуют
+        // вынос в угол: нечётные выходят за ось на полдиаметра — это и есть
+        // замок «в чашу», он даёт ступенчатую тень в углу парной.
+        CustomGeometry* cgBack  = addLogWall("BanyaLogWallBack",  logMat);
+        CustomGeometry* cgLeft  = addLogWall("BanyaLogWallLeft",  logMat);
+        CustomGeometry* cgRight = addLogWall("BanyaLogWallRight", logMat);
+        for (int r = 0; r < logRows; ++r) {
+            const float ry = logR + (float)r * logStep;
+            const bool outer = (r % 2) == 1;
+            const float oh = outer ? logR * 1.02f : 0.0f;
+
+            // Задняя стена — целиком.
+            addLogRun(cgBack, Vector3(-3.12f + oh, ry, wallZ), Vector3(3.12f - oh, ry, wallZ),
+                      logR, 16, true);
+            // Левая — целиком.
+            addLogRun(cgLeft, Vector3(wallX, ry, -3.12f + oh), Vector3(wallX, ry, 3.12f - oh),
+                      logR, 16, true);
+            // Правая — с вырезом под окно (z ≈ -0.35..1.25) и под дверь (z ≈ -2.58..-1.62).
+            addLogRun(cgRight, Vector3(wallR, ry, -3.12f), Vector3(wallR, ry, -2.58f), logR, 10, false);
+            addLogRun(cgRight, Vector3(wallR, ry, -1.62f), Vector3(wallR, ry, -0.35f), logR, 10, false);
+            addLogRun(cgRight, Vector3(wallR, ry, 1.25f), Vector3(wallR, ry, 3.12f - oh), logR, 10, false);
         }
-        // Колонны-стойки правой стены по краям окна
-        addObj(nullptr, "RightWallF", Vector3(2.80f, 1.70f, -1.30f), Vector3(0.30f, 3.4f, 2.35f), boxModel_, plankMat);
-        addObj(nullptr, "RightWallB", Vector3(2.80f, 1.70f,  1.80f), Vector3(0.30f, 3.4f, 1.45f), boxModel_, plankMat);
+        cgBack->Commit();
+        cgLeft->Commit();
+        cgRight->Commit();
+
+        // Пакля в межвенцовых швах: тонкие светлые валики в стыках. Без них
+        // сруб читается как монолит, а шов «в чашу» — как щель в стене.
+        Material* caulkMat = MakePBR(Color(198, 188, 162), 0.95f, 0.0f);
+        for (int r = 0; r < logRows - 1; ++r) {
+            const float sy = logR + ((float)r + 0.5f) * logStep;
+            addBoard("CaulkBack", caulkMat, Vector3(0.0f, sy, wallZ - logR * 0.80f),
+                     Vector3(6.20f, 0.040f, 0.045f), Quaternion::IDENTITY, false);
+            addBoard("CaulkLeft", caulkMat, Vector3(wallX + logR * 0.80f, sy, 0.0f),
+                     Vector3(0.045f, 0.040f, 6.20f), Quaternion::IDENTITY, false);
+            addBoard("CaulkRight", caulkMat, Vector3(wallR - logR * 0.80f, sy, 2.18f),
+                     Vector3(0.045f, 0.040f, 1.86f), Quaternion::IDENTITY, false);
+        }
+
+        // Вертикальные стойки по краям окна и двери — из того же бревна.
+        {
+            Node* jambs = banyaScene_->CreateChild("BanyaJambs");
+            CustomGeometry* cgJ = jambs->CreateComponent<CustomGeometry>();
+            cgJ->BeginGeometry(0, TRIANGLE_LIST);
+            addLogRun(cgJ, Vector3(wallR - 0.06f, 0.0f, -0.42f), Vector3(wallR - 0.06f, 3.30f, -0.42f), 0.15f, 12, false);
+            addLogRun(cgJ, Vector3(wallR - 0.06f, 0.0f,  1.32f), Vector3(wallR - 0.06f, 3.30f,  1.32f), 0.15f, 12, false);
+            cgJ->Commit();
+            cgJ->SetMaterial(logMat);
+            cgJ->SetCastShadows(true);
+        }
 
         // Приоткрывающаяся банная дверь справа в ближнем углу (для Воздух)
         addObj(nullptr, "DoorFrame", Vector3(2.68f, 1.10f, -1.65f), Vector3(0.18f, 2.25f, 1.05f), boxModel_, logMat);
@@ -12894,8 +13202,29 @@ private:
         addObj(banyaDoor3D_.Get(), "DoorLeaf", Vector3(0.0f, 0.0f, 0.45f), Vector3(0.08f, 2.08f, 0.90f), boxModel_, plankMat);
         addObj(banyaDoor3D_.Get(), "DoorHandle", Vector3(-0.08f, -0.05f, 0.78f), Vector3(0.06f, 0.18f, 0.06f), sphereModel_, copperMat);
 
-        // Деревянный абажур банного фонаря на стене справа сверху
-        addObj(nullptr, "LampShade", Vector3(2.05f, 2.75f, 1.75f), Vector3(0.42f, 0.48f, 0.28f), boxModel_, plankMat);
+        // ─── Настоящие детали сруба (а не примитивы) ──────────────────────
+        // 1) Подоконник и отлив из доски: окно перестаёт «висеть» в стене.
+        addBoard("WinSill", plankMat, Vector3(2.66f, 1.16f, 0.45f), Vector3(0.34f, 0.07f, 1.86f),
+                 Quaternion::IDENTITY, true, true);
+        // 2) Наличники вокруг окна — вертикальные доски с фаской.
+        addBoard("WinCasingF", plankMat, Vector3(2.70f, 1.86f, -0.38f), Vector3(0.10f, 1.46f, 0.14f),
+                 Quaternion::IDENTITY, true);
+        addBoard("WinCasingB", plankMat, Vector3(2.70f, 1.86f,  1.28f), Vector3(0.10f, 1.46f, 0.14f),
+                 Quaternion::IDENTITY, true);
+        // 3) Дверная коробка из брёвен-стоек и притолоки — вместо плоской рамы.
+        {
+            Node* doorFrame = banyaScene_->CreateChild("BanyaDoorJamb");
+            CustomGeometry* cgD = doorFrame->CreateComponent<CustomGeometry>();
+            cgD->BeginGeometry(0, TRIANGLE_LIST);
+            addLogRun(cgD, Vector3(2.70f, 0.0f, -1.58f), Vector3(2.70f, 2.30f, -1.58f), 0.10f, 10, true);
+            addLogRun(cgD, Vector3(2.70f, 0.0f, -2.62f), Vector3(2.70f, 2.30f, -2.62f), 0.10f, 10, true);
+            addLogRun(cgD, Vector3(2.70f, 2.28f, -2.62f), Vector3(2.70f, 2.28f, -1.58f), 0.11f, 10, false);
+            cgD->Commit();
+            cgD->SetMaterial(logMat);
+            cgD->SetCastShadows(true);
+        }
+        // 4) Деревянный абажур банного фонаря на стене справа сверху
+        addBoard("LampShade", plankMat, Vector3(2.05f, 2.75f, 1.75f), Vector3(0.42f, 0.48f, 0.28f));
         addObj(nullptr, "LampCore",  Vector3(2.02f, 2.75f, 1.75f), Vector3(0.24f, 0.30f, 0.16f), sphereModel_, lampGlow.Get(), Quaternion::IDENTITY, false);
 
         // 7. Морозное зимнее окно справа с падающими 3D-снежинками
@@ -12953,15 +13282,83 @@ private:
         }
 
         // 10. Двухъярусный липовый полок + подголовник + дубовая шайка с водой + медный ковш
-        addObj(nullptr, "UpperBench",  Vector3(0.62f, 0.86f, 1.32f), Vector3(3.15f, 0.12f, 1.32f), boxModel_, plankMat);
-        addObj(nullptr, "UpperSkirt",  Vector3(0.62f, 0.56f, 0.68f), Vector3(3.10f, 0.55f, 0.08f), boxModel_, plankMat);
-        addObj(nullptr, "Headrest",    Vector3(1.58f, 0.96f, 1.32f), Vector3(0.48f, 0.12f, 0.88f), boxModel_, plankMat, Quaternion(0, 0, -14));
-        addObj(nullptr, "LowerBench",  Vector3(0.75f, 0.44f, 0.28f), Vector3(2.85f, 0.11f, 0.82f), boxModel_, plankMat);
-        addObj(nullptr, "BenchLegL",   Vector3(-0.58f, 0.22f, 0.28f), Vector3(0.14f, 0.44f, 0.72f), boxModel_, logMat);
-        addObj(nullptr, "BenchLegR",   Vector3( 2.08f, 0.22f, 0.28f), Vector3(0.14f, 0.44f, 0.72f), boxModel_, logMat);
+        // Полок: настоящий настил из ламелей с зазорами. Раньше это была одна
+        // доска 3.15×1.32 — на ней не видно ни швов, ни толщины, поверхность
+        // выглядела наклеенной картинкой. Ламели дают швы, которые ловят свет.
+        const int   lamellaCount = 11;
+        const float benchX0 = -0.92f, benchX1 = 2.18f;
+        const float benchLen = benchX1 - benchX0;
+        const float lamW = benchLen / (float)lamellaCount;
+        for (int L = 0; L < lamellaCount; ++L) {
+            const float lx = benchX0 + lamW * ((float)L + 0.5f);
+            addBoard("BenchLamella", plankMat, Vector3(lx, 0.86f, 1.32f),
+                     Vector3(lamW * 0.86f, 0.085f, 1.32f), Quaternion::IDENTITY, true, true);
+        }
+        // Лобовая доска полка + два несущих бруса под настилом (видно издалека).
+        addBoard("UpperSkirt", plankMat, Vector3(0.62f, 0.80f, 0.68f),
+                 Vector3(benchLen + 0.04f, 0.20f, 0.07f));
+        for (int bb = 0; bb <= 2; ++bb) {
+            const float bx = benchX0 + benchLen * (float)bb / 2.0f;
+            addBoard("BenchBear", plankMat, Vector3(bx, 0.62f, 1.32f),
+                     Vector3(0.09f, 0.36f, 0.11f), Quaternion::IDENTITY, true, true);
+        }
+        // Подголовник — из трёх отдельных дощечек, как настоящий.
+        for (int hp = 0; hp < 3; ++hp) {
+            addBoard("HeadrestSlat", plankMat,
+                     Vector3(1.58f, 0.955f + (float)hp * 0.052f, 1.32f),
+                     Vector3(0.46f, 0.045f, 0.86f - (float)hp * 0.10f),
+                     Quaternion((float)(hp - 1) * 4.0f, 0, -14.0f), true, true);
+        }
+        // Нижняя ступень: тоже из ламелей, но уже и с зазором.
+        for (int L = 0; L < 9; ++L) {
+            const float lx = -0.60f + 0.325f * ((float)L + 0.5f);
+            addBoard("LowerLamella", plankMat, Vector3(lx, 0.44f, 0.28f),
+                     Vector3(0.325f * 0.84f, 0.075f, 0.82f), Quaternion::IDENTITY, true, true);
+        }
+        addBoard("BenchLegL", plankMat, Vector3(-0.58f, 0.22f, 0.28f), Vector3(0.14f, 0.44f, 0.72f),
+                 Quaternion::IDENTITY, true, true);
+        addBoard("BenchLegR", plankMat, Vector3( 2.08f, 0.22f, 0.28f), Vector3(0.14f, 0.44f, 0.72f),
+                 Quaternion::IDENTITY, true, true);
 
         // Дубовая шайка на нижнем полке + два медных обруча + вода + подвижный медный ковш
-        addObj(nullptr, "TubBody",   Vector3(-0.35f, 0.70f, 0.20f), Vector3(0.56f, 0.42f, 0.56f), cylModel_, plankMat);
+        // Шайка собирается из клёпок: один цилиндр с растянутой текстурой
+        // читался как пластиковое ведро. 16 клёпок дают и силуэт, и швы.
+        {
+            Node* tub = banyaScene_->CreateChild("BanyaTubStaves");
+            CustomGeometry* cgT = tub->CreateComponent<CustomGeometry>();
+            cgT->BeginGeometry(0, TRIANGLE_LIST);
+            const Vector3 tubC(-0.35f, 0.70f, 0.20f);
+            const float tubR = 0.28f, tubH = 0.42f;
+            const int staves = 16;
+            for (int st = 0; st < staves; ++st) {
+                const float a0 = (float)st / (float)staves * 2.0f * 3.14159265f;
+                const float a1 = (float)(st + 1) / (float)staves * 2.0f * 3.14159265f;
+                const Vector3 n0(std::cos(a0), 0.0f, std::sin(a0));
+                const Vector3 n1(std::cos(a1), 0.0f, std::sin(a1));
+                const float rTop = tubR * 1.06f;   // клёпки расходятся кверху
+                auto emit = [&](const Vector3& n, float ang, float y, float r) {
+                    cgT->DefineVertex(tubC + n * r + Vector3(0.0f, y, 0.0f));
+                    cgT->DefineNormal(n);
+                    cgT->DefineTexCoord(Vector2(ang / (2.0f * 3.14159265f), (y + tubH * 0.5f) / PLANK_TILE));
+                    cgT->DefineTangent(Vector4(0.0f, 1.0f, 0.0f, 1.0f));
+                    cgT->DefineColor(Color::WHITE);
+                };
+                // Внешняя сторона клёпки (с зазором 6% — шов между клёпками).
+                const float gap = 0.04f;
+                const Vector3 nA0(std::cos(a0 + gap), 0.0f, std::sin(a0 + gap));
+                const Vector3 nA1(std::cos(a1 - gap), 0.0f, std::sin(a1 - gap));
+                emit(nA0, a0 + gap, -tubH * 0.5f, tubR);
+                emit(nA0, a0 + gap,  tubH * 0.5f, rTop);
+                emit(nA1, a1 - gap,  tubH * 0.5f, rTop);
+                emit(nA0, a0 + gap, -tubH * 0.5f, tubR);
+                emit(nA1, a1 - gap,  tubH * 0.5f, rTop);
+                emit(nA1, a1 - gap, -tubH * 0.5f, tubR);
+                (void)n0; (void)n1;
+            }
+            cgT->Commit();
+            cgT->SetMaterial(plankMat);
+            cgT->SetCastShadows(true);
+        }
         addObj(nullptr, "TubHoopT",  Vector3(-0.35f, 0.84f, 0.20f), Vector3(0.59f, 0.05f, 0.59f), cylModel_, copperMat);
         addObj(nullptr, "TubHoopB",  Vector3(-0.35f, 0.56f, 0.20f), Vector3(0.59f, 0.05f, 0.59f), cylModel_, copperMat);
         addObj(nullptr, "TubWater",  Vector3(-0.35f, 0.89f, 0.20f), Vector3(0.49f, 0.03f, 0.49f), cylModel_, banyaWaterMat_.Get(), Quaternion::IDENTITY, false);
