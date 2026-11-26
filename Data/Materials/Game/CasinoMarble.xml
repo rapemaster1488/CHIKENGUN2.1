@@ -5,7 +5,7 @@
     <texture unit="diffuse" name="Textures/CasinoMarbleDiffuse.png" />
     <texture unit="normal" name="Textures/CasinoMarbleNormal.png" />
     <texture unit="specular" name="Textures/CasinoMarbleRoughMetal.png" />
-    <parameter name="Roughness" value="0.24" />
+    <parameter name="Roughness" value="0.05" />
     <parameter name="Metallic" value="0" />
     <parameter name="MatSpecColor" value="0.38 0.36 0.32 40" />
 </material>
