@@ -113,6 +113,7 @@
 #include "CasinoAnim2.h"
 #include "PerfTier.h"
 #include "Feel.h"
+#include "MaterialTier.h"
 #include "ArcadeGames.h"
 #include "SplashIntro.h"
 #include "SDLStartup.h"
@@ -1439,10 +1440,15 @@ public:
     // MSAA, HighDPI, TripleBuffer, Anisotropy 16x и максимальное качество PBR!
     // =========================================================================
     // Apply before loading materials, not after allocating the full 4K set.
+    // ФИКС «графика калла»: раньше здесь было gfxQualityIdx_>=3 → QUALITY_MAX,
+    // >=2 → QUALITY_MEDIUM. Но все 17 PBR-материалов объявляют PBR-технику под
+    // quality="2", а quality="1" — это старый DiffNormalSpec БЕЗ PBR. То есть на
+    // дефолтном ВЫСОКОМ пресете PBR не включался вообще, и баня/казино рисовались
+    // упрощённым освещением. Теперь отображение живёт в src/MaterialTier.h с тестами.
     auto MiniTextureQuality() const -> decltype(QUALITY_LOW) {
-        return gfxQualityIdx_ >= 3 ? QUALITY_MAX :
-               (gfxQualityIdx_ >= 2 ? QUALITY_MEDIUM : QUALITY_LOW);
+        return (decltype(QUALITY_LOW))MatTier::TextureQualityForPreset(gfxQualityIdx_);
     }
+
 
     void ApplyStartupRecovery() {
         if (!GetArguments().Contains(String("--safe-mode"))) return;
@@ -9098,7 +9104,7 @@ private:
         int q = Clamp(gfxQualityIdx_, 0, 3);
         renderer->SetMaterialQuality(q >= 2 ? QUALITY_HIGH : (q == 1 ? QUALITY_MEDIUM : QUALITY_LOW));
         renderer->SetTextureQuality(MiniTextureQuality());
-        renderer->SetSpecularLighting(q >= 1);
+        renderer->SetSpecularLighting(MatTier::UsesSpecular(q));
 
         static const int shadowSizes[3] = { 1024, 2048, 4096 };
         renderer->SetDrawShadows(q > 0);
@@ -11256,6 +11262,9 @@ private:
             casinoNeonLightL_->SetRange(10.0f);
             casinoNeonLightL_->SetBrightness(0.22f * pbr);
             casinoNeonLightL_->SetCastShadows(false);
+            // Бюджет встройки: два неона зала = два лишних прохода по экрану,
+            // а их цвет дублирует подсветку витрин. Оставляем на среднем и выше.
+            if (!Feel::KeepNeonLights(gpuTier_)) casinoNeonLightL_->SetEnabled(false);
 
             Node* neonRN = casinoScene_->CreateChild("CasinoNeonR");
             neonRN->SetPosition(Vector3(4.2f, 2.35f, 0.6f));
@@ -11265,6 +11274,7 @@ private:
             casinoNeonLightR_->SetRange(10.0f);
             casinoNeonLightR_->SetBrightness(0.20f * pbr);
             casinoNeonLightR_->SetCastShadows(false);
+            if (!Feel::KeepNeonLights(gpuTier_)) casinoNeonLightR_->SetEnabled(false);
         }
 
         // 4. 4K PBR материалы VIP-казино
@@ -12726,8 +12736,12 @@ private:
 
         // 2. Камера парной — глубокий кинематографический ракурс с видом на печь, полок и окно
         banyaCamNode_ = SharedPtr<Node>(banyaScene_->CreateChild("BanyaCamera"));
-        banyaCamNode_->SetPosition(Vector3(0.10f, 1.80f, -3.45f));
-        banyaCamNode_->LookAt(Vector3(0.05f, 1.38f, 1.05f));
+        // Ракурс: чуть от двери и вбок, взгляд на печь и полок по диагонали.
+        // Раньше камера стояла почти по центру и смотрела вниз — комната
+        // читалась «плоско». Смещение влево даёт объём: ближний угол полка
+        // уходит в перспективу, печь остаётся в левой трети кадра.
+        banyaCamNode_->SetPosition(Vector3(-1.28f, 1.62f, -2.62f));
+        banyaCamNode_->LookAt(Vector3(-0.45f, 1.18f, 1.35f));
         Camera* cam = banyaCamNode_->CreateComponent<Camera>();
         cam->SetFov(52.0f);
         cam->SetNearClip(0.08f);
@@ -12779,7 +12793,10 @@ private:
             banyaFireLight_->SetRange(10.5f);
             banyaFireLight_->SetBrightness(2.1f * pbr);
             banyaFireLight_->SetRadius(0.35f);
-            banyaFireLight_->SetCastShadows(gfxQualityIdx_ >= 1);
+            // Тень от очага — самая выразительная в комнате: огонь пляшет, и
+            // тени ходят по бревенчатой стене. На встройке оставляем, но только
+            // её одну: бюджет бани = 3 источника (главный свет + огонь + лампа).
+            banyaFireLight_->SetCastShadows(true);
 
             Node* lampLN = banyaScene_->CreateChild("BanyaLampLight");
             lampLN->SetPosition(Vector3(1.85f, 2.75f, 1.45f));
@@ -12801,6 +12818,10 @@ private:
             banyaWindowLight_->SetFov(62.0f);
             banyaWindowLight_->SetBrightness(1.35f * pbr);
             banyaWindowLight_->SetCastShadows(false);
+            // Холодный лунный спот из окна — красиво, но это ещё один проход
+            // по экрану. На встройке его роль берёт холодный цвет ночной
+            // подложки окна, поэтому сам источник выключаем.
+            if (!Feel::KeepNeonLights(gpuTier_)) banyaWindowLight_->SetEnabled(false);
         }
 
         // 4. 4K PBR материалы парной
