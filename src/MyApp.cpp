@@ -184,6 +184,14 @@ namespace GameConstants {
     constexpr float LAND_DUCK_RECOVERY = 7.0f;    // скорость восстановления после просадки
     constexpr float FALL_CAM_TILT = 3.0f;         // лёгкий наклон камеры при падении (град/сек скорости)
     constexpr float CAMERA_SHAKE_DECAY = 6.0f;    // затухание тряски от взрывов
+
+    // Тени солнца (4 каскада). Каскады/наклон/отступ заданы ОДИН раз, чтобы
+    // CreateLighting() и ApplyGraphicsSettings() не расходились.
+    constexpr float SHADOW_SPLITS[4] = { 14.0f, 38.0f, 88.0f, 165.0f };
+    constexpr float SHADOW_FADE_START = 0.82f;
+    constexpr float SHADOW_BIAS_CONSTANT = 0.00022f;  // только остаточная рябь (наклон + normal offset снимают основное)
+    constexpr float SHADOW_BIAS_SLOPE = 0.55f;
+    constexpr float SHADOW_NORMAL_OFFSET = 0.0012f;   // НОВОЕ: мировой сдвиг по нормали, масштабируется размером каскада
     
     // Настройки оружия
     constexpr int MAX_AMMO = 30;
@@ -813,6 +821,13 @@ private:
     SharedPtr<Material> laserDotMat_;
     bool photoMode_ = false;
     bool showTelemetry_ = false;
+    bool adaptiveQuality_ = true;   // авто-подстройка качества под FPS [F7]
+    int  adaptiveTier_ = 0;          // сколько раз уже снижали (не больше MAX)
+    float perfAccum_ = 0.0f;         // окно измерения для авто-качества
+    unsigned perfFrames_ = 0;
+    float telemetryAccum_ = 0.0f;   // окно усреднения FPS
+    unsigned telemetryFrames_ = 0;
+    float telemetryMinMs_ = 0.0f;
     SharedPtr<Text> telemetryText_;
     SharedPtr<BorderImage> telemetryBg_;
 
@@ -3207,7 +3222,7 @@ private:
         URHO3D_LOGINFO("Created " + String(targets_.Size()) + " targets");
     }
     
-    void CreateTarget(const Vector3& position, const Vector3& normal) {
+    Node* CreateTarget(const Vector3& position, const Vector3& normal) {
         Node* targetNode = scene_->CreateChild("Target");
         targetNode->SetPosition(position);
         targetNode->SetScale(Vector3(1.0f, 1.0f, 0.1f));
@@ -3229,6 +3244,7 @@ private:
         data.isActive_ = true;
         data.scoreValue_ = 100;
         targets_.Push(data);
+        return targetNode;
     }
     
     void CreateMovingTarget(const Vector3& startPosition) {
@@ -3303,6 +3319,32 @@ private:
         SaveSettingsFile();
     }
 
+    // Единая настройка теней солнца. Вызывается из CreateLighting() и при смене
+    // пресета графики — раньше bias жил только в одном месте, а карта теней
+    // меняла разрешение в другом, из-за чего рябь возвращалась на 4K-пресете.
+    void ConfigureSunShadows() {
+        if (!sunLight_) return;
+
+        sunLight_->SetCastShadows(gfxShadowIdx_ > 0);
+        sunLight_->SetShadowCascade(CascadeParameters(GameConstants::SHADOW_SPLITS[0],
+                                                      GameConstants::SHADOW_SPLITS[1],
+                                                      GameConstants::SHADOW_SPLITS[2],
+                                                      GameConstants::SHADOW_SPLITS[3],
+                                                      GameConstants::SHADOW_FADE_START));
+        // FIX: чёрные полосы — это shadow acne. Bias поднимали дважды (2.5.3, 2.5.4),
+        // но лечили симптом: константное смещение лишь сдвигает артефакт. Правильный
+        // фикс — normal offset (третий аргумент BiasParameters, в Urho3D 1.9.0 он есть):
+        // сэмпл глубины сдвигается по нормали поверхности, поэтому наклонные грани
+        // перестают затенять сами себя. Дополнительно сузили дальний каскад до 165 м.
+        sunLight_->SetShadowBias(BiasParameters(GameConstants::SHADOW_BIAS_CONSTANT,
+                                                GameConstants::SHADOW_BIAS_SLOPE,
+                                                GameConstants::SHADOW_NORMAL_OFFSET));
+        sunLight_->SetShadowIntensity(0.18f);
+        // Focus: включаем фокусировку на видимой части сцены + квантование размера
+        // тени. Без него карта «дышит» при беге и полосы шевелятся на стенках.
+        sunLight_->SetShadowFocus(FocusParameters(true, true, true, 0.5f, 3.0f));
+    }
+
     void CreateLighting() {
         const float arenaSize = GameConstants::ARENA_SIZE * GameConstants::TILE_SIZE / 2.0f;
         floodLights_.Clear();
@@ -3315,12 +3357,7 @@ private:
         sunLight_->SetLightType(LIGHT_DIRECTIONAL);
         sunLight_->SetColor(Color(1.0f, 0.88f, 0.68f, 1.0f));
         sunLight_->SetSpecularIntensity(1.25f);
-        sunLight_->SetCastShadows(gfxShadowIdx_ > 0);
-        sunLight_->SetShadowCascade(CascadeParameters(14.0f, 38.0f, 88.0f, 165.0f, 0.82f));
-        // FIX(2.5.4): bias 0.00018/0.42 давал shadow acne (рябь и чёрные полосы на поверхностях).
-        // Подняли константное смещение + slope-scaled под 165м каскад — рябь уходит, утечек нет.
-        sunLight_->SetShadowBias(BiasParameters(0.00042f, 0.60f));
-        sunLight_->SetShadowIntensity(0.18f);
+        ConfigureSunShadows();
 
         // --- Заполняющий небесно-сумеречный контровой свет ---
         Node* moonNode = scene_->CreateChild("MoonFill");
@@ -4327,6 +4364,54 @@ private:
         StyleCrispText(telemetryText_);
     }
 
+    // Urho3D Text::SetText() ВСЕГДА перестраивает геометрию текста (DecodeToUnicode +
+    // UpdateText), даже если строка не изменилась. HUD вызывал его каждый кадр для
+    // телеметрии, патронов, HP, счёта и баффов — это десятки перестроек вершин в
+    // секунду и заметные просадки FPS в бою. Теперь сравниваем строку/цвет и
+    // выходим, если менять нечего.
+    static bool SetTextIfChanged(Text* t, const String& text) {
+        if (!t) return false;
+        if (t->GetText() == text) return false;
+        t->SetText(text);
+        return true;
+    }
+
+    static void SetColorIfChanged(UIElement* e, const Color& c) {
+        if (e && e->GetColorAttr() != c) e->SetColor(c);
+    }
+
+    // Авто-адаптация качества: замеряем средний кадр за 2 секунды и, если игра
+    // стабильно не держит ~45 FPS, аккуратно снимаем нагрузку (SSAO -> 2K-тени ->
+    // MSAA -> пресет). Раньше при 4K-пресете на слабой видеокарте игрок получал
+    // «лагает» и должен был сам лезть в F9. Один шаг за раз, не чаще раза в 2 с,
+    // и никогда не трогаем настройки вверх — чтобы не было «качелей».
+    void UpdateAdaptiveQuality(float dt) {
+        if (!adaptiveQuality_ || loadingScreenActive_ || inMenu_ || paused_) { perfAccum_ = 0.0f; perfFrames_ = 0; return; }
+        perfAccum_ += dt;
+        perfFrames_++;
+        if (perfAccum_ < 2.0f) return;
+        float avgMs = (perfAccum_ / (float)Max(1u, perfFrames_)) * 1000.0f;
+        perfAccum_ = 0.0f; perfFrames_ = 0;
+
+        constexpr int MAX_STEPS = 4;
+        if (avgMs < 22.0f || adaptiveTier_ >= MAX_STEPS) return;   // >45 FPS — не вмешиваемся
+
+        adaptiveTier_++;
+        String step;
+        if (gfxSsao_) { gfxSsao_ = false; step = "SSAO4K выключен"; }
+        else if (gfxShadowIdx_ >= 2) { gfxShadowIdx_ = 1; step = "тени 2K"; }
+        else if (gfxMsaaIdx_ >= 2) { gfxMsaaIdx_ = 1; step = "MSAA 2x"; }
+        else if (gfxQualityIdx_ >= 2) { gfxQualityIdx_ = 1; ApplyQualityPresetDefaults(); step = "пресет ВЫСОКИЙ"; }
+        else if (gfxShadowIdx_ > 0) { gfxShadowIdx_ = 0; step = "тени выключены"; }
+        else if (gfxGlowIdx_ > 0) { gfxGlowIdx_ = 0; step = "bloom выключен"; }
+        else { adaptiveTier_ = MAX_STEPS; return; }
+
+        ApplyGraphicsSettings();
+        if (sunLight_) ConfigureSunShadows();
+        SyncPostProcessParams();
+        ShowMessage("Адаптивное качество (" + String((int)(1000.0f / Max(1.0f, avgMs))) + " FPS): " + step + "  [F7]");
+    }
+
     void UpdateTelemetry(float dt) {
         if (!telemetryBg_ || !telemetryText_) return;
         bool vis = showTelemetry_ && !loadingScreenActive_;
@@ -4334,20 +4419,31 @@ private:
         if (!vis) return;
         auto* gfx = GetSubsystem<Graphics>();
         auto* ren = GetSubsystem<Renderer>();
-        int fps = dt > 1e-5f ? (int)(1.0f / dt + 0.5f) : 0;
-        float ms = dt * 1000.0f;
+
+        // FPS считаем по ОКНУ (0.25 с), а не по одному кадру: мгновенный 1/dt
+        // скачет ±30% и обновлял текст почти каждый кадр.
+        telemetryAccum_ += dt;
+        telemetryFrames_++;
+        telemetryMinMs_ = (telemetryMinMs_ <= 0.0f) ? dt * 1000.0f : Min(telemetryMinMs_, dt * 1000.0f);
+        if (telemetryAccum_ < 0.25f) return;
+        float avgMs = (telemetryAccum_ / (float)Max(1u, telemetryFrames_)) * 1000.0f;
+        int fps = avgMs > 1e-4f ? (int)(1000.0f / avgMs + 0.5f) : 0;
+        float worstMs = telemetryMinMs_;
+        telemetryAccum_ = 0.0f; telemetryFrames_ = 0; telemetryMinMs_ = 0.0f;
+
         static const char* qNames[4] = { "LOW", "MED", "HIGH PBR", "4K ULTRA PBR" };
         String info =
-            "4K TELEMETRY [F3]\n"
-            "FPS: " + String(fps) + "  (" + String(ms, 1) + " ms)\n"
+            "TELEMETRY [F3]\n"
+            "FPS: " + String(fps) + "  (" + String(avgMs, 1) + " ms, худший " + String(worstMs, 1) + ")\n"
             "RES: " + String(gfx->GetWidth()) + "x" + String(gfx->GetHeight()) +
             "  MSAA: " + String(gfx->GetMultiSample()) + "x\n"
             "PRESET: " + String(qNames[Clamp(gfxQualityIdx_, 0, 3)]) + "\n"
             "POST: " + String(gfxSsao_ ? "SSAO4K " : "") + String(gfxGlowIdx_ > 0 ? "BLOOM " : "") +
             String("ACES ") + String(gfxSharpen_ ? "CAS4K " : "") + String(gfxFxaa_ ? "FXAA" : "") + "\n"
+            "SHADOW: " + String(gfxShadowIdx_ > 0 ? "on" : "off") + " normal-offset\n"
             "TRIS: " + String(ren ? ren->GetNumPrimitives() : 0) +
             "  BATCHES: " + String(ren ? ren->GetNumBatches() : 0);
-        telemetryText_->SetText(info);
+        SetTextIfChanged(telemetryText_, info);
     }
 
     void SpawnFloatingDamage(const Vector3& worldPos, int dmg, bool crit) {
@@ -4660,8 +4756,8 @@ private:
             String ammoStr = "ПАТРОНЫ: " + String(weapon_.currentAmmo_) + " / " + String(weapon_.reserveAmmo_);
             if (weapon_.isReloading_)
                 ammoStr += "  [ПЕРЕЗАРЯДКА " + String((int)lroundf(reloadProg * 100.0f)) + "%]";
-            ammoText_->SetText(ammoStr);
-            ammoText_->SetColor(weapon_.isReloading_ ? Color(0.32f, 0.96f, 0.90f, 1.0f)
+            SetTextIfChanged(ammoText_, ammoStr);
+            SetColorIfChanged(ammoText_, weapon_.isReloading_ ? Color(0.32f, 0.96f, 0.90f, 1.0f)
                                 : weapon_.currentAmmo_ <= 5 ? Color(1.0f, 0.22f, 0.20f, 1.0f)
                                                             : Color(1.0f, 0.90f, 0.25f, 1.0f));
         }
@@ -4683,16 +4779,13 @@ private:
     void UpdateHealthDisplay() {
         if (healthText_) {
             String healthStr = "HP: " + String((int)player_.health_) + "  |  БРОНЯ: " + String((int)player_.armor_);
-            healthText_->SetText(healthStr);
-            
+            SetTextIfChanged(healthText_, healthStr);
+
             float healthRatio = player_.maxHealth_ > 0.0f ? player_.health_ / player_.maxHealth_ : 0.0f;
-            if (healthRatio > 0.6f) {
-                healthText_->SetColor(Color(0.25f, 1.0f, 0.45f, 1.0f));
-            } else if (healthRatio > 0.3f) {
-                healthText_->SetColor(Color(1.0f, 0.90f, 0.22f, 1.0f));
-            } else {
-                healthText_->SetColor(Color(1.0f, 0.22f, 0.20f, 1.0f));
-            }
+            Color hc = (healthRatio > 0.6f) ? Color(0.25f, 1.0f, 0.45f, 1.0f)
+                     : (healthRatio > 0.3f) ? Color(1.0f, 0.90f, 0.22f, 1.0f)
+                                            : Color(1.0f, 0.22f, 0.20f, 1.0f);
+            SetColorIfChanged(healthText_, hc);
         }
         if (hudHpBarFill_) {
             float ratio = player_.maxHealth_ > 0.0f ? Clamp(player_.health_ / player_.maxHealth_, 0.0f, 1.0f) : 0.0f;
@@ -4729,7 +4822,7 @@ private:
             b += (grenadeCooldown_ <= 0.0f) ? "[G] ГРАНАТА  " : ("[G] " + String(grenadeCooldown_, 1) + "с  ");
             b += (turretCooldown_ <= 0.0f)  ? "[T] ТУРЕЛЬ (100¤)  " : ("[T] " + String((int)turretCooldown_) + "с  ");
             b += "[B] ПЕРКИ (" + String(credits_) + "¤)  [P] БАНЯ";
-            statusBuffText_->SetText(b);
+            SetTextIfChanged(statusBuffText_, b);
         }
     }
     
@@ -4747,14 +4840,15 @@ private:
                 if (activeMutator_ != Cyber::MUT_STANDARD)
                     s += " [" + String(Cyber::GetMutatorInfo(activeMutator_).name) + "]";
             }
-            scoreText_->SetText(s);
-            scoreText_->SetColor(comboCount_ > 1 ? Color(1.0f, 0.65f, 0.15f, 1.0f) : Color(1.0f, 1.0f, 1.0f, 1.0f));
+            SetTextIfChanged(scoreText_, s);
+            SetColorIfChanged(scoreText_, comboCount_ > 1 ? Color(1.0f, 0.65f, 0.15f, 1.0f)
+                                                          : Color(1.0f, 1.0f, 1.0f, 1.0f));
         }
     }
     
     void UpdateAccuracyDisplay() {
         if (accuracyText_) {
-            accuracyText_->SetText("ТОЧНОСТЬ: " + String((int)player_.GetAccuracy()) + "%");
+            SetTextIfChanged(accuracyText_, "ТОЧНОСТЬ: " + String((int)player_.GetAccuracy()) + "%");
         }
     }
     
@@ -4835,6 +4929,7 @@ private:
                 "  ЛКМ / ПКМ — огонь    R — перезарядка    1..0 — 12 стволов   [ / ] — листать\n"
                 "  Q / E — PBR-скин     L — 3D лазер       I — осмотр оружия    TAB — арсенал\n"
                 "  F — Тир/Арена        F2 — 4K фоторежим  F3 — телеметрия      F8 — атмосфера 4K\n"
+                "  F9 — пресет графики  F7 — авто-качество (не лагает на слабом железе)\n"
                 "\n"
                 "ТАКТИКА, БАНЬКА СМОТРЯЩЕГО [P] И ПЕРКИ\n"
                 "  • [P] «КОЧЕТ В БАНЬКЕ»: продержись 3 минуты и разгадай загадки смотрящего (14 концовок, 57 загадок)!\n"
@@ -5277,6 +5372,7 @@ private:
         }
 
         UpdateTelemetry(dt);
+        UpdateAdaptiveQuality(dt);
         UpdateDeployOverlay(dt);
         UpdateAchievementToast(dt);
 
@@ -5448,6 +5544,10 @@ private:
                 for (unsigned i = targets_.Size(); i-- > 0; ) {
                     if (!targets_[i].isActive_) {
                         RemoveColliderLite(targets_[i].colliderIdx_);
+                        // ФИКС: узел 3D-модели раньше не удалялся. Каждый респавн
+                        // добавлял в сцену невидимый StaticModel, и на длинной сессии
+                        // «Полигон» превращался в свалку сотен нод (просадка FPS).
+                        if (targets_[i].node_) targets_[i].node_->Remove();
                         targets_.Erase(i);
                     }
                 }
@@ -5459,6 +5559,20 @@ private:
                         rangeRespawnTimer_ = 0.0f;
                         float rx = (float)(rand() % 30 - 15);
                         float rz = (float)(rand() % 30 - 15);
+                        // Держим мишень в кадре игрока и на уровне глаз, а не по
+                        // случайному углу всей арены: раньше она могла появиться
+                        // за спиной или внутри декора.
+                        if (cameraNode_) {
+                            Vector3 fwd = cameraNode_->GetWorldDirection();
+                            float ang = atan2f(fwd.x_, fwd.z_) + ((float)(rand() % 120 - 60)) * 0.01745329f;
+                            float dist = 9.0f + (float)(rand() % 8);
+                            Vector3 base = cameraNode_->GetPosition();
+                            rx = base.x_ + sinf(ang) * dist;
+                            rz = base.z_ + cosf(ang) * dist;
+                            const float limit = 58.0f;
+                            rx = Clamp(rx, -limit, limit);
+                            rz = Clamp(rz, -limit, limit);
+                        }
                         CreateTarget(Vector3(rx, 1.5f, rz), Vector3(0, 0, 1));
                     }
                 }
@@ -5526,6 +5640,15 @@ private:
         if (key == KEY_F3) {
             showTelemetry_ = !showTelemetry_;
             PlayUISound();
+            return;
+        }
+        if (key == KEY_F7) {
+            adaptiveQuality_ = !adaptiveQuality_;
+            if (adaptiveQuality_) adaptiveTier_ = 0;
+            SaveSettingsFile();
+            PlayUISound();
+            ShowMessage(adaptiveQuality_ ? "Адаптивное качество [F7]: ВКЛ (авто-подстройка под FPS)"
+                                         : "Адаптивное качество [F7]: ВЫКЛ (фиксированные настройки)");
             return;
         }
         if (key == KEY_F8) {
@@ -8520,6 +8643,7 @@ private:
             gfxMsaaIdx_ = (m >= 8) ? 3 : (m >= 4 ? 2 : (m >= 2 ? 1 : 0));
         }
         gfxShadowIdx_   = Clamp(XmlGetInt(gfx, "shadows",     gfxShadowIdx_),  0, 2);
+        adaptiveQuality_ = XmlGetInt(gfx, "adaptive_quality", adaptiveQuality_ ? 1 : 0) != 0;
         gfxGlowIdx_     = Clamp(XmlGetInt(gfx, "bloom",       gfxGlowIdx_),    0, 2);
         gfxSsao_        = XmlGetInt(gfx, "ssao",    gfxSsao_    ? 1 : 0) != 0;
         gfxHdr_         = XmlGetInt(gfx, "hdr",     gfxHdr_     ? 1 : 0) != 0;
@@ -8586,6 +8710,7 @@ private:
         XmlSetInt(gfx, "msaa",          kMsaa[Clamp(gfxMsaaIdx_, 0, 3)]);
         XmlSetInt(gfx, "msaaIdx",       gfxMsaaIdx_);
         XmlSetInt(gfx, "shadows",       gfxShadowIdx_);
+        XmlSetInt(gfx, "adaptive_quality", adaptiveQuality_ ? 1 : 0);
         XmlSetInt(gfx, "bloom",         gfxGlowIdx_);
         XmlSetInt(gfx, "ssao",          gfxSsao_    ? 1 : 0);
         XmlSetInt(gfx, "hdr",           gfxHdr_     ? 1 : 0);

@@ -76,6 +76,14 @@ float GetVertexLightVolumetric(int index, vec3 worldPos)
 
 vec4 GetShadowPos(int index, vec3 normal, vec4 projWorldPos)
 {
+    // ВАЖНО: вариант шейдера с define NORMALOFFSET движок выбирает только при
+    // light->GetShadowBias().normalOffset_ > 0 (Renderer.cpp, LVS/DLPS_*).
+    // NormalOffsetScale приходит из Batch.cpp уже в единицах мира и умножен на
+    // размер каскада, поэтому своих констант здесь быть не должно.
+    #if defined(SHADOW) && !defined(NORMALOFFSET)
+        #define NORMALOFFSET
+    #endif
+
     #ifdef NORMALOFFSET
         float normalOffsetScale[4];
         normalOffsetScale[0] = cNormalOffsetScale.x;

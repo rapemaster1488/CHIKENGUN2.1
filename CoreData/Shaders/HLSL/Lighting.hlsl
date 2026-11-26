@@ -80,6 +80,12 @@ float GetVertexLightVolumetric(int index, float3 worldPos)
 
 void GetShadowPos(float4 projWorldPos, float3 normal, out float4 shadowPos[NUMCASCADES])
 {
+    // Вариант с define NORMALOFFSET движок выбирает только при
+    // light->GetShadowBias().normalOffset_ > 0 (Renderer.cpp).
+    #if defined(SHADOW) && !defined(NORMALOFFSET)
+        #define NORMALOFFSET
+    #endif
+
     // Shadow projection: transform from world space to shadow space
     #ifdef NORMALOFFSET
         #ifdef DIRLIGHT
