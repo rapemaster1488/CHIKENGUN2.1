@@ -112,6 +112,7 @@
 #include "CasinoAnimation.h"
 #include "CasinoAnim2.h"
 #include "PerfTier.h"
+#include "Feel.h"
 #include "ArcadeGames.h"
 #include "SplashIntro.h"
 #include "SDLStartup.h"
@@ -630,6 +631,12 @@ private:
     float headBobIntensity_ = 0.0f;           // 0..1, плавное нарастание покачки при разгоне
     float landDuckOffset_ = 0.0f;             // просадка камеры при приземлении
     float camShakeAmount_ = 0.0f;             // тряска от взрывов/отдачи
+    float shakePhase_ = 0.0f;                 // фаза детерминированного шума тряски
+    // Индикатор направления удара: 4 сектора (перед/право/зад/лево) вспыхивают
+    // в ту сторону, ОТКУДА прилетело. Без него игрок вертится наугад.
+    SharedPtr<BorderImage> dmgDirArc_[4];
+    float dmgDirTimer_ = 0.0f;                // общий таймер жизни
+    int   dmgDirSector_ = 0;                  // последний сектор (для яркости)
     float currentFov_ = 75.0f;                // плавно интерполируемый FOV
     
     // Временные переменные
@@ -1321,6 +1328,9 @@ public:
     static constexpr unsigned MAX_TRACERS = 256;
     static constexpr unsigned MAX_SHOCKWAVES = 96;
     static constexpr unsigned MAX_DEBRIS = 384;
+    // Сколько обломков реально живёт одновременно: 384 частицы на встройке —
+    // это заметная просадка в момент взрыва бочки. Потолок по классу железа.
+    int DebrisBudget() const { return (gpuTier_ <= 1) ? 120 : (gpuTier_ == 2 ? 260 : (int)MAX_DEBRIS); }
     static constexpr unsigned MAX_ENEMY_PROJECTILES = 128;
     static constexpr unsigned MAX_PLASMA_BOLTS = 32;
     static constexpr unsigned MAX_THROWN_GRENADES = 8;
@@ -1362,7 +1372,7 @@ public:
 
     void AddDebris(const DebrisData& debris) {
         if (!debris.node_) return;
-        if ((unsigned)debrisLite_.Size() >= MAX_DEBRIS) {
+        if (debrisLite_.Size() >= DebrisBudget()) {
             if (debrisLite_[0].node_) debrisLite_[0].node_->Remove();
             debrisLite_.Erase(0);
         }
@@ -3400,7 +3410,14 @@ private:
             Vector3( arenaSize * 0.55f, 9.0f, -arenaSize * 0.55f),
             Vector3(-arenaSize * 0.55f, 9.0f, -arenaSize * 0.55f)
         };
+        // Сколько угловых заливок оставить — решает класс железа (см. src/Feel.h).
+        // В forward-рендере каждый источник это отдельный проход по экрану:
+        // 4 заливки + 2 неона + спот = 7 проходов, и именно они «жрут» кадры на
+        // встройке, а не геометрия. На iGPU оставляем 2 заливки — картинка
+        // почти не меняется, потому что основной свет даёт солнце.
+        const int floodCount = Feel::FloodLightsFor(gpuTier_);
         for (int i = 0; i < 4; ++i) {
+            if (i >= floodCount) continue;
             Node* ln = scene_->CreateChild("Flood");
             ln->SetPosition(floodPos[i]);
             Light* l = ln->CreateComponent<Light>();
@@ -3413,6 +3430,7 @@ private:
         }
 
         // --- Две неоновые PBR TubeLight лампы по бокам площади ---
+        const bool keepNeon = Feel::KeepNeonLights(gpuTier_);
         Node* neonA = scene_->CreateChild("NeonA");
         neonA->SetPosition(Vector3(-12.0f, 3.0f, 0.0f));
         neonLightA_ = neonA->CreateComponent<Light>();
@@ -3422,6 +3440,7 @@ private:
         neonLightA_->SetRadius(0.45f);
         neonLightA_->SetLength(3.5f);
         neonLightA_->SetCastShadows(false);
+        if (!keepNeon) neonLightA_->SetEnabled(false);   // бюджет встройки
 
         Node* neonB = scene_->CreateChild("NeonB");
         neonB->SetPosition(Vector3(12.0f, 3.0f, 0.0f));
@@ -3432,6 +3451,7 @@ private:
         neonLightB_->SetRadius(0.45f);
         neonLightB_->SetLength(3.5f);
         neonLightB_->SetCastShadows(false);
+        if (!keepNeon) neonLightB_->SetEnabled(false);   // бюджет встройки
 
         SyncPbrLightScale();
     }
@@ -4132,6 +4152,7 @@ private:
         
 
         CreateHitMarker();
+        CreateDamageDirectionArcs();
 
         {
             const int th = S(90.0f);
@@ -4180,12 +4201,71 @@ private:
         }
     }
 
+    // Четыре широкие полосы-«дуги» вокруг прицела. Вспыхивает та, со стороны
+    // которой прилетело — стандарт жанра, без него игрок не понимает, куда бежать.
+    void CreateDamageDirectionArcs() {
+        auto* ui = GetSubsystem<UI>();
+        auto* root = ui->GetRoot();
+        const int sw = GetSubsystem<Graphics>()->GetWidth();
+        const int sh = GetSubsystem<Graphics>()->GetHeight();
+        const int cx = sw / 2, cy = sh / 2;
+        const int thick = S(26.0f), len = S(260.0f), gap = S(96.0f);
+        struct Geo { int x, y, w, h; };
+        const Geo geo[4] = {
+            { cx - len / 2, cy - gap - thick, len, thick },   // 0 сверху (удар спереди)
+            { cx + gap,     cy - len / 2,     thick, len },   // 1 справа
+            { cx - len / 2, cy + gap,         len, thick },   // 2 снизу (удар в спину)
+            { cx - gap - thick, cy - len / 2, thick, len },   // 3 слева
+        };
+        for (int i = 0; i < 4; ++i) {
+            BorderImage* arc = root->CreateChild<BorderImage>();
+            arc->SetSize(geo[i].w, geo[i].h);
+            arc->SetPosition(geo[i].x, geo[i].y);
+            arc->SetColor(Color(1.0f, 0.16f, 0.12f, 0.0f));
+            arc->SetBlendMode(BLEND_ADD);
+            dmgDirArc_[i] = SharedPtr<BorderImage>(arc);
+        }
+    }
+
+    // Вспыхнуть сектором по направлению источника урона.
+    // sourcePos — откуда прилетело; секторы считаем в плоскости XZ относительно
+    // взгляда игрока, поэтому разворот мышью сразу «двигает» подсветку.
+    void FlashDamageDirection(const Vector3& sourcePos) {
+        if (!cameraNode_) return;
+        const Vector3 toSrc = sourcePos - cameraNode_->GetPosition();
+        const float srcAngle = atan2f(toSrc.x_, toSrc.z_);      // 0 = вперёд (+Z)
+        const float rel = srcAngle - yaw_;                       // относительно взгляда
+        // Приводим к [-pi, pi]
+        float a = fmodf(rel + 3.14159265f * 3.0f, 6.2831853f) - 3.14159265f;
+        const float deg = a * 57.29578f;
+        int sector;
+        if (deg >= -45.0f && deg < 45.0f)        sector = 0;   // спереди
+        else if (deg >= 45.0f && deg < 135.0f)   sector = 1;   // справа
+        else if (deg >= 135.0f || deg < -135.0f) sector = 2;   // сзади
+        else                                      sector = 3;   // слева
+        dmgDirSector_ = sector;
+        dmgDirTimer_ = 1.0f;
+    }
+
+    void UpdateDamageDirectionArcs(float dt) {
+        if (dmgDirTimer_ > 0.0f) dmgDirTimer_ = Max(0.0f, dmgDirTimer_ - dt);
+        const float a = Feel::DamageFlashAlpha(1.0f - dmgDirTimer_);
+        for (int i = 0; i < 4; ++i) {
+            if (!dmgDirArc_[i]) continue;
+            const bool active = (dmgDirTimer_ > 0.0f && i == dmgDirSector_);
+            dmgDirArc_[i]->SetColor(active ? Color(1.0f, 0.20f, 0.14f, a * 0.85f)
+                                           : Color(0.0f, 0.0f, 0.0f, 0.0f));
+        }
+    }
+
     bool hitWasHeadshot_ = false;
     void ShowHitMarker(bool kill, bool headshot = false) {
         hitMarkerTimer_ = (kill || headshot) ? 0.30f : 0.16f;
         if (kill) hitKillTimer_ = 0.30f;
         hitWasHeadshot_ = headshot;
     }
+
+    void UpdateDamageDirectionDraw(float dt) { UpdateDamageDirectionArcs(dt); }
 
     void UpdateHitMarker(float dt) {
         Color c(0.0f, 0.0f, 0.0f, 0.0f);
@@ -5635,6 +5715,7 @@ private:
 
         UpdateCrosshairSpread();
         UpdateHitMarker(dt);
+        UpdateDamageDirectionDraw(dt);
         UpdateLowHealthVignette(dt);
         UpdateTracers(dt);
         UpdatePlasmaBolts(dt);
@@ -6862,9 +6943,15 @@ private:
 
         landDuckOffset_ = Lerp(landDuckOffset_, 0.0f, Min(1.0f, GameConstants::LAND_DUCK_RECOVERY * dt));
 
-        camShakeAmount_ = Lerp(camShakeAmount_, 0.0f, Min(1.0f, GameConstants::CAMERA_SHAKE_DECAY * dt));
-        float shakeX = ((float)(rand() % 200) - 100.0f) / 100.0f * camShakeAmount_;
-        float shakeY = ((float)(rand() % 200) - 100.0f) / 100.0f * camShakeAmount_;
+        // Затухание экспонентой: линейный Lerp на просадке кадров мог «перелететь»
+        // и дать отрицательную тряску. Сдвиг — детерминированный шум на двух
+        // косинусах (Feel.h): rand() на каждом кадре читается как баг, а не удар.
+        camShakeAmount_ = Feel::DecayShake(camShakeAmount_, dt, GameConstants::CAMERA_SHAKE_DECAY);
+        shakePhase_ += dt;
+        float shakeOff[2];
+        Feel::ShakeOffset(shakePhase_, camShakeAmount_, shakeOff);
+        const float shakeX = shakeOff[0];
+        const float shakeY = shakeOff[1];
 
         Vector3 pos = cameraNode_->GetPosition();
         pos.y_ += bobY + landDuckOffset_ + shakeY;
@@ -7023,6 +7110,17 @@ private:
         FireWeapon();
     }
     
+    // Класс «ощущения» оружия для тряски/отдачи (см. src/Feel.h).
+    static int WeaponFeelClass(int w) {
+        switch (w) {
+        case W_PISTOL: case W_SMG:              return Feel::FEEL_LIGHT;
+        case W_RIFLE:  case W_SHOTGUN:          return Feel::FEEL_STANDARD;
+        case W_SNIPER: case W_LAUNCHER:         return Feel::FEEL_HEAVY;
+        case W_MINIGUN:                         return Feel::FEEL_SPINUP;
+        default:                                return Feel::FEEL_STANDARD;
+        }
+    }
+
     void FireWeapon() {
         weapon_.currentAmmo_--;
         player_.shotsFired_++;
@@ -7030,10 +7128,17 @@ private:
         float rofDiv = (1.0f + 0.12f * (float)perkRofLvl_);
         weapon_.fireTimer_ = (WEAPON_DEFS[currentWeapon_].fireRate / rofDiv) * (overdriveTimer_ > 0.0f ? 0.82f : 1.0f);
         
-        float randomRecoil = (float)(rand() % 100) / 100.0f * GameConstants::BULLET_SPREAD;
+        // Отдача по классу оружия (Feel.h): тяжёлое бьёт сильнее, миниган дрожит
+        // мельче. Боковой увод чередуется по выстрелам, поэтому очередь не
+        // уползает строго в одну сторону — раньше rand() давал перекос.
+        const int feelClass = WeaponFeelClass(currentWeapon_);
+        float kickPitch = 0.0f, kickYaw = 0.0f;
+        Feel::RecoilKick(kickPitch, kickYaw, feelClass, player_.shotsFired_);
         float recoilMul = (currentWeapon_ == W_RAILGUN) ? 1.85f : 1.0f;
-        weapon_.recoilX_ += GameConstants::RECOIL_AMOUNT * (0.8f + randomRecoil) * recoilMul;
-        weapon_.recoilY_ += (float)(rand() % 40 - 20) / 10.0f;
+        weapon_.recoilX_ += GameConstants::RECOIL_AMOUNT * kickPitch * 0.6f * recoilMul;
+        weapon_.recoilY_ += kickYaw * 0.5f;
+        // Тряска камеры тоже зависит от класса: пистолет — толчок, миниган — дрожь.
+        AddCameraShake(Feel::ShotShake(feelClass));
         
         PlayMuzzleFlash();
         PlayShootSound();
@@ -7483,12 +7588,16 @@ private:
         sm->SetMaterial(decalMat_.Get());
         sm->SetCastShadows(false);
         decals_.Push(SharedPtr<Node>(d));
-        if (decals_.Size() > 60) {
+        // Лимит декалей зависит от железа: 60 пулевых отверстий это 60 объектов
+        // в каждом проходе рендера (а на встройке проходов меньше, но каждый
+        // дороже). На iGPU держим 18 — на скорость боя не влияет, на кадры влияет.
+        const int decalLimit = (gpuTier_ <= 1) ? 18 : (gpuTier_ == 2 ? 40 : 60);
+        if (decals_.Size() > decalLimit) {
             Node* oldest = decals_[0];
             if (oldest) oldest->Remove();
             decals_.Erase(0);
         }
-        QueuePendingRemove(d, 12.0f);
+        QueuePendingRemove(d, (gpuTier_ <= 1) ? 8.0f : 12.0f);
     }
 
     // Ударная волна: кольцо, которое расширяется и исчезает (см. UpdateShockwaves)
@@ -8508,7 +8617,7 @@ private:
             float pdist = (camPos - center).Length();
             if (pdist < radius && !gameOver_) {
                 float falloff = 1.0f - pdist / radius;
-                DamagePlayer(damage * falloff * 0.4f);
+                DamagePlayer(damage * falloff * 0.4f, center);
             }
         }
     }
@@ -8516,6 +8625,12 @@ private:
     // =========================================================================
     // УРОН ПО ИГРОКУ (с поглощением 65% урона ТИТАНОВОЙ БРОНЁЙ) + GAME OVER
     // =========================================================================
+
+    // Перегрузка с позицией источника — тогда загорается нужный сектор.
+    void DamagePlayer(float amount, const Vector3& sourcePos) {
+        FlashDamageDirection(sourcePos);
+        DamagePlayer(amount);
+    }
 
     void DamagePlayer(float amount) {
         if (gameOver_ || amount <= 0.0f) return;
@@ -9940,7 +10055,7 @@ private:
                 // Попадание по игроку: сфера радиуса ~0.7 вокруг камеры
                 Vector3 toCam = camPos - next;
                 if (toCam.LengthSquared() < 0.5f) {
-                    if (!gameOver_) DamagePlayer(p.damage_);
+                    if (!gameOver_) DamagePlayer(p.damage_, next);
                     CreateHitSpark(next);
                     dead = true;
                 } else {
