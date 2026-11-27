@@ -143,6 +143,57 @@ inline bool IsOffScreen(const Rect* monitors, int count, const Rect& window) {
 // SDL_CreateWindow так же, как «растянутость» на два экрана.
 inline bool IsValidSize(int w, int h) { return w > 0 && h > 0; }
 
+// ── «Склеенный» рабочий стол ────────────────────────────────────────────────
+// ЖАЛОБА: «это говно видит два моих моника как 1, 3480 пикселей».
+// 3480 = 1920 + 1560 — это ШИРИНА ОБЪЕДИНЁННОГО рабочего стола, а не
+// отдельного экрана. Значит SDL_GetNumVideoDisplays() вернул 1 и отдал
+// десктопный режим объединённого пространства. Причина почти всегда не в
+// игре, а в драйвере/режиме: NVIDIA Surround, AMD Eyefinity, Intel Collage —
+// или X11-экран, объявленный как один Display шириной в оба монитора.
+//
+// Починить это изнутри игры нельзя (SDL просто не знает о втором дисплее),
+// но можно однозначно ОПОЗНАТЬ и сказать игроку, куда смотреть, вместо того
+// чтобы молча растягивать окно. Проверка нужна на старте и в телеметрии.
+
+// Похоже ли разрешение на сумму нескольких экранов: ширины хватает на два
+// типовых монитора по горизонтали, при этом пропорции «широкого» экрана.
+// Порог 2.2 отводит 32:9 и 21:9 (до 2.4 бывают панели 5120x2160 = 2.37).
+inline bool LooksLikeStitchedDesktop(int w, int h) {
+    if (w <= 0 || h <= 0) return false;
+    const double aspect = (double)w / (double)h;
+    if (aspect < 2.6) return false;          // 21:9 и уже — один монитор
+    // Второй признак: высота совпадает с типовой высотой монитора, а ширина
+    // примерно равна сумме двух таких экранов.
+    static const int kTypicalHeights[] = { 1080, 1200, 1440, 1600, 2160, 1440 };
+    for (int i = 0; i < 6; ++i) {
+        const int hh = kTypicalHeights[i];
+        if (h != hh) continue;
+        const int single = (hh * 16) / 9;    // 1920 для 1080
+        if (w >= single + single / 2) return true;
+    }
+    return false;
+}
+
+// Итог диагностики для строки телеметрии и сообщения игроку.
+struct DesktopDiag {
+    bool stitched = false;   // режим «один экран шириной в два»
+    int  monitors = 1;
+};
+
+inline DesktopDiag Diagnose(int monitorCount, int deskW, int deskH) {
+    DesktopDiag d;
+    d.monitors = monitorCount > 0 ? monitorCount : 1;
+    // Один «монитор» гигантской ширины — ровно та ситуация с 3480 px.
+    d.stitched = (d.monitors == 1) && LooksLikeStitchedDesktop(deskW, deskH);
+    return d;
+}
+
+// Текст подсказки. Короткий: его читают в телеметрии поверх боя.
+inline const char* StitchedHint() {
+    return "Экран объединён драйвером (Surround/Eyefinity/Mosaic): "
+           "отключи объединение в панели видеодрайвера, чтобы F10 увидел второй монитор";
+}
+
 // Основной монитор: первый, помеченный primary, иначе нулевой.
 inline int PrimaryIndex(const Monitor* monitors, int count) {
     for (int i = 0; i < count; ++i) {

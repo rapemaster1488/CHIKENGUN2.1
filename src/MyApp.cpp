@@ -112,6 +112,7 @@
 #include "CasinoAnimation.h"
 #include "CasinoAnim2.h"
 #include "CasinoCinematic.h"
+#include "KeyboardMap.h"
 #include "PerfTier.h"
 #include "Feel.h"
 #include "BanyaUv.h"
@@ -152,6 +153,29 @@ struct UrhoVariantIntGetter<V, std::void_t<decltype(std::declval<const V&>().Get
     static int Get(const V& v) { return static_cast<int>(v.GetI32()); }
 };
 inline int VarToInt(const Variant& v) { return UrhoVariantIntGetter<Variant>::Get(v); }
+
+// ── Чтение клавиш без зависимости от раскладки ─────────────────────────────
+// P_KEY — это SDL_Keycode, то есть СИМВОЛ раскладки. При русской раскладке
+// клавиша P приходит как 'п', и `key == KEY_P` не срабатывает никогда.
+// Раскладко-независимы только управляющие клавиши (ESC, SPACE, ENTER, TAB,
+// стрелки) — поэтому у игрока «работает только эскейп, пробел и энтер».
+// См. src/KeyboardMap.h: там же лежит проверка всех таблиц.
+inline int KeyFromEvent(VariantMap& eventData) {
+    using namespace KeyDown;
+    const unsigned scan = (unsigned)VarToInt(eventData[P_SCANCODE]);
+    const unsigned key = (unsigned)VarToInt(eventData[P_KEY]);
+    return Keys::Resolve(scan, key);
+}
+
+// Удержание клавиши по каноническому коду. Опрос идёт по сканкоду, потому что
+// Input::GetKeyDown(KEY_W) при русской раскладке возвращает false — WASD
+// перестают работать ровно так же, как и меню.
+inline bool KeyHeld(Input* input, int canonical) {
+    if (!input) return false;
+    const unsigned scan = Keys::ScancodeFromCanonical(canonical);
+    if (scan != Keys::kUnknown) return input->GetScancodeDown((Scancode)scan);
+    return input->GetKeyDown((Key)canonical);
+}
 
 inline bool RenderPathHasTag(const RenderPath* rp, const String& tag) {
     if (!rp) return false;
@@ -1078,6 +1102,11 @@ private:
     // физика колеса приняла бы это за новый спин и шарик прыгнул обратно
     // на трек.
     bool  casinoCineHold_ = false;
+    // Последняя нажатая клавиша — в телеметрии (F3). Позволяет отличить
+    // «SDL не отдаёт клавиши» от «раскладка подменила символ».
+    unsigned lastScanCode_ = 0;
+    int      lastKeyCode_ = 0;
+    bool     stitchedDesktopWarned_ = false;
     float casinoWheelAngle_ = 0.0f;
     float casinoWheelVel_ = 18.0f;
     float casinoBallAngle_ = 0.0f;
@@ -4814,6 +4843,17 @@ private:
                         "  window " + String(gfx->GetWidth()) + "x" + String(gfx->GetHeight());
                 if (gfx->GetWidth() > display.desktop.w + 2)
                     info += "  ⚠ ШИРЕ ЭКРАНА";
+                // Склейка драйвером (Surround/Eyefinity) выглядит как один
+                // «монитор» огромной ширины — это и есть «3480 пикселей».
+                if (MonitorLayout::Diagnose(display.count, display.desktop.w,
+                                            display.desktop.h).stitched)
+                    info += "  ⚠ ЭКРАНЫ ОБЪЕДИНЕНЫ ДРАЙВЕРОМ";
+                // Клавиши: показываем сканкод последнего нажатия. Если игрок
+                // нажимает P, а тут 0 — значит SDL вообще не отдаёт клавиши,
+                // и проблема не в раскладке.
+                if (lastScanCode_ != 0)
+                    info += "\nKEY: scan " + String((int)lastScanCode_) +
+                            "  code " + String(lastKeyCode_);
             }
         }
         SetTextIfChanged(telemetryText_, info);
@@ -5830,6 +5870,27 @@ private:
             }
         }
 
+        // Предупреждение о «склеенном» рабочем столе. Игрок видит один
+        // «монитор» шириной 3480 — это Surround/Eyefinity, а не баг игры.
+        // Говорим один раз за сессию, чтобы не мешать, но чтобы он знал,
+        // где искать настройку. Без этого советы «нажми F10» бесполезны:
+        // второго дисплея для SDL просто не существует.
+        if (!stitchedDesktopWarned_) {
+            WindowMonitor::Display warnDisplay;
+            if (WindowMonitor::Query(warnDisplay)) {
+                const MonitorLayout::DesktopDiag diag = MonitorLayout::Diagnose(
+                    warnDisplay.count, warnDisplay.desktop.w, warnDisplay.desktop.h);
+                if (diag.stitched) {
+                    stitchedDesktopWarned_ = true;
+                    ShowMessage(String("Экран ") + String(warnDisplay.desktop.w) + "x" +
+                                String(warnDisplay.desktop.h) + " — это два монитора, " +
+                                "объединённые драйвером. Раздели их в панели " +
+                                "видеодрайвера (Surround/Eyefinity/Mosaic), иначе F10 " +
+                                "не сможет выбрать второй.");
+                }
+            }
+        }
+
         // Сторож многомониторной раскладки. Раз в 2 секунды проверяем две вещи:
         //   1) окно не уехало целиком за пределы всех экранов (отключили
         //      второй монитор, WM восстановил позицию из прошлой сессии);
@@ -6147,7 +6208,7 @@ private:
             // ни меню, ни ESC, ни WASD (движение тоже блокируется флагом).
             // Теперь любая клавиша после того, как мир уже создан (шаг 5 —
             // это UI и меню), закрывает загрузочный экран.
-            const int key = VarToInt(eventData[P_KEY]);
+            const int key = KeyFromEvent(eventData);
             if (!splashActive_ && loadStepIndex_ >= 5 &&
                 (key == KEY_ESCAPE || key == KEY_RETURN || key == KEY_SPACE)) {
                 HideLoadingScreen();
@@ -6156,7 +6217,10 @@ private:
             return;
         }
 
-        int key = VarToInt(eventData[P_KEY]);
+        using namespace KeyDown;
+        lastScanCode_ = (unsigned)VarToInt(eventData[P_SCANCODE]);
+        lastKeyCode_ = (int)VarToInt(eventData[P_KEY]);
+        int key = KeyFromEvent(eventData);
 
         // Глобальные горячие клавиши 4K Ultra & Cyber Overload
         if (key == KEY_F3) {
@@ -6461,7 +6525,7 @@ private:
     void HandleKeyUp(StringHash eventType, VariantMap& eventData) {
         using namespace KeyUp;
         (void)eventType;
-        int key = VarToInt(eventData[P_KEY]);
+        int key = KeyFromEvent(eventData);
         if (key == KEY_LSHIFT || key == KEY_RSHIFT) {
             isSprinting_ = false;
         }
@@ -6566,10 +6630,10 @@ private:
         Vector3 forward = yawRot * Vector3(0.0f, 0.0f, 1.0f);
         Vector3 right   = yawRot * Vector3(1.0f, 0.0f, 0.0f);
         Vector3 dir = Vector3::ZERO;
-        if (input->GetKeyDown(KEY_W)) dir += forward;
-        if (input->GetKeyDown(KEY_S)) dir -= forward;
-        if (input->GetKeyDown(KEY_D)) dir += right;
-        if (input->GetKeyDown(KEY_A)) dir -= right;
+        if (KeyHeld(input, 'w')) dir += forward;
+        if (KeyHeld(input, 's')) dir -= forward;
+        if (KeyHeld(input, 'd')) dir += right;
+        if (KeyHeld(input, 'a')) dir -= right;
         if (dir.LengthSquared() < 0.01f) dir = forward;
         dir.Normalize();
 
@@ -7149,13 +7213,13 @@ private:
         Vector3 right = yawRot * Vector3(1.0f, 0.0f, 0.0f);
 
         Vector3 wishDir = Vector3::ZERO;
-        if (input->GetKeyDown(KEY_W)) wishDir += forward;
-        if (input->GetKeyDown(KEY_S)) wishDir -= forward;
-        if (input->GetKeyDown(KEY_D)) wishDir += right;
-        if (input->GetKeyDown(KEY_A)) wishDir -= right;
+        if (KeyHeld(input, 'w')) wishDir += forward;
+        if (KeyHeld(input, 's')) wishDir -= forward;
+        if (KeyHeld(input, 'd')) wishDir += right;
+        if (KeyHeld(input, 'a')) wishDir -= right;
         if (wishDir.LengthSquared() > 0.0f) wishDir.Normalize();
 
-        bool wantCrouch = input->GetKeyDown(KEY_LCTRL) || input->GetKeyDown(KEY_RCTRL) || input->GetKeyDown(KEY_C);
+        bool wantCrouch = input->GetKeyDown(KEY_LCTRL) || input->GetKeyDown(KEY_RCTRL) || KeyHeld(input, 'c');
         if (!wantCrouch && isCrouching_ && HeadBlocked(feetPos)) {
             wantCrouch = true;
         }
@@ -7201,7 +7265,7 @@ private:
         else coyoteTimer_ -= dt;
         if (jumpBufferTimer_ > 0.0f) jumpBufferTimer_ -= dt;
 
-        bool wantJump = input->GetKeyDown(KEY_SPACE);
+        bool wantJump = KeyHeld(input, ' ');
         if (wantJump && jumpBufferTimer_ <= 0.0f) jumpBufferTimer_ = GameConstants::JUMP_BUFFER_TIME;
 
         if (jumpBufferTimer_ > 0.0f && coyoteTimer_ > 0.0f) {
@@ -15296,11 +15360,11 @@ private:
         int mx = 0, my = 0;
         bool jump = false;
         if (input) {
-            if (input->GetKeyDown(KEY_LEFT) || input->GetKeyDown(KEY_A)) mx -= 1;
-            if (input->GetKeyDown(KEY_RIGHT) || input->GetKeyDown(KEY_D)) mx += 1;
-            if (input->GetKeyDown(KEY_UP) || input->GetKeyDown(KEY_W)) my -= 1;
-            if (input->GetKeyDown(KEY_DOWN) || input->GetKeyDown(KEY_S)) my += 1;
-            jump = input->GetKeyDown(KEY_SPACE) || input->GetKeyDown(KEY_W) || input->GetKeyDown(KEY_UP);
+            if (input->GetKeyDown(KEY_LEFT) || KeyHeld(input, 'a')) mx -= 1;
+            if (input->GetKeyDown(KEY_RIGHT) || KeyHeld(input, 'd')) mx += 1;
+            if (input->GetKeyDown(KEY_UP) || KeyHeld(input, 'w')) my -= 1;
+            if (input->GetKeyDown(KEY_DOWN) || KeyHeld(input, 's')) my += 1;
+            jump = KeyHeld(input, ' ') || KeyHeld(input, 'w') || input->GetKeyDown(KEY_UP);
         }
         bool wasOver = arcadeSim_.over;
         arcadeSim_.Step(dt, mx, my, jump);

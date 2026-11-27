@@ -234,6 +234,8 @@ if [ "$TESTS_ONLY" -eq 1 ]; then
     "$ROOT/build/test_monitor_layout${EXE_EXT}"
     "$CXX" -O2 -std=c++17 -Wall -Wextra -Werror -UNDEBUG "$ROOT/tests/test_casino_cine.cpp" -o "$ROOT/build/test_casino_cine${EXE_EXT}"
     "$ROOT/build/test_casino_cine${EXE_EXT}"
+    "$CXX" -O2 -std=c++17 -Wall -Wextra -Werror -UNDEBUG "$ROOT/tests/test_keyboard_map.cpp" -o "$ROOT/build/test_keyboard_map${EXE_EXT}"
+    "$ROOT/build/test_keyboard_map${EXE_EXT}"
     if [ "$OS_NAME" = "Linux" ]; then
         "$CXX" -O2 -std=c++17 -Wall -Wextra -Werror -UNDEBUG -I"$ROOT/tests/fake" \
             "$ROOT/tests/test_sdl_policy.cpp" -o "$ROOT/build/test_sdl_policy"

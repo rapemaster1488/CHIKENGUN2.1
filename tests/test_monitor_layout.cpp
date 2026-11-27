@@ -143,6 +143,34 @@ int main() {
         check(!IsValidSize(w, h), "и он невалиден — окно так создавать нельзя");
     }
 
+    // ── «Склеенный» рабочий стол ─────────────────────────────────────────
+    // Жалоба: «видит два моих моника как 1 3480 пикселей». 3480 — это ширина
+    // объединённого пространства. Игра не может разлепить его за игрока, но
+    // обязана это распознать и сказать, где искать настройку.
+    std::puts("== Склеенный рабочий стол ==");
+    {
+        check(LooksLikeStitchedDesktop(3480, 1080), "3480x1080 (1920+1560) — склейка");
+        check(LooksLikeStitchedDesktop(3840, 1080), "3840x1080 (два FullHD) — склейка");
+        check(LooksLikeStitchedDesktop(5120, 1440), "5120x1440 (два QHD) — склейка");
+        check(LooksLikeStitchedDesktop(5760, 1080), "5760x1080 (три FullHD) — склейка");
+
+        // Одиночные широкие экраны — это НЕ склейка, окно не надо трогать.
+        check(!LooksLikeStitchedDesktop(1920, 1080), "1920x1080 — один монитор");
+        check(!LooksLikeStitchedDesktop(2560, 1440), "2560x1440 — один монитор");
+        check(!LooksLikeStitchedDesktop(3440, 1440), "3440x1440 (21:9) — один монитор");
+        check(!LooksLikeStitchedDesktop(5120, 2160), "5120x2160 (21:9 4K) — один монитор");
+        check(!LooksLikeStitchedDesktop(0, 0), "нули не считаются склейкой");
+        check(!LooksLikeStitchedDesktop(3480, 0), "без высоты не гадаем");
+
+        const DesktopDiag one = Diagnose(1, 3480, 1080);
+        check(one.stitched && one.monitors == 1, "один дисплей + 3480px -> склейка");
+        const DesktopDiag two = Diagnose(2, 4480, 1440);
+        check(!two.stitched && two.monitors == 2, "два нормальных дисплея -> не склейка");
+        const DesktopDiag bad = Diagnose(0, 0, 0);
+        check(bad.monitors == 1 && !bad.stitched, "нулевой count -> один монитор");
+        check(StitchedHint()[0] != '\0', "подсказка игроку не пустая");
+    }
+
     std::printf("\nITOGO: %d proydeno, %d provaleno\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
