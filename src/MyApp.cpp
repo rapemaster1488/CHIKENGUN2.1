@@ -11940,19 +11940,21 @@ private:
         Node* zoneNode = casinoScene_->CreateChild("CasinoZone");
         casinoZone_ = SharedPtr<Zone>(zoneNode->CreateComponent<Zone>());
         casinoZone_->SetBoundingBox(BoundingBox(-40.0f, 40.0f));
-        casinoZone_->SetAmbientColor(Color(0.24f, 0.21f, 0.26f, 0.78f));
+        casinoZone_->SetAmbientColor(Color(0.28f, 0.24f, 0.29f, 0.80f));
         casinoZone_->SetFogColor(Color(0.05f, 0.03f, 0.07f));
-        casinoZone_->SetFogStart(8.5f);
-        casinoZone_->SetFogEnd(24.0f);
+        // РЕГРЕССИЯ PR #44: зал вырос до 22 x 18, камера отъехала на 6 м, и
+        // старый туман 8.5..24 начинал съедать ДАЛЬНИЙ КОНЕЦ стола (9.4 м от
+        // камеры) — стол выглядел «замыленным». Отодвигаем туман за стол.
+        casinoZone_->SetFogStart(15.0f);
+        casinoZone_->SetFogEnd(38.0f);
 
         // 2. Камера VIP-зала (плавный перелёт между 3D Рулеткой и 3D Автоматом 777)
         casinoCamNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoCamera"));
-        casinoCamNode_->SetPosition(Vector3(-4.95f, 3.05f, -1.80f));
-        casinoCamNode_->LookAt(Vector3(0.45f, 1.02f, 0.05f));
+        casinoCamNode_->SetPosition(Vector3(-3.55f, 2.34f, -1.48f));
+        casinoCamNode_->LookAt(Vector3(0.95f, 1.04f, 0.05f));
         Camera* cam = casinoCamNode_->CreateComponent<Camera>();
         casinoCineFov_ = 0.0f;
-        // Шире 50°, иначе вытянутый стол не влезает по длине.
-        cam->SetFov(56.0f);
+        cam->SetFov(50.0f);
         cam->SetNearClip(0.06f);
         cam->SetFarClip(80.0f);
 
@@ -12047,34 +12049,46 @@ private:
         Material* roosterBase = hdBanyaRooster_   ? hdBanyaRooster_   : (hdFeather_ ? hdFeather_ : fallbackMat_);
         Material* chromeMat   = hdMetal_          ? hdMetal_          : metalMaterial_;
 
-        // ── Стол: бархат по канону, БЕЗ глянца ────────────────────────────
-        // Игрок: «сделай его не супер глянцевым, сохрани бархатным по канону».
-        // Сукно — чистая шерсть: почти нулевой металл, высокая шероховатость,
-        // никакого specular-блёска. Текстура даёт ворс, а не отражения.
+        // ── Стол: бархат по канону ────────────────────────────────────────
+        // ВАЖНО, ЧЕМ Я ИСПОРТИЛ КАРТИНКУ В PR #44. В PBR-шейдере Urho3D:
+        //     roughness = map.r + cRoughness;  metalness = map.g + cMetallic;
+        //     roughness *= roughness;
+        // то есть Roughness/Metallic ПРИБАВЛЯЮТСЯ к карте, а не заменяют её.
+        // Я выставил Metallic 0.82 для латуни → metalness ушёл в 1, а в
+        // шейдере при metalness=1 диффуз обнуляется (diffColor -= diff*metal).
+        // Борт стал чёрным, «как в v1». Roughness 0.98 на сукне дал 1.0 и
+        // убил весь блик бархата.
+        // Вывод: у материалов с картой трогаем ТОЛЬКО цвет, а карта пусть
+        // рулит шероховатостью и металлом — она для этого и нарисована.
         SharedPtr<Material> feltInlayMat = hdCasinoFelt_ ? SharedPtr<Material>(hdCasinoFelt_->Clone())
                                                         : MakePBR(Color(18, 84, 58), 0.88f, 0.0f);
         if (hdCasinoFelt_) {
-            // Притушить золотую сетку, впечатанную в текстуру 4K: на большом
-            // столе она повторяется и читается как «обои». Оставляем ворс.
-            feltInlayMat->SetShaderParameter("MatDiffColor", Vector4(0.74f, 0.86f, 0.78f, 1.0f));
-            feltInlayMat->SetShaderParameter("Roughness", 0.98f);
-            feltInlayMat->SetShaderParameter("Metallic", 0.0f);
-            feltInlayMat->SetShaderParameter("MatSpecColor", Vector4(0.10f, 0.16f, 0.12f, 4.0f));
+            // Тайлинг — единственное, что реально НУЖНО было задать: бокс
+            // 8.2 x 3.4 тайлится в единицах, одной плитки 4K на него мало.
+            // (В прошлый заход я ещё и забыл VOffset — по вертикали текстура
+            // схлопывалась в одну строку пикселей.)
+            feltInlayMat->SetShaderParameter("UOffset", Variant(Vector4(3.0f, 0, 0, 0)));
+            feltInlayMat->SetShaderParameter("VOffset", Variant(Vector4(0, 2.0f, 0, 0)));
+            // Лёгкий тёплый тинт, чтобы сукно играло под люстрой. Без затемнения.
+            feltInlayMat->SetShaderParameter("MatDiffColor", Vector4(0.94f, 1.00f, 0.96f, 1.0f));
+            feltInlayMat->SetShaderParameter("MatSpecColor", Vector4(0.35f, 0.55f, 0.42f, 28.0f));
         }
-        // Старая латунь: тёплая, но матовая. Не зеркальное золото — на фото
-        // кант стола затёрт, а не сияет.
+        // Старая латунь: тёплая и читаемая. Шероховатость/металл — из карты
+        // CasinoGold (она нарисована как металл), правим только оттенок.
         SharedPtr<Material> brassMat = hdCasinoGold_ ? SharedPtr<Material>(hdCasinoGold_->Clone())
                                                      : MakePBR(Color(150, 120, 62), 0.42f, 0.72f);
         if (hdCasinoGold_) {
-            brassMat->SetShaderParameter("MatDiffColor", Vector4(0.62f, 0.55f, 0.38f, 1.0f));
-            brassMat->SetShaderParameter("Roughness", 0.46f);
-            brassMat->SetShaderParameter("Metallic", 0.74f);
+            brassMat->SetShaderParameter("UOffset", Variant(Vector4(2.0f, 0, 0, 0)));
+            brassMat->SetShaderParameter("VOffset", Variant(Vector4(0, 2.0f, 0, 0)));
+            brassMat->SetShaderParameter("MatDiffColor", Vector4(1.00f, 0.93f, 0.76f, 1.0f));
+            brassMat->SetShaderParameter("MatSpecColor", Vector4(0.36f, 0.27f, 0.21f, 40.0f));
         }
-        SharedPtr<Material> redSectorMat   = MakePBR(Color(148, 16, 22),  0.86f, 0.0f, Color(0.08f, 0.01f, 0.01f));
-        // Инкрустация сукна матовая: 0.86 шероховатости, ноль металла.
-        // Раньше здесь был 0.16 — клетки блестели как пластик поверх бархата.
-        SharedPtr<Material> blackSectorMat = MakePBR(Color(22, 22, 26),   0.88f, 0.0f);
-        SharedPtr<Material> zeroSectorMat  = MakePBR(Color(16, 120, 62),  0.86f, 0.0f, Color(0.02f, 0.14f, 0.06f));
+        SharedPtr<Material> redSectorMat   = MakePBR(Color(172, 20, 26),  0.58f, 0.0f, Color(0.06f, 0.01f, 0.01f));
+        // Разметка — печать по сукну: полуматовая, с лёгким ворсом.
+        // 0.88 было «мёртвым» (без единого блика, как бумага); возвращаем
+        // лёгкий отклик, но не пластик 0.16 из v1.
+        SharedPtr<Material> blackSectorMat = MakePBR(Color(24, 24, 30),   0.58f, 0.0f);
+        SharedPtr<Material> zeroSectorMat  = MakePBR(Color(17, 138, 70),  0.56f, 0.0f, Color(0.02f, 0.16f, 0.07f));
         SharedPtr<Material> ivoryBallMat   = MakePBR(Color(248, 250, 255),0.32f, 0.0f);
         SharedPtr<Material> tuxMat         = MakePBR(Color(22, 22, 28),   0.62f, 0.04f);
         SharedPtr<Material> shirtMat       = MakePBR(Color(246, 244, 238),0.74f, 0.02f);
@@ -12106,9 +12120,12 @@ private:
                                                                 : MakePBR(Color(14, 15, 18), 0.07f, 0.06f);
         if (hdCasinoMahogany_) {
             wheelLacquerMat->SetShaderParameter("MatDiffColor", Vector4(0.16f, 0.15f, 0.16f, 1.0f));
+            // Roughness в PBR-шейдере ПРИБАВЛЯЕТСЯ к карте. Абсолютные 0.12
+            // пересвечивали лак до пластика — вычитаем, чтобы лак оставался
+            // глубоким, но с читаемым бликом, как на референсе.
             if (wheelLacquerMat->GetShaderParameter("Roughness").GetType() == VAR_FLOAT ||
                 wheelLacquerMat->GetShaderParameter("Roughness").GetType() == VAR_NONE)
-                wheelLacquerMat->SetShaderParameter("Roughness", 0.12f);
+                wheelLacquerMat->SetShaderParameter("Roughness", -0.14f);
         }
         SharedPtr<Material> neonCyanMat    = MakeHDRGlow(Color(0.45f, 2.6f, 2.3f, 1.0f));
         SharedPtr<Material> neonRubyMat    = MakeHDRGlow(Color(3.1f, 0.35f, 0.55f, 1.0f));
@@ -12136,8 +12153,19 @@ private:
         addObj(nullptr, "CasinoFloorMarble", Vector3(0.0f, -0.10f, 0.0f), Vector3(22.0f, 0.20f, 22.0f), boxModel_, marbleMat, Quaternion::IDENTITY, false);
         // Ковёр под столом обязан быть больше стола: стол вырос до 7.4 x 3.4,
         // старый ковёр 6.4 x 4.6 оказался бы уже стола и торчал из-под ножек.
+        // Ковёр — свой клон сукна с тайлингом под его размер, иначе одна
+        // 4K-плитка растягивается на 9.6 x 6.6 м и выглядит как размазня.
+        SharedPtr<Material> carpetMat = hdCasinoFelt_ ? SharedPtr<Material>(hdCasinoFelt_->Clone())
+                                                      : SharedPtr<Material>(feltMat ? feltMat->Clone() : nullptr);
+        if (carpetMat) {
+            carpetMat->SetShaderParameter("UOffset", Variant(Vector4(4.0f, 0, 0, 0)));
+            carpetMat->SetShaderParameter("VOffset", Variant(Vector4(0, 3.0f, 0, 0)));
+            carpetMat->SetShaderParameter("MatDiffColor", Vector4(0.80f, 0.92f, 0.86f, 1.0f));
+            carpetMat->SetShaderParameter("MatSpecColor", Vector4(0.30f, 0.45f, 0.36f, 24.0f));
+            tintedMatStore_.Push(carpetMat);
+        }
         addObj(nullptr, "CasinoCarpetBorder",Vector3(-0.10f, 0.008f, 0.15f), Vector3(9.6f, 0.02f, 6.9f),  boxModel_, brassMat,   Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoCarpetFelt",  Vector3(-0.10f, 0.014f, 0.15f), Vector3(9.3f, 0.02f, 6.6f),  boxModel_, feltMat,   Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoCarpetFelt",  Vector3(-0.10f, 0.014f, 0.15f), Vector3(9.3f, 0.02f, 6.6f),  boxModel_, carpetMat ? carpetMat.Get() : feltMat,   Quaternion::IDENTITY, false);
 
         // Стены и золотой плинтус
         // Зал расширен под новый стол (8.2 x 3.4 + борта): стены 22 x 16,
@@ -12222,6 +12250,23 @@ private:
         // 7b. Сукно — бархат, по канону (изумруд, матовая шерсть).
         addObj(nullptr, "TableFelt", Vector3(0.0f, feltY - 0.03f, 0.0f),
                Vector3(feltX, 0.06f, feltZ), boxModel_, feltInlayMat);
+        // Бортик «валиком»: на фото это мягкий скруглённый валик, а не
+        // четыре бруса. Скругление цилиндром убирает ощущение «дощатого
+        // ящика», которое игрок и назвал «досками».
+        const float rollR = CasinoTable::kRailWidth * 1.05f;
+        const float rollY = feltY + 0.030f;
+        addObj(nullptr, "TableRailRollF", Vector3(0.0f, rollY, -rimHalfZ),
+               Vector3(rollR * 2.0f, rollR * 1.05f, rollR * 2.0f), cylModel_, mahogMat,
+               Quaternion(90.0f, 0.0f, 0.0f));
+        addObj(nullptr, "TableRailRollB", Vector3(0.0f, rollY, rimHalfZ),
+               Vector3(rollR * 2.0f, rollR * 1.05f, rollR * 2.0f), cylModel_, mahogMat,
+               Quaternion(90.0f, 0.0f, 0.0f));
+        addObj(nullptr, "TableRailRollL", Vector3(-rimHalfX, rollY, 0.0f),
+               Vector3(rollR * 2.0f, rollR * 1.05f, rollR * 2.0f), cylModel_, mahogMat,
+               Quaternion(0.0f, 0.0f, 90.0f));
+        addObj(nullptr, "TableRailRollR", Vector3(rimHalfX, rollY, 0.0f),
+               Vector3(rollR * 2.0f, rollR * 1.05f, rollR * 2.0f), cylModel_, mahogMat,
+               Quaternion(0.0f, 0.0f, 90.0f));
 
         // 7c. Разметка — ИНКРУСТАЦИЯ в сукно, а не коробки поверх.
         //     Плоские плитки стоят на 0.5 мм НАД сукном (раньше парили на 8 мм
@@ -12332,11 +12377,14 @@ private:
         SharedPtr<Material> chipRimMat = hdCasinoGold_ ? SharedPtr<Material>(hdCasinoGold_->Clone())
                                                        : MakePBR(Color(196, 164, 92), 0.30f, 0.85f);
         if (hdCasinoGold_) {
-            chipRimMat->SetShaderParameter("MatDiffColor", Vector4(0.92f, 0.84f, 0.62f, 1.0f));
-            chipRimMat->SetShaderParameter("Roughness", 0.30f);
-            chipRimMat->SetShaderParameter("Metallic", 0.86f);
+            // Опять та же ловушка: Metallic ПРИБАВЛЯЕТСЯ к карте. 0.86 дал
+            // metalness=1 и чёрный ободок фишки. Трогаем только оттенок.
+            chipRimMat->SetShaderParameter("MatDiffColor", Vector4(1.00f, 0.94f, 0.80f, 1.0f));
+            chipRimMat->SetShaderParameter("MatSpecColor", Vector4(0.36f, 0.30f, 0.22f, 64.0f));
         }
-        SharedPtr<Material> chipFaceMat = MakePBR(Color(238, 236, 228), 0.72f, 0.0f);
+        // Лицо фишки — не «бумага 0.72», а чуть глянцевая керамика: у
+        // настоящих фишек верх ловит блик и номинал читается.
+        SharedPtr<Material> chipFaceMat = MakePBR(Color(242, 240, 232), 0.34f, 0.0f);
 
         // Материалы фишек живут столько же, сколько сцена: пул и депозитные
         // фишки ссылаются на них и после выхода из этой функции.
@@ -12909,10 +12957,14 @@ private:
             // Камера — со стороны игрока, стол вытянут в +X. Раньше она стояла
             // вплотную (2.85 м) к квадратному столу; теперь отодвинута так,
             // чтобы в кадр влезли и разметка, и колесо на подиуме у дилера.
-            Vector3 rCam(-4.95f + sinf(timeAcc_ * 0.45f) * 0.10f,
-                         ballSuspense ? 2.70f : 3.05f,
-                         ballSuspense ? -1.55f : -1.80f);
-            Vector3 rLook(0.45f, 1.02f, 0.05f);
+            // РЕГРЕССИЯ PR #44: я отъехал на 6 м и поднял камеру до 3 м —
+            // стол 8.2 м длиной ужался в узкую щель, и «всё стало плохо».
+            // Камера снова низкая и близкая: в кадре сукно + разметка,
+            // колесо читается на дальнем плане.
+            Vector3 rCam(-3.55f + sinf(timeAcc_ * 0.45f) * 0.09f,
+                         ballSuspense ? 2.12f : 2.34f,
+                         ballSuspense ? -1.25f : -1.48f);
+            Vector3 rLook(0.95f, 1.04f, 0.05f);
             Vector3 sCam(-1.05f + sinf(timeAcc_ * 0.50f) * 0.05f,
                          slotSuspense ? 1.70f : 1.86f,
                          slotSuspense ? 1.30f : 1.55f);
@@ -12964,14 +13016,14 @@ private:
                     // это проверено в test_casino_cine группой «Камера».
                     // Вблизи колеса широкий угол раздувает перспективу — на
                     // крупном плане сужаем поле зрения до 34°.
-                    casinoCineFov_ = Lerp(56.0f, 34.0f, cf.closeUp);
+                    casinoCineFov_ = Lerp(50.0f, 34.0f, cf.closeUp);
                 }
             }
 
             casinoCamNode_->SetPosition(cp);
             casinoCamNode_->LookAt(lp);
             if (Camera* cc = casinoCamNode_->GetComponent<Camera>()) {
-                const float wantFov = (casinoCineFov_ > 0.0f) ? casinoCineFov_ : 56.0f;
+                const float wantFov = (casinoCineFov_ > 0.0f) ? casinoCineFov_ : 50.0f;
                 if (fabsf(cc->GetFov() - wantFov) > 0.01f) cc->SetFov(wantFov);
             }
         }
