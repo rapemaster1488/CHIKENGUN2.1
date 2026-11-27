@@ -78,6 +78,10 @@ struct Timing {
     static constexpr float kCloseRadius = 0.42f;
     // Высота камеры над колесом в крупном плане, в метрах.
     static constexpr float kCloseHeight = 0.62f;
+    // Куда смотрит крупный план. Раньше было 0.30 — центр колеса; после
+    // переделки номера стоят на радиусе 0.52, и камера смотрела МИМО цифры.
+    // Смотрим ровно в кольцо номеров, тогда выпавшее число в кадре.
+    static constexpr float kLookRadius = 0.52f;
 };
 
 // ── Кадр кинематики ─────────────────────────────────────────────────────────
@@ -210,8 +214,9 @@ inline Camera CloseUp(const V3& wheelCenter, float sectorAngle, float orbit) {
                           Timing::kCloseHeight,
                           std::cos(a) * Timing::kCloseRadius);
     c.pos = Add(wheelCenter, dir);
-    // Смотрим не в центр колеса, а на сам сектор: иначе номер уезжает к краю.
-    c.look = SectorPoint(wheelCenter, sectorAngle, 0.30f);
+    // Смотрим не в центр колеса, а в кольцо номеров: иначе цифра уезжает
+    // к краю кадра (или вовсе остаётся за спиной камеры).
+    c.look = SectorPoint(wheelCenter, sectorAngle, Timing::kLookRadius);
     c.look.y = wheelCenter.y + 0.02f;
     return c;
 }

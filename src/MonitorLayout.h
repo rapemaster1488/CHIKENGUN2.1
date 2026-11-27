@@ -194,6 +194,49 @@ inline const char* StitchedHint() {
            "отключи объединение в панели видеодрайвера, чтобы F10 увидел второй монитор";
 }
 
+// ── Половины «склеенного» экрана ────────────────────────────────────────────
+// Когда драйвер объединил два монитора в один дисплей (Surround / Eyefinity /
+// Collage), SDL показывает ОДИН экран шириной 3480 или 3840. Половины этого
+// пространства физически и есть отдельные мониторы — значит окно можно
+// поставить на левую или правую половину и получить нормальную картинку на
+// одном экране без разрыва посередине.
+//
+// Это обход, а не лечение: полноценно разлепить экраны может только драйвер
+// (и тогда F10 увидит оба настоящих монитора). Но обход работает сразу и без
+// перезагрузки.
+
+// Сколько «экранных» половин у дисплея. 1 — обычный монитор.
+inline int HStripeCount(int deskW, int deskH) {
+    return LooksLikeStitchedDesktop(deskW, deskH) ? 2 : 1;
+}
+
+// Подложка (0 — левая половина, 1 — правая) внутри дисплея.
+inline Rect StripeOf(const Rect& display, int stripe, int stripes) {
+    if (stripes <= 1) return display;
+    if (stripe < 0) stripe = 0;
+    if (stripe >= stripes) stripe = stripes - 1;
+    Rect out;
+    // Делим ровно, остаток отдаём правой половине: так две половины вместе
+    // всегда дают исходную ширину, ничего не теряется.
+    const int w = display.w / stripes;
+    out.x = display.x + stripe * w;
+    out.y = display.y;
+    out.w = (stripe == stripes - 1) ? (display.w - stripe * w) : w;
+    out.h = display.h;
+    return out;
+}
+
+// Вписать окно в половину: размер не больше половины, позиция по центру,
+// с прижатием к её краям — та же логика, что CenterOnMonitor.
+inline Rect FitWindowToStripe(const Rect& display, int stripe, int stripes,
+                              int wantW, int wantH) {
+    const Rect half = StripeOf(display, stripe, stripes);
+    int w = wantW, h = wantH;
+    ResolveWindowSize(half, wantW, wantH, w, h);
+    if (!IsValidSize(w, h)) { w = half.w; h = half.h; }
+    return CenterOnMonitor(half, w, h);
+}
+
 // Основной монитор: первый, помеченный primary, иначе нулевой.
 inline int PrimaryIndex(const Monitor* monitors, int count) {
     for (int i = 0; i < count; ++i) {

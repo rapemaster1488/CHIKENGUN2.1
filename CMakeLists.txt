@@ -57,6 +57,16 @@ else()
     target_compile_options(test_keyboard_map PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
 endif()
 add_test(NAME KeyboardMap COMMAND test_keyboard_map)
+
+# 6. Раскладка 3D-колеса рулетки: 37 лунок, номера над своими карманами и
+#    шарик, который физически может упасть с дорожки внутрь.
+add_executable(test_roulette_wheel3d tests/test_roulette_wheel3d.cpp)
+if(MSVC)
+    target_compile_options(test_roulette_wheel3d PRIVATE /O2 /W3 /EHsc /UNDEBUG)
+else()
+    target_compile_options(test_roulette_wheel3d PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
+endif()
+add_test(NAME RouletteWheel3D COMMAND test_roulette_wheel3d)
 set_tests_properties(CorePhysicsAndAssets PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     ENVIRONMENT "CHIKENGUN_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Data"
