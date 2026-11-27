@@ -11256,7 +11256,10 @@ private:
     SharedPtr<Text> bettingChipAmounts_[49];
     Color bettingBaseColors_[49];
     bool winningBetZones_[49] = {};
-    bool bettingLayoutVisible_ = true;
+    // 2D-поле ставок по умолчанию СКРЫТО: игрок ставит кликом по 3D-столу.
+    // Раньше панель занимала центр экрана и закрывала сам стол — отсюда
+    // «табличка закрывает геймплей». F — показать/скрыть.
+    bool bettingLayoutVisible_ = false;
 
     struct CasinoFlight {
         SharedPtr<BorderImage> sprite;
@@ -11473,8 +11476,11 @@ private:
             if (fc.active_) continue;
             fc.active_ = true;
             fc.t_ = 0.0f;
-            // Кидаем от крупье — он стоит за столом в (0.18, 1.32, 1.36).
-            fc.from_ = Vector3(0.18f, 1.16f, 1.30f);
+            // Кидаем от крупье — он за столом у дилера (+X), рядом с
+            // колесом, чуть выше сукна. Настоящий крупье кидает фишку
+            // от себя, а не «из воздуха» посреди стола.
+            fc.from_ = Vector3(CasinoTable::kWheelX - 0.55f, 1.22f,
+                               CasinoTable::kWheelZ + 0.62f);
             fc.to_ = TableZoneWorldPos(zone);
             fc.spinDeg_ = 0.0f;
             if (casinoFlyingChips_[i]) {
@@ -11517,7 +11523,9 @@ private:
                     if (!node) continue;
                     fc.active_ = true;
                     fc.t_ = -0.10f * (float)(thrown % 4);   // веером, а не залпом
-                    fc.from_ = Vector3(-0.18f, 1.18f, 1.34f);   // банк крупье
+                    // Банк крупье — на его стороне стола, у подиума колеса.
+                    fc.from_ = Vector3(CasinoTable::kWheelX - 0.75f, 1.20f,
+                                       CasinoTable::kWheelZ + 0.30f);
                     const CasinoTable::Point c = CasinoTable::ZoneCenter(z);
                     fc.to_ = Vector3(c.x + 0.02f * (float)(k - 1),
                                      CasinoTable::ZoneChipY(z) + 0.02f * (float)k,
@@ -11546,7 +11554,7 @@ private:
             if (n->IsEnabled()) n->SetEnabled(false);
             const CasinoTable::Point c = CasinoTable::ZoneCenter((int)i);
             n->SetPosition(Vector3(c.x, CasinoTable::kChipY, c.z));
-            n->SetScale(Vector3(0.13f, 0.020f, 0.13f));
+            n->SetScale(Vector3::ONE);
         }
         for (unsigned i = 0; i < (unsigned)casinoFlyingChips_.Size(); ++i) {
             if (i < (unsigned)casinoFlyingChipState_.Size())
@@ -11565,12 +11573,14 @@ private:
             Node* n = casinoTableChips_[z];
             if (!n || !n->IsEnabled()) continue;
             const CasinoTable::Point c = CasinoTable::ZoneCenter(z);
-            // Фишка уезжает к центру банка и чуть вверх.
-            n->SetPosition(Vector3(c.x + (-0.18f - c.x) * e * 0.35f,
+            // Фишка уезжает к банку крупье (сторона дилера, +X) и чуть вверх.
+            const float bankX = CasinoTable::kWheelX - 0.75f;
+            const float bankZ = CasinoTable::kWheelZ + 0.30f;
+            n->SetPosition(Vector3(c.x + (bankX - c.x) * e * 0.35f,
                                    CasinoTable::kChipY + 0.22f * e,
-                                   c.z + (1.30f - c.z) * e * 0.35f));
-            const float sc = 0.13f * (1.0f - 0.75f * e);
-            n->SetScale(Vector3(sc, 0.020f * (1.0f - 0.5f * e), sc));
+                                   c.z + (bankZ - c.z) * e * 0.35f));
+            const float sc = 1.0f - 0.75f * e;
+            n->SetScale(Vector3(sc, sc, sc));
             if (casinoSweepT_ >= 1.0f) n->SetEnabled(false);
         }
     }
@@ -11603,11 +11613,13 @@ private:
             // Лёгкое «дыхание» — стол живой, но не мигает. Сразу после
             // ставки фишка «подпрыгивает» и возвращается.
             const float pulse = casinoTableCellPulse_[z];
-            const float breathe = 1.0f + 0.012f * sinf(timeAcc_ * 2.2f + (float)z)
+            const float breathe = 1.0f + 0.06f * sinf(timeAcc_ * 2.2f + (float)z)
                                 + pulse * 0.35f;
-            n->SetScale(Vector3(0.13f, 0.020f * (float)discs * breathe, 0.13f));
+            // Стопка: каждый «диск» — 0.024 м по высоте, поэтому масштаб по Y
+            // даёт высоту стопки, а не растягивает саму фишку.
+            n->SetScale(Vector3(1.0f, (float)discs * breathe, 1.0f));
             const CasinoTable::Point c = CasinoTable::ZoneCenter(z);
-            n->SetPosition(Vector3(c.x, CasinoTable::kChipY + 0.020f * (float)(discs - 1), c.z));
+            n->SetPosition(Vector3(c.x, CasinoTable::kChipY, c.z));
         }
     }
 
@@ -11669,13 +11681,15 @@ private:
     void CreateBettingLayout() {
         const int width = Min(GetSubsystem<Graphics>()->GetWidth() - S(32), S(1060));
         bettingLayout_ = casinoPanel_->CreateChild<BorderImage>();
-        bettingLayout_->SetPosition((GetSubsystem<Graphics>()->GetWidth()-width)/2, S(150));
-        bettingLayout_->SetSize(width, S(305));
+        // Поле ставок — компактная накладка СБОКУ, а не в центре: игрок
+        // ставит кликом по 3D-столу, а панель нужна для точных ставок.
+        bettingLayout_->SetPosition((GetSubsystem<Graphics>()->GetWidth()-width)/2, S(70));
+        bettingLayout_->SetSize(width, S(268));
         bettingLayout_->SetColor(Color(0.025f, 0.14f, 0.095f, 0.98f));
         bettingSummary_ = bettingLayout_->CreateChild<Text>();
         bettingSummary_->SetFont(font_, SF(14));
         bettingSummary_->SetPosition(S(10), S(8));
-        const int cw = (width - S(28)) / 14, ch = S(40), top = S(40);
+        const int cw = (width - S(28)) / 14, ch = S(30), top = S(38);
         auto cell = [&](int x, int y, int w, int h, const String& label, Color color, SharedPtr<Text>* out) {
             auto* bg = bettingLayout_->CreateChild<BorderImage>();
             bg->SetPosition(x, y); bg->SetSize(w - S(2), h - S(2)); bg->SetColor(color);
@@ -11684,16 +11698,31 @@ private:
             if (out) *out = t;
             return bg;
         };
+        // Раскладка 2D-поля ПОВТОРЯЕТ раскладку стола (CasinoTable.h):
+        // 12 столбцов по 3 числа, зеро у дилера, внешние полосы — к игроку.
+        // Раньше панель рисовала свою сетку 3 x 12, и клетка «1» оказывалась
+        // в другом месте, чем на сукне.
         for (int z = 0; z < 49; ++z) {
             int x=0, y=0, w=1, h=1;
-            if (z == 0) { h=3; }
-            else if (z <= 36) { x=1+(z-1)/3; y=2-(z-1)%3; }
-            else if (z >= 46) { x=13; y=2-(z-46); }
-            else if (z >= 43) { x=1+(z-43)*4; y=3; w=4; }
-            else {
-                static const int order[] = {2,3,1,4,0,5}; // low, even, red, black, odd, high
-                x=1+order[z-37]*2; y=4; w=2;
+            // Ось панели: столбец 0 — дилер (1-2-3 и зеро), 13 — игрок.
+            if (z == 0) {
+                x = 0; y = 1; h = 3;                      // зеро у дилера
+            } else if (z <= 36) {
+                const int i = z - 1;
+                x = 1 + (i / 3);                          // 1-3 → 1 ... 34-36 → 12
+                y = 1 + (i % 3);                          // ряд поперёк
+            } else if (z <= 42) {
+                const int i = z - 37;                     // пары у игрока
+                x = 13; y = 1 + i;                        // 6 клеток в столбик
+            } else if (z <= 45) {
+                x = 13; y = 1 + (z - 43); w = 1;          // три дюжины
+            } else {
+                x = 13; y = 1 + (z - 46); w = 1;          // три колонки
             }
+            // Панель компактная: 14 столбцов x 7 строк, чтобы 49 клеток
+            // читались и не растягивали накладку на пол-экрана.
+            x = Clamp(x, 0, 13);
+            y = Clamp(y, 0, 6);
             Color c(0.035f,0.22f,0.14f);
             if ((z > 0 && z <= 36) || z == 37 || z == 38)
                 c = (Casino::IsRed(z) && z <= 36) || z == 37 ? Color(0.48f,0.045f,0.055f) : Color(0.035f,0.04f,0.04f);
@@ -11717,9 +11746,9 @@ private:
             amount->SetAlignment(HA_CENTER, VA_CENTER);
             bettingChipAmounts_[z] = amount;
         }
-        bettingAdd_ = cell(S(14), top+5*ch+S(4), cw*7, S(38), "Поставить", Color(0.2f,0.3f,0.23f), nullptr);
-        bettingUndo_ = cell(S(14)+cw*7, top+5*ch+S(4), cw*3, S(38), "Отмена", Color(0.2f,0.25f,0.24f), nullptr);
-        bettingClear_ = cell(S(14)+cw*10, top+5*ch+S(4), cw*4, S(38), "Очистить", Color(0.3f,0.18f,0.16f), nullptr);
+        bettingAdd_ = cell(S(14), top+7*ch+S(6), cw*7, S(34), "Поставить", Color(0.2f,0.3f,0.23f), nullptr);
+        bettingUndo_ = cell(S(14)+cw*7, top+7*ch+S(6), cw*3, S(34), "Отмена", Color(0.2f,0.25f,0.24f), nullptr);
+        bettingClear_ = cell(S(14)+cw*10, top+7*ch+S(6), cw*4, S(34), "Очистить", Color(0.3f,0.18f,0.16f), nullptr);
     }
 
     void ResetCasinoUIPointers() {
@@ -11817,7 +11846,8 @@ private:
                 bool hidden = side && i == 1 && blackjackActive_;
                 const auto& card = side ? blackjackDealer_[i] : blackjackPlayer_[i];
                 Node* n = blackjackCards_->CreateChild("Card");
-                n->SetPosition(Vector3(2.65f + i * 0.22f, 1.01f + i * 0.002f, side ? 0.35f : -0.35f));
+                n->SetPosition(Vector3(-1.10f - 0.11f + i * 0.22f, 1.006f + i * 0.002f,
+                                       -3.05f + (side ? 0.35f : -0.35f)));
                 const int oldCount = side ? shownDealerCards_ : shownPlayerCards_;
                 const bool reveal = side && i==1 && shownDealerHidden_ && !hidden;
                 if (i >= oldCount || reveal) {
@@ -11917,11 +11947,12 @@ private:
 
         // 2. Камера VIP-зала (плавный перелёт между 3D Рулеткой и 3D Автоматом 777)
         casinoCamNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoCamera"));
-        casinoCamNode_->SetPosition(Vector3(0.12f, 2.34f, -2.85f));
-        casinoCamNode_->LookAt(Vector3(-0.08f, 1.02f, 0.10f));
+        casinoCamNode_->SetPosition(Vector3(-4.95f, 3.05f, -1.80f));
+        casinoCamNode_->LookAt(Vector3(0.45f, 1.02f, 0.05f));
         Camera* cam = casinoCamNode_->CreateComponent<Camera>();
         casinoCineFov_ = 0.0f;
-        cam->SetFov(50.0f);
+        // Шире 50°, иначе вытянутый стол не влезает по длине.
+        cam->SetFov(56.0f);
         cam->SetNearClip(0.06f);
         cam->SetFarClip(80.0f);
 
@@ -11974,8 +12005,8 @@ private:
             casinoChandelierLight_->SetCastShadows(gfxQualityIdx_ >= 1);
 
             Node* spotLN = casinoScene_->CreateChild("CasinoWheelSpot");
-            spotLN->SetPosition(Vector3(-0.25f, 3.60f, -0.35f));
-            spotLN->LookAt(Vector3(-0.42f, 0.95f, -0.05f));
+            spotLN->SetPosition(Vector3(CasinoTable::kWheelX + 0.10f, 3.75f, CasinoTable::kWheelZ - 0.25f));
+            spotLN->LookAt(Vector3(CasinoTable::kWheelX, CasinoTable::kWheelY, CasinoTable::kWheelZ));
             casinoWheelSpot_ = SharedPtr<Light>(spotLN->CreateComponent<Light>());
             casinoWheelSpot_->SetLightType(LIGHT_SPOT);
             casinoWheelSpot_->SetColor(Color(1.0f, 0.94f, 0.78f));
@@ -12016,9 +12047,34 @@ private:
         Material* roosterBase = hdBanyaRooster_   ? hdBanyaRooster_   : (hdFeather_ ? hdFeather_ : fallbackMat_);
         Material* chromeMat   = hdMetal_          ? hdMetal_          : metalMaterial_;
 
-        SharedPtr<Material> redSectorMat   = MakePBR(Color(198, 24, 30),  0.18f, 0.08f, Color(0.10f, 0.01f, 0.01f));
-        SharedPtr<Material> blackSectorMat = MakePBR(Color(20, 22, 28),   0.16f, 0.12f);
-        SharedPtr<Material> zeroSectorMat  = MakePBR(Color(18, 178, 86),  0.18f, 0.08f, Color(0.04f, 0.24f, 0.10f));
+        // ── Стол: бархат по канону, БЕЗ глянца ────────────────────────────
+        // Игрок: «сделай его не супер глянцевым, сохрани бархатным по канону».
+        // Сукно — чистая шерсть: почти нулевой металл, высокая шероховатость,
+        // никакого specular-блёска. Текстура даёт ворс, а не отражения.
+        SharedPtr<Material> feltInlayMat = hdCasinoFelt_ ? SharedPtr<Material>(hdCasinoFelt_->Clone())
+                                                        : MakePBR(Color(18, 84, 58), 0.88f, 0.0f);
+        if (hdCasinoFelt_) {
+            // Притушить золотую сетку, впечатанную в текстуру 4K: на большом
+            // столе она повторяется и читается как «обои». Оставляем ворс.
+            feltInlayMat->SetShaderParameter("MatDiffColor", Vector4(0.74f, 0.86f, 0.78f, 1.0f));
+            feltInlayMat->SetShaderParameter("Roughness", 0.98f);
+            feltInlayMat->SetShaderParameter("Metallic", 0.0f);
+            feltInlayMat->SetShaderParameter("MatSpecColor", Vector4(0.10f, 0.16f, 0.12f, 4.0f));
+        }
+        // Старая латунь: тёплая, но матовая. Не зеркальное золото — на фото
+        // кант стола затёрт, а не сияет.
+        SharedPtr<Material> brassMat = hdCasinoGold_ ? SharedPtr<Material>(hdCasinoGold_->Clone())
+                                                     : MakePBR(Color(150, 120, 62), 0.42f, 0.72f);
+        if (hdCasinoGold_) {
+            brassMat->SetShaderParameter("MatDiffColor", Vector4(0.62f, 0.55f, 0.38f, 1.0f));
+            brassMat->SetShaderParameter("Roughness", 0.46f);
+            brassMat->SetShaderParameter("Metallic", 0.74f);
+        }
+        SharedPtr<Material> redSectorMat   = MakePBR(Color(148, 16, 22),  0.86f, 0.0f, Color(0.08f, 0.01f, 0.01f));
+        // Инкрустация сукна матовая: 0.86 шероховатости, ноль металла.
+        // Раньше здесь был 0.16 — клетки блестели как пластик поверх бархата.
+        SharedPtr<Material> blackSectorMat = MakePBR(Color(22, 22, 26),   0.88f, 0.0f);
+        SharedPtr<Material> zeroSectorMat  = MakePBR(Color(16, 120, 62),  0.86f, 0.0f, Color(0.02f, 0.14f, 0.06f));
         SharedPtr<Material> ivoryBallMat   = MakePBR(Color(248, 250, 255),0.32f, 0.0f);
         SharedPtr<Material> tuxMat         = MakePBR(Color(22, 22, 28),   0.62f, 0.04f);
         SharedPtr<Material> shirtMat       = MakePBR(Color(246, 244, 238),0.74f, 0.02f);
@@ -12077,15 +12133,19 @@ private:
         };
 
         // 5. Архитектура VIP-зала: мраморный пол Nero Portoro, подиум, стены красного дерева, золотые колонны
-        addObj(nullptr, "CasinoFloorMarble", Vector3(0.0f, -0.10f, 0.0f), Vector3(18.0f, 0.20f, 18.0f), boxModel_, marbleMat, Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoCarpetBorder",Vector3(0.0f, 0.008f, 0.15f), Vector3(6.4f, 0.02f, 4.6f),  boxModel_, goldMat,   Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoCarpetFelt",  Vector3(0.0f, 0.014f, 0.15f), Vector3(6.1f, 0.02f, 4.3f),  boxModel_, feltMat,   Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoFloorMarble", Vector3(0.0f, -0.10f, 0.0f), Vector3(22.0f, 0.20f, 22.0f), boxModel_, marbleMat, Quaternion::IDENTITY, false);
+        // Ковёр под столом обязан быть больше стола: стол вырос до 7.4 x 3.4,
+        // старый ковёр 6.4 x 4.6 оказался бы уже стола и торчал из-под ножек.
+        addObj(nullptr, "CasinoCarpetBorder",Vector3(-0.10f, 0.008f, 0.15f), Vector3(9.6f, 0.02f, 6.9f),  boxModel_, brassMat,   Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoCarpetFelt",  Vector3(-0.10f, 0.014f, 0.15f), Vector3(9.3f, 0.02f, 6.6f),  boxModel_, feltMat,   Quaternion::IDENTITY, false);
 
         // Стены и золотой плинтус
-        addObj(nullptr, "CasinoBackWall",    Vector3(0.0f, 2.4f, 5.2f),  Vector3(17.5f, 5.0f, 0.28f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoLeftWall",    Vector3(-6.4f,2.4f, 0.2f),  Vector3(0.28f, 5.0f, 14.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoRightWall",   Vector3(6.4f, 2.4f, 0.2f),  Vector3(0.28f, 5.0f, 14.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoCeiling",     Vector3(0.0f, 4.85f,0.2f),  Vector3(17.5f, 0.24f,14.0f), boxModel_, marbleMat,Quaternion::IDENTITY, false);
+        // Зал расширен под новый стол (8.2 x 3.4 + борта): стены 22 x 16,
+        // потолок выше, иначе камера зала упирается в потолок, а стол — в стену.
+        addObj(nullptr, "CasinoBackWall",    Vector3(0.0f, 2.8f, 7.2f),  Vector3(22.0f, 5.6f, 0.28f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoLeftWall",    Vector3(-8.6f,2.8f, 0.2f),  Vector3(0.28f, 5.6f, 18.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoRightWall",   Vector3(8.6f, 2.8f, 0.2f),  Vector3(0.28f, 5.6f, 18.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoCeiling",     Vector3(0.0f, 5.60f,0.2f),  Vector3(22.0f, 0.24f,18.0f), boxModel_, marbleMat,Quaternion::IDENTITY, false);
         addObj(nullptr, "CasinoBackTrim",    Vector3(0.0f, 0.18f, 5.02f),Vector3(17.0f, 0.36f, 0.12f), boxModel_, goldMat,  Quaternion::IDENTITY, false);
 
         // 8 золотых каннелированных колонн по периметру зала + неоновые полосы
@@ -12123,40 +12183,91 @@ private:
             addObj(casinoChandelierNode_.Get(), "ChandBulb", Vector3(rx, -0.14f, rz), Vector3(0.16f, 0.26f, 0.16f), sphereModel_, neonGoldMat.Get(), Quaternion::IDENTITY, false);
         }
 
-        // 7. VIP-стол рулетки в центре (махагони, золотой кант, изумрудное сукно, сетка, фишки и золотые слитки)
-        addObj(nullptr, "TableLegL",     Vector3(-1.55f, 0.42f, 0.0f), Vector3(0.38f, 0.84f, 1.35f), boxModel_, mahogMat);
-        addObj(nullptr, "TableLegR",     Vector3( 1.55f, 0.42f, 0.0f), Vector3(0.38f, 0.84f, 1.35f), boxModel_, mahogMat);
-        addObj(nullptr, "TableLegGoldL", Vector3(-1.55f, 0.08f, 0.0f), Vector3(0.46f, 0.14f, 1.44f), boxModel_, goldMat);
-        addObj(nullptr, "TableLegGoldR", Vector3( 1.55f, 0.08f, 0.0f), Vector3(0.46f, 0.14f, 1.44f), boxModel_, goldMat);
-        addObj(nullptr, "TableRim",      Vector3(0.0f,   0.88f, 0.0f), Vector3(3.85f, 0.14f, 2.60f), boxModel_, mahogMat);
-        addObj(nullptr, "TableGoldTrim", Vector3(0.0f,   0.92f, 0.0f), Vector3(3.64f, 0.08f, 2.40f), boxModel_, goldMat);
-        addObj(nullptr, "TableFelt",     Vector3(0.0f,   0.955f,0.0f), Vector3(3.52f, 0.04f, 2.28f), boxModel_, feltMat);
+        // 7. БОЛЬШОЙ рулеточный стол — как настоящий, по фото.
+        //    Было: почти квадратный 3.05 x 2.15, разметка коробками в центре,
+        //    колесо стояло прямо на ней. Стало: вытянутый 7.4 x 3.4, колесо
+        //    на своём подиуме у дилера, разметка ИНКРУСТИРОВАНА в сукно.
+        const float feltX = CasinoTable::kFeltX;
+        const float feltZ = CasinoTable::kFeltZ;
+        const float railW = CasinoTable::kRailWidth;
+        const float feltY = CasinoTable::kSurfaceY;
 
-        // Full European layout: every printed cell is a ray-pickable betting zone.
+        // 7a. Основание: тумба под столом + массивный бортик по периметру.
+        addObj(nullptr, "TableBase", Vector3(0.0f, 0.40f, 0.0f),
+               Vector3(feltX * 0.42f, 0.80f, feltZ * 0.52f), boxModel_, mahogMat);
+        addObj(nullptr, "TableBaseGold", Vector3(0.0f, 0.045f, 0.0f),
+               Vector3(feltX * 0.46f, 0.09f, feltZ * 0.58f), boxModel_, goldMat);
+        // Бортик: четыре бруса вокруг сукна. Внешний край — махагони,
+        // внутренний — латунный кант, как латунная шина на фото.
+        const float rimHalfX = feltX * 0.5f + railW;
+        const float rimHalfZ = feltZ * 0.5f + railW;
+        addObj(nullptr, "TableRailFront", Vector3(0.0f, feltY - 0.06f, -rimHalfZ),
+               Vector3(rimHalfX * 2.0f, 0.18f, railW * 2.0f), boxModel_, mahogMat);
+        addObj(nullptr, "TableRailBack", Vector3(0.0f, feltY - 0.06f, rimHalfZ),
+               Vector3(rimHalfX * 2.0f, 0.18f, railW * 2.0f), boxModel_, mahogMat);
+        addObj(nullptr, "TableRailLeft", Vector3(-rimHalfX, feltY - 0.06f, 0.0f),
+               Vector3(railW * 2.0f, 0.18f, feltZ), boxModel_, mahogMat);
+        addObj(nullptr, "TableRailRight", Vector3(rimHalfX, feltY - 0.06f, 0.0f),
+               Vector3(railW * 2.0f, 0.18f, feltZ), boxModel_, mahogMat);
+        // Латунная шина поверх борта: тонкая, не «глянцевая» — старый лак.
+        addObj(nullptr, "TableRailGoldF", Vector3(0.0f, feltY + 0.035f, -rimHalfZ),
+               Vector3(rimHalfX * 2.0f, 0.020f, railW * 1.7f), boxModel_, brassMat);
+        addObj(nullptr, "TableRailGoldB", Vector3(0.0f, feltY + 0.035f, rimHalfZ),
+               Vector3(rimHalfX * 2.0f, 0.020f, railW * 1.7f), boxModel_, brassMat);
+        addObj(nullptr, "TableRailGoldL", Vector3(-rimHalfX, feltY + 0.035f, 0.0f),
+               Vector3(railW * 1.7f, 0.020f, feltZ), boxModel_, brassMat);
+        addObj(nullptr, "TableRailGoldR", Vector3(rimHalfX, feltY + 0.035f, 0.0f),
+               Vector3(railW * 1.7f, 0.020f, feltZ), boxModel_, brassMat);
+
+        // 7b. Сукно — бархат, по канону (изумруд, матовая шерсть).
+        addObj(nullptr, "TableFelt", Vector3(0.0f, feltY - 0.03f, 0.0f),
+               Vector3(feltX, 0.06f, feltZ), boxModel_, feltInlayMat);
+
+        // 7c. Разметка — ИНКРУСТАЦИЯ в сукно, а не коробки поверх.
+        //     Плоские плитки стоят на 0.5 мм НАД сукном (раньше парили на 8 мм
+        //     и читались как «доски»). Это главный фикс жалобы.
         for (int zone = 0; zone < Casino::kTableZoneCount; ++zone) {
-            // Позиция клетки — из общей раскладки CasinoTable.h. Раньше здесь
-            // была вторая копия формулы, и любая правка разводила 2D-панель,
-            // 3D-клетки и бросок фишки по разным местам.
+            float hx = 0.0f, hz = 0.0f;
+            CasinoTable::ZoneHalfSize(zone, hx, hz);
             const CasinoTable::Point c = CasinoTable::ZoneCenter(zone);
-            const float x = c.x, z = c.z;
-            const float w = (zone == 0) ? 1.0f : CasinoTable::kCellW;
-            const float h = (zone == 0) ? 0.12f : ((zone <= 36) ? CasinoTable::kCellH : 0.11f);
             Material* mat = zone == 0 ? zeroSectorMat.Get() :
                 (Casino::TableZoneIsRed(zone) ? redSectorMat.Get() : blackSectorMat.Get());
-            // Тонкая клетка — только для пика; лежащие фишки пикаются
-            // отдельно и ведут на ту же клетку (см. UpdateTableChips).
-            Node* cell = addObj(nullptr, "BetZone", Vector3(x, CasinoTable::kCellY, z), Vector3(w, 0.008f, h), boxModel_, mat, Quaternion::IDENTITY, false);
+            Node* cell = addObj(nullptr, "BetZone",
+                Vector3(c.x, CasinoTable::kCellY, c.z),
+                Vector3(hx * 2.0f, 0.0012f, hz * 2.0f), boxModel_, mat,
+                Quaternion::IDENTITY, false);
             cell->SetVar("BetZone", zone + 1);
-            // Labels are siblings so their size does not inherit the thin cell scale.
-            TableLabel(casinoScene_, Casino::GetTableZones()[zone].label, Vector3(x, 0.994f, z), zone <= 36 ? 0.10f : 0.045f);
+            TableLabel(casinoScene_, Casino::GetTableZones()[zone].label,
+                       Vector3(c.x, CasinoTable::kCellY + 0.004f, c.z),
+                       zone <= 36 ? 0.13f : 0.085f);
         }
-        tableChip_ = SharedPtr<Node>(addObj(nullptr, "SelectedBetChip", Vector3(1.13f, 1.02f, 0.72f), Vector3(0.075f, 0.025f, 0.075f), cylModel_, goldMat));
+        // Золотые линии-«нити» между колонками и полосами: тонкие, как
+        // вышивка на настоящем сукне, а не рамки.
+        for (int r = 0; r <= CasinoTable::kRows; ++r) {
+            const float gx = CasinoTable::kGridX0 + (float)r * CasinoTable::kCellW;
+            addObj(nullptr, "FeltThread", Vector3(gx, CasinoTable::kCellY + 0.0006f, 0.0f),
+                   Vector3(0.006f, 0.0010f, CasinoTable::kOuterH + 0.004f),
+                   boxModel_, brassMat, Quaternion::IDENTITY, false);
+        }
+        for (int k = 0; k <= CasinoTable::kCols; ++k) {
+            const float gz = CasinoTable::kGridZ0 + (float)k * CasinoTable::kCellH;
+            addObj(nullptr, "FeltThread", Vector3(-1.20f, CasinoTable::kCellY + 0.0006f, gz),
+                   Vector3(CasinoTable::kGridX1 - (-1.20f) + CasinoTable::kCellW, 0.0010f, 0.006f),
+                   boxModel_, brassMat, Quaternion::IDENTITY, false);
+        }
+
+        tableChip_ = SharedPtr<Node>(addObj(nullptr, "SelectedBetChip",
+            Vector3(CasinoTable::ZoneCenter(0).x, CasinoTable::kChipY, CasinoTable::ZoneCenter(0).z),
+            Vector3(0.075f, 0.025f, 0.075f), cylModel_, goldMat));
         tableChip_->SetEnabled(false);
         // Dedicated blackjack table beside the roulette: timber base, brass rail, felt.
-        addObj(nullptr, "BlackjackBase", Vector3(3.3f, 0.45f, 0), Vector3(1.8f, 0.9f, 1.4f), boxModel_, mahogMat);
-        addObj(nullptr, "BlackjackRail", Vector3(3.3f, 0.94f, 0), Vector3(2.45f, 0.12f, 1.85f), cylModel_, goldMat);
-        addObj(nullptr, "BlackjackFelt", Vector3(3.3f, 0.99f, 0), Vector3(2.3f, 0.04f, 1.7f), cylModel_, feltMat);
-        TableLabel(casinoScene_, "BLACKJACK 3:2 • S17", Vector3(3.3f, 1.018f, 0), 0.16f);
+        // Блэкджек — отдельный круглый стол в зале у правой стены. Раньше он
+        // стоял вплотную к рулетке и декорации слипались в кучу.
+        const float bjX = -1.10f, bjZ = -3.05f;
+        addObj(nullptr, "BlackjackBase", Vector3(bjX, 0.45f, bjZ), Vector3(1.5f, 0.9f, 1.5f), cylModel_, mahogMat);
+        addObj(nullptr, "BlackjackRail", Vector3(bjX, 0.94f, bjZ), Vector3(2.05f, 0.12f, 2.05f), cylModel_, brassMat);
+        addObj(nullptr, "BlackjackFelt", Vector3(bjX, 0.985f, bjZ), Vector3(1.90f, 0.04f, 1.90f), cylModel_, feltInlayMat);
+        TableLabel(casinoScene_, "BLACKJACK 3:2 • S17", Vector3(bjX, 1.006f, bjZ + 0.55f), 0.17f);
         blackjackCards_ = SharedPtr<Node>(casinoScene_->CreateChild("BlackjackCards"));
 
         // Стопки золотых 3D-слитков VIP-банка на краю стола
@@ -12215,38 +12326,88 @@ private:
             chipWhiteMat.Get(), chipRedMat.Get(), chipBlueMat.Get(),
             chipGreenMat.Get(), chipPurpleMat.Get(), chipGoldMat.Get()
         };
+        // Ободок и лицо фишки. Ободок — та же латунь, но с лёгким блеском;
+        // лицо — почти белая керамика с очень высокой шероховатостью, чтобы
+        // не ловило блик прожектора (на столе фишки матовые).
+        SharedPtr<Material> chipRimMat = hdCasinoGold_ ? SharedPtr<Material>(hdCasinoGold_->Clone())
+                                                       : MakePBR(Color(196, 164, 92), 0.30f, 0.85f);
+        if (hdCasinoGold_) {
+            chipRimMat->SetShaderParameter("MatDiffColor", Vector4(0.92f, 0.84f, 0.62f, 1.0f));
+            chipRimMat->SetShaderParameter("Roughness", 0.30f);
+            chipRimMat->SetShaderParameter("Metallic", 0.86f);
+        }
+        SharedPtr<Material> chipFaceMat = MakePBR(Color(238, 236, 228), 0.72f, 0.0f);
+
         // Материалы фишек живут столько же, сколько сцена: пул и депозитные
         // фишки ссылаются на них и после выхода из этой функции.
         casinoChipMats_.Clear();
         for (int m = 0; m < 6; ++m) casinoChipMats_.Push(SharedPtr<Material>(chipMats[m]));
+        // ── Номиналы фишек:отдельный ТРЕЙ на борту, а не на поле ───────────
+        // Раньше стопки-селектор лежали прямо на сукне: они закрывали клетки
+        // и выглядели как «фишки, которые просто стоят не на ставке».
+        // Теперь у каждого номинала свой лоток в борту стола, как в кассе:
+        // фишки не на разметке, клик по лотку выбирает номинал.
+        static const int kChipValsTray[6] = { 10, 25, 50, 100, 250, 500 };
+        auto makeChip = [&](Node* parent, Material* faceMat, const char* label,
+                            float cx, float cz, float y) {
+            // Настоящая фишка: борт с насечками (атлас по кругу), верхний
+            // кружок и латунный кант. Собрана из трёх цилиндров — дешевле
+            // одной модели и видно с любого ракурса.
+            addObj(parent, "ChipEdge", Vector3(cx, y, cz), Vector3(0.075f, 0.021f, 0.075f),
+                   cylModel_, faceMat, Quaternion::IDENTITY, true);
+            addObj(parent, "ChipRim", Vector3(cx, y + 0.0105f, cz), Vector3(0.079f, 0.0045f, 0.079f),
+                   cylModel_, chipRimMat.Get(), Quaternion::IDENTITY, false);
+            addObj(parent, "ChipFace", Vector3(cx, y + 0.0128f, cz), Vector3(0.055f, 0.0018f, 0.055f),
+                   cylModel_, chipFaceMat.Get(), Quaternion::IDENTITY, false);
+            // Номинал прямо на фишке: без него все фишки одинаковые
+            // (игрок: «сделай разные фишки»). Ставим только в лотках —
+            // 49 подписей на столе были бы лишним бюджетом Text3D.
+            if (label && *label) {
+                TableLabel(parent, label, Vector3(cx, y + 0.0148f, cz), 0.075f);
+            }
+        };
+        const float railZ = CasinoTable::kFeltZ * 0.5f + CasinoTable::kRailWidth * 0.5f;
         for (int cs = 0; cs < 6; ++cs) {
-            // РЕАЛЬНЫЙ БАГ: стопки-селектор стояли на z = -0.68..-0.82, а это
-            // ровно клетки внешних ставок (x 0.79..1.47, z -0.65..-0.89).
-            // Они физически закрывали половину поля, и поставить на «красное»
-            // мышкой было невозможно. Переносим к переднему борту, где клеток нет.
-            float x = -1.14f + (float)cs * 0.26f;
-            float z = 1.02f;
-            casinoChipStacks_[cs] = SharedPtr<Node>(casinoScene_->CreateChild("CasinoChipStack"));
-            casinoChipStacks_[cs]->SetPosition(Vector3(x, 0.99f, z));
+            // Лотки идут вдоль переднего борта (сторона игрока, -X),
+            // по шесть штук в ряд, симметрично по Z.
+            float x = -1.62f + (float)cs * 0.54f;
+            float z = -railZ;
+            casinoChipStacks_[cs] = SharedPtr<Node>(casinoScene_->CreateChild("CasinoChipTray"));
+            casinoChipStacks_[cs]->SetPosition(Vector3(x, 0.0f, z));
+            // Деревянный лоток с латунной окантовкой.
+            addObj(casinoChipStacks_[cs].Get(), "TrayBase", Vector3(0.0f, 0.925f, 0.0f),
+                   Vector3(0.44f, 0.035f, 0.30f), boxModel_, mahogMat);
+            addObj(casinoChipStacks_[cs].Get(), "TrayBrass", Vector3(0.0f, 0.943f, 0.0f),
+                   Vector3(0.40f, 0.006f, 0.26f), boxModel_, brassMat, Quaternion::IDENTITY, false);
+            // Четыре фишки в столбике — как в кассе, «на выбор».
             for (int disc = 0; disc < 4; ++disc) {
-                // Борт фишки — тот же атлас, верх — плоская грань с золотым
-                // ободком. Цилиндр берёт UV по кругу, поэтому насечки видны
-                // с любой стороны, как у настоящей керамической фишки.
-                addObj(casinoChipStacks_[cs].Get(), "ChipDisc", Vector3(0.0f, (float)disc * 0.022f, 0.0f), Vector3(0.14f, 0.018f, 0.14f), cylModel_, chipMats[cs]);
-                addObj(casinoChipStacks_[cs].Get(), "ChipGoldRim", Vector3(0.0f, (float)disc * 0.022f + 0.010f, 0.0f), Vector3(0.147f, 0.006f, 0.147f), cylModel_, wheelGoldMat.Get(), Quaternion::IDENTITY, false);
+                // Подпись — только на верхней фишке столбика. Строка живёт
+                // до конца итерации: CString() от временного объекта дал бы
+                // висячий указатель.
+                const String label = (disc == 3) ? String(kChipValsTray[cs]) : String();
+                makeChip(casinoChipStacks_[cs].Get(), chipMats[cs],
+                         label.Empty() ? nullptr : label.CString(), 0.0f, 0.0f,
+                         0.952f + (float)disc * 0.022f);
             }
         }
 
+        // Настоящая фишка = три цилиндра: борт с насечками (атлас), латунный
+        // кант и керамическое лицо. Один плоский диск читался как «хз что».
+        auto buildChipNode = [&](Node* parent, Material* faceMat) {
+            addObj(parent, "ChipEdge", Vector3::ZERO, Vector3(0.075f, 0.021f, 0.075f),
+                   cylModel_, faceMat, Quaternion::IDENTITY, true);
+            addObj(parent, "ChipRim", Vector3(0.0f, 0.0105f, 0.0f), Vector3(0.079f, 0.0045f, 0.079f),
+                   cylModel_, chipRimMat.Get(), Quaternion::IDENTITY, false);
+            addObj(parent, "ChipFace", Vector3(0.0f, 0.0128f, 0.0f), Vector3(0.055f, 0.0018f, 0.055f),
+                   cylModel_, chipFaceMat.Get(), Quaternion::IDENTITY, false);
+        };
+
         // Летящие фишки: пул из 12 узлов. Игрок ставит фишку — она по дуге
-        // летит из-под руки крупье на свою клетку и там остаётся лежать.
+        // летит из-под руки крупье на свою клетку.
         for (int fc = 0; fc < 12; ++fc) {
             Node* fly = casinoScene_->CreateChild("CasinoFlyingChip");
             fly->SetEnabled(false);
-            fly->SetScale(Vector3(0.13f, 0.020f, 0.13f));
-            auto* sm = fly->CreateComponent<StaticModel>();
-            sm->SetModel(cylModel_ ? cylModel_ : boxModel_);
-            sm->SetMaterial(chipMats[fc % 6]);
-            sm->SetCastShadows(true);
+            buildChipNode(fly, chipMats[fc % 6]);
             casinoFlyingChips_.Push(SharedPtr<Node>(fly));
             casinoFlyingChipState_.Push(FlyingChip{});
         }
@@ -12257,22 +12418,29 @@ private:
         for (int dz = 0; dz < 49; ++dz) {
             Node* dep = casinoScene_->CreateChild("CasinoTableChip");
             dep->SetEnabled(false);
-            dep->SetScale(Vector3(0.13f, 0.020f, 0.13f));
             const CasinoTable::Point c = CasinoTable::ZoneCenter(dz);
             dep->SetPosition(Vector3(c.x, CasinoTable::kChipY, c.z));
             // Клик по лежащей фишке = клик по её клетке: иначе фишка,
             // перекрывшая тонкую клетку, «съедала» повторную ставку.
             dep->SetVar("BetZone", dz + 1);
-            auto* dsm = dep->CreateComponent<StaticModel>();
-            dsm->SetModel(cylModel_ ? cylModel_ : boxModel_);
-            dsm->SetMaterial(chipMats[dz % 6]);
-            dsm->SetCastShadows(true);
+            buildChipNode(dep, chipMats[dz % 6]);
             casinoTableChips_.Push(SharedPtr<Node>(dep));
         }
 
         // 8. Настоящее 3D-колесо европейской рулетки (37 точных секторов + перегородки + дефлекторы + шарик!)
         casinoWheelHub_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoWheelHub"));
-        casinoWheelHub_->SetPosition(Vector3(-0.62f, 0.99f, -0.02f));
+        // Колесо — на своём подиуме у дилера (CasinoTable::kWheelX). Раньше
+        // оно стояло в центре разметки: на большом столе это перекрывало
+        // половину поля и мешало целиться мышкой.
+        casinoWheelHub_->SetPosition(Vector3(CasinoTable::kWheelX,
+                                             CasinoTable::kWheelY,
+                                             CasinoTable::kWheelZ));
+        // Подиум под колесом: низкий махагони-постамент с латунным кантом,
+        // чтобы чаша не «плавала» на сукне.
+        addObj(nullptr, "WheelPodium", Vector3(CasinoTable::kWheelX, 0.955f, CasinoTable::kWheelZ),
+               Vector3(1.90f, 0.075f, 1.90f), cylModel_, mahogMat);
+        addObj(nullptr, "WheelPodiumRim", Vector3(CasinoTable::kWheelX, 1.000f, CasinoTable::kWheelZ),
+               Vector3(1.94f, 0.012f, 1.94f), cylModel_, brassMat, Quaternion::IDENTITY, false);
 
         // ── Внешняя чаша: кольца, а НЕ сплошные диски ───────────────────────
         // ВОТ ГЛАВНАЯ ПРИЧИНА «жёлтого колеса без цифр»: раньше здесь стояли
@@ -12568,8 +12736,8 @@ private:
 
         // 10. Гигантский 3D Игровой Автомат «ROOSTER ROYAL 777» слева у витрины (для [TAB])
         casinoSlotMachineNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoSlot777"));
-        casinoSlotMachineNode_->SetPosition(Vector3(-3.35f, 0.0f, 0.65f));
-        casinoSlotMachineNode_->SetRotation(Quaternion(0.0f, 44.0f, 0.0f));
+        casinoSlotMachineNode_->SetPosition(Vector3(-1.05f, 0.0f, 3.35f));
+        casinoSlotMachineNode_->SetRotation(Quaternion(0.0f, -28.0f, 0.0f));
 
         // Пьедестал, туловище махагони, золотые колонны и витрина барабанов
         addObj(casinoSlotMachineNode_.Get(), "SlotPedestal", Vector3(0.0f, 0.46f, 0.0f),  Vector3(1.75f, 0.92f, 1.15f), boxModel_, mahogMat);
@@ -12738,14 +12906,21 @@ private:
         if (casinoCamNode_) {
             bool ballSuspense = (!casinoSlotsMode_ && casinoSpinTimer_ > 0.0f && casinoSpinTimer_ < 1.2f);
             bool slotSuspense = (casinoSlotsMode_ && casinoSpinTimer_ > 0.0f && casinoSpinTimer_ < 0.75f && slotPendingReels_[0] == slotPendingReels_[1]);
-            Vector3 rCam(0.14f + sinf(timeAcc_ * 0.45f) * 0.08f, ballSuspense ? 2.02f : 2.34f, ballSuspense ? -2.30f : -2.85f);
-            Vector3 rLook(-0.08f, 1.04f, 0.12f);
-            Vector3 sCam(-1.62f + sinf(timeAcc_ * 0.50f) * 0.04f, slotSuspense ? 1.62f : 1.72f, slotSuspense ? -0.95f : -1.25f);
-            Vector3 sLook(-3.35f, 1.64f, 0.58f);
+            // Камера — со стороны игрока, стол вытянут в +X. Раньше она стояла
+            // вплотную (2.85 м) к квадратному столу; теперь отодвинута так,
+            // чтобы в кадр влезли и разметка, и колесо на подиуме у дилера.
+            Vector3 rCam(-4.95f + sinf(timeAcc_ * 0.45f) * 0.10f,
+                         ballSuspense ? 2.70f : 3.05f,
+                         ballSuspense ? -1.55f : -1.80f);
+            Vector3 rLook(0.45f, 1.02f, 0.05f);
+            Vector3 sCam(-1.05f + sinf(timeAcc_ * 0.50f) * 0.05f,
+                         slotSuspense ? 1.70f : 1.86f,
+                         slotSuspense ? 1.30f : 1.55f);
+            Vector3 sLook(-1.05f, 1.62f, 3.30f);
 
             Vector3 cp = rCam.Lerp(sCam, casinoCamModeBlend_);
             Vector3 lp = rLook.Lerp(sLook, casinoCamModeBlend_);
-            if (blackjackMode_) { cp = Vector3(3.3f, 2.8f, -2.1f); lp = Vector3(3.3f, 0.98f, 0); }
+            if (blackjackMode_) { cp = Vector3(-1.10f, 2.55f, -4.75f); lp = Vector3(-1.10f, 1.00f, -3.05f); }
             cp = lp + Quaternion(0, miniOrbit_, 0) * (cp - lp);
 
             // ── Крупный план рулетки ──────────────────────────────────────
@@ -12778,8 +12953,8 @@ private:
                     CasinoCine::Camera base;
                     base.pos = CasinoCine::MakeV3(cp.x_, cp.y_, cp.z_);
                     base.look = CasinoCine::MakeV3(lp.x_, lp.y_, lp.z_);
-                    const CasinoCine::V3 wheel =
-                        CasinoCine::MakeV3(-0.62f, 0.99f, -0.02f);
+                    const CasinoCine::V3 wheel = CasinoCine::MakeV3(
+                        CasinoTable::kWheelX, CasinoTable::kWheelY, CasinoTable::kWheelZ);
                     const CasinoCine::Camera mixed =
                         CasinoCine::CameraFor(base, wheel, sectorRad, cf);
                     cp = Vector3(mixed.pos.x, mixed.pos.y, mixed.pos.z);
@@ -12789,14 +12964,14 @@ private:
                     // это проверено в test_casino_cine группой «Камера».
                     // Вблизи колеса широкий угол раздувает перспективу — на
                     // крупном плане сужаем поле зрения до 34°.
-                    casinoCineFov_ = Lerp(50.0f, 34.0f, cf.closeUp);
+                    casinoCineFov_ = Lerp(56.0f, 34.0f, cf.closeUp);
                 }
             }
 
             casinoCamNode_->SetPosition(cp);
             casinoCamNode_->LookAt(lp);
             if (Camera* cc = casinoCamNode_->GetComponent<Camera>()) {
-                const float wantFov = (casinoCineFov_ > 0.0f) ? casinoCineFov_ : 50.0f;
+                const float wantFov = (casinoCineFov_ > 0.0f) ? casinoCineFov_ : 56.0f;
                 if (fabsf(cc->GetFov() - wantFov) > 0.01f) cc->SetFov(wantFov);
             }
         }
@@ -12806,8 +12981,10 @@ private:
             casinoChandelierNode_->SetRotation(Quaternion(sinf(timeAcc_ * 0.7f) * 1.4f, timeAcc_ * 10.0f, cosf(timeAcc_ * 0.6f) * 1.2f));
         }
         if (casinoWheelSpot_) {
-            Vector3 spotPos = Vector3(-0.25f, 3.60f, -0.35f).Lerp(Vector3(-2.15f, 3.45f, -0.85f), casinoCamModeBlend_);
-            Vector3 spotTarget = Vector3(-0.42f, 0.98f, -0.02f).Lerp(Vector3(-3.35f, 1.56f, 0.40f), casinoCamModeBlend_);
+            Vector3 spotPos = Vector3(CasinoTable::kWheelX + 0.10f, 3.75f, CasinoTable::kWheelZ - 0.25f)
+                                  .Lerp(Vector3(-2.15f, 3.45f, -0.85f), casinoCamModeBlend_);
+            Vector3 spotTarget = Vector3(CasinoTable::kWheelX, CasinoTable::kWheelY, CasinoTable::kWheelZ)
+                                  .Lerp(Vector3(-3.35f, 1.56f, 0.40f), casinoCamModeBlend_);
             casinoWheelSpot_->GetNode()->SetPosition(spotPos);
             casinoWheelSpot_->GetNode()->LookAt(spotTarget);
             casinoWheelSpot_->SetBrightness((casinoResultFlash_ > 0.0f ? 3.2f : 2.35f) * pbr);
@@ -12925,9 +13102,16 @@ private:
         static const int kChipVals[6] = { 10, 25, 50, 100, 250, 500 };
         for (int cs = 0; cs < 6; ++cs) {
             if (!casinoChipStacks_[cs]) continue;
-            bool selected = (casinoBet_.amount >= kChipVals[cs]);
-            float hScale = selected ? (1.0f + 0.15f * sinf(timeAcc_ * 4.0f + (float)cs)) : 0.35f;
-            casinoChipStacks_[cs]->SetScale(Vector3(1.0f, hScale, 1.0f));
+            // Лоток ВЫБРАННОГО номинала подсвечивается и чуть приподнят;
+            // остальные просто лежат в борту — «просто стопок на поле» больше нет.
+            bool selected = (casinoBet_.amount >= kChipVals[cs]) &&
+                            (cs == 5 || casinoBet_.amount < kChipVals[cs + 1]);
+            float lift = selected ? 0.010f + 0.006f * sinf(timeAcc_ * 4.0f + (float)cs) : 0.0f;
+            casinoChipStacks_[cs]->SetScale(Vector3(1.0f, selected ? 1.15f : 1.0f, 1.0f));
+            casinoChipStacks_[cs]->SetPosition(Vector3(
+                -1.62f + (float)cs * 0.54f,
+                lift,
+                -(CasinoTable::kFeltZ * 0.5f + CasinoTable::kRailWidth * 0.5f)));
         }
         if (casinoDollyNode_) {
             float dy = (casinoResultFlash_ > 0.0f && casinoOutcome_ > 0) ? (1.08f + fabsf(sinf(timeAcc_ * 7.0f)) * 0.16f) : 1.03f;
@@ -13306,42 +13490,44 @@ private:
             return b;
         };
 
-        // 1. Постоянная, неблокирующая верхняя плашка-уведомление (100% РОФЛ)
+        // 1. Дисклеймер — НЕ полоса на весь экран. Игрок: «фото и табличка
+        //    закрывают геймплей». Теперь это маленькая плашка в правом нижнем
+        //    углу: текст читается, но 3D-стол ничего не перекрывает.
         BorderImage* roflStrip = casinoPanel_->CreateChild<BorderImage>();
-        roflStrip->SetPosition(0, 0);
-        roflStrip->SetSize(sw, S(34));
-        roflStrip->SetColor(Color(0.035f, 0.055f, 0.05f, 0.90f));
+        roflStrip->SetPosition(sw - S(316), sh - S(22));
+        roflStrip->SetSize(S(300), S(18));
+        roflStrip->SetColor(Color(0.03f, 0.05f, 0.05f, 0.55f));
 
         casinoRoflBannerText_ = roflStrip->CreateChild<Text>();
-        casinoRoflBannerText_->SetFont(font_, SF(14));
-        casinoRoflBannerText_->SetText("Виртуальные фишки · без реальных денег");
+        casinoRoflBannerText_->SetFont(font_, SF(11));
+        casinoRoflBannerText_->SetText("Виртуальные фишки · без денег");
         casinoRoflBannerText_->SetTextAlignment(HA_CENTER);
-        casinoRoflBannerText_->SetPosition(S(12), S(7));
-        casinoRoflBannerText_->SetWidth(sw - S(24));
-        casinoRoflBannerText_->SetColor(Color(1.0f, 0.92f, 0.54f, 1.0f));
+        casinoRoflBannerText_->SetPosition(S(4), S(1));
+        casinoRoflBannerText_->SetWidth(S(292));
+        casinoRoflBannerText_->SetColor(Color(0.86f, 0.82f, 0.60f, 0.85f));
         StyleCrispText(casinoRoflBannerText_, true);
 
         // 2. Полупрозрачная верхняя панель (центр экрана 100% открыт для 3D 4K PBR зала!)
         BorderImage* topBar = casinoPanel_->CreateChild<BorderImage>();
-        topBar->SetPosition(S(18), S(42));
-        topBar->SetSize(sw - S(36), S(78));
-        topBar->SetColor(Color(0.03f, 0.06f, 0.05f, 0.78f));
+        topBar->SetPosition(S(18), S(8));
+        topBar->SetSize(sw - S(36), S(54));
+        topBar->SetColor(Color(0.03f, 0.06f, 0.05f, 0.62f));
 
         casinoTitleText_ = topBar->CreateChild<Text>();
         casinoTitleText_->SetFont(font_, SF(19));
-        casinoTitleText_->SetPosition(S(16), S(10));
+        casinoTitleText_->SetPosition(S(16), S(6));
         casinoTitleText_->SetColor(Color(1.0f, 0.84f, 0.30f, 1.0f));
         StyleCrispText(casinoTitleText_, true);
 
         casinoBalanceText_ = topBar->CreateChild<Text>();
         casinoBalanceText_->SetFont(font_, SF(20));
-        casinoBalanceText_->SetPosition(S(16), S(41));
+        casinoBalanceText_->SetPosition(S(16), S(28));
         casinoBalanceText_->SetColor(Color(0.42f, 1.0f, 0.68f, 1.0f));
         StyleCrispText(casinoBalanceText_, true);
 
         casinoStatusText_ = topBar->CreateChild<Text>();
         casinoStatusText_->SetFont(font_, SF(13));
-        casinoStatusText_->SetPosition(S(295), S(46));
+        casinoStatusText_->SetPosition(S(295), S(30));
         casinoStatusText_->SetWidth(Max(S(150), sw - S(36) - S(546) - S(295)));
         casinoStatusText_->SetColor(Color(0.84f, 0.88f, 0.78f, 0.95f));
         StyleCrispText(casinoStatusText_);
@@ -13354,7 +13540,7 @@ private:
         // 3. Компактная плавающая плашка статуса спина под верхней панелью
         BorderImage* midBadge = casinoPanel_->CreateChild<BorderImage>();
         int mbw = Min(sw - S(80), S(780));
-        midBadge->SetPosition((sw - mbw) / 2, S(128));
+        midBadge->SetPosition((sw - mbw) / 2, S(70));
         midBadge->SetSize(mbw, S(68));
         midBadge->SetColor(Color(0.02f, 0.04f, 0.04f, 0.70f));
 
@@ -13477,9 +13663,11 @@ private:
         dim->SetSize(sw, sh);
         dim->SetColor(Color(0.01f, 0.01f, 0.02f, 0.56f));
 
-        int dw = Min(sw - S(64), S(680));
-        int dh = S(380);
-        int dx = (sw - dw) / 2, dy = (sh - dh) / 2;
+        // Карточка была 680x380 и накрывала весь стол. Теперь — узкая
+        // полоса снизу: текст читается, 3D-стол виден целиком.
+        int dw = Min(sw - S(64), S(720));
+        int dh = S(150);
+        int dx = (sw - dw) / 2, dy = sh - dh - S(16);
         BorderImage* dBorder = casinoDisclaimerBox_->CreateChild<BorderImage>();
         dBorder->SetPosition(dx - S(3), dy - S(3));
         dBorder->SetSize(dw + S(6), dh + S(6));
@@ -13491,24 +13679,27 @@ private:
         dCard->SetColor(Color(0.05f, 0.03f, 0.06f, 0.95f));
 
         Text* dHead = dCard->CreateChild<Text>();
-        dHead->SetFont(font_, SF(26));
+        dHead->SetFont(font_, SF(18));
         dHead->SetText("Как играть");
         dHead->SetTextAlignment(HA_CENTER);
-        dHead->SetPosition(S(20), S(24));
+        dHead->SetPosition(S(20), S(8));
         dHead->SetWidth(dw - S(40));
         dHead->SetColor(Color(1.0f, 0.84f, 0.24f, 1.0f));
         StyleCrispText(dHead, true);
 
         Text* dSub = dCard->CreateChild<Text>();
-        dSub->SetFont(font_, SF(17));
-        dSub->SetText("Клик — поставить фишку. A/D — номинал.\nU — отмена, C — очистить, SPACE — играть.\nSPACE или клик во время показа числа — вернуть камеру.\nF — поле, B — блэкджек, ПКМ — обзор.\n\nБлэкджек: H — ещё, N — хватит, X — дабл.\nТолько виртуальные фишки. Без покупки и вывода.");
+        dSub->SetFont(font_, SF(13));
+        dSub->SetText("Клик по столу — ставка. A/D — номинал фишки. V — поставить выбранное.\n"
+                      "U — отмена, C — очистить, SPACE — крутить. F — включить 2D-поле ставок.\n"
+                      "TAB — 777, B — блэкджек (H — ещё, N — хватит, X — дабл). ПКМ — обзор зала.\n"
+                      "Только виртуальные фишки. Без покупки и вывода.");
         dSub->SetTextAlignment(HA_CENTER);
-        dSub->SetPosition(S(26), S(78));
+        dSub->SetPosition(S(26), S(38));
         dSub->SetWidth(dw - S(52));
         dSub->SetColor(Color(0.92f, 0.96f, 0.94f, 1.0f));
         StyleCrispText(dSub);
 
-        casinoDisclaimerBtn_ = SharedPtr<BorderImage>(makeGlassBtn(dCard, S(80), dh - S(76), dw - S(160), S(52), "Понятно", Color(0.76f, 0.48f, 0.06f, 0.98f), 16));
+        casinoDisclaimerBtn_ = SharedPtr<BorderImage>(makeGlassBtn(dCard, dw - S(190), dh - S(44), S(170), S(34), "Понятно", Color(0.76f, 0.48f, 0.06f, 0.98f), 14));
 
         auto* atlas = GetSubsystem<ResourceCache>()->GetResource<Texture2D>("Textures/UI/CasinoChips.png");
         for (auto& f : casinoFlights_) {
@@ -13728,7 +13919,7 @@ private:
             }
             if (payout > roundStake) {
                 PlayCasinoSound(casinoJackpotSound_, big ? 1.0f : 0.85f);
-                SpawnCasinoJackpotBurst(Vector3(-0.32f, 1.15f, -0.05f), big ? 56 : 28, big);
+                SpawnCasinoJackpotBurst(Vector3(0.0f, 1.25f, 0.0f), big ? 56 : 28, big);
             } else PlayUISound();
         } else {
             ++casinoLosses_;
@@ -13868,7 +14059,7 @@ private:
         if (key == KEY_T) {
             casinoBalance_ += 5000; SaveSettingsFile();
             PlayCasinoSound(casinoJackpotSound_, 0.65f);
-            SpawnCasinoJackpotBurst(casinoSlotsMode_ ? Vector3(-3.05f, 1.05f, 0.25f) : Vector3(1.1f, 1.15f, 0.2f), 24, false);
+            SpawnCasinoJackpotBurst(casinoSlotsMode_ ? Vector3(-1.05f, 1.05f, 3.20f) : Vector3(0.0f, 1.25f, 0.0f), 24, false);
             UpdateCasinoVisuals();
             return;
         }
@@ -13901,7 +14092,10 @@ private:
                 casinoBet_ = Casino::BetForTableZone(z, casinoBet_.amount);
                 AddRouletteChip(casinoBet_); return;
             }
-            if (HitUIElement(bettingUndo_, mp)) rouletteRound_.Undo();
+            // Накладка поля ставок перехватывает клик только внутри себя;
+        // ниже неё стол снова кликабелен, поэтому 3D-ставки не ломаются,
+        // даже когда панель открыта (F).
+        if (HitUIElement(bettingUndo_, mp)) rouletteRound_.Undo();
             if (HitUIElement(bettingClear_, mp)) rouletteRound_.Clear();
             if (HitUIElement(bettingAdd_, mp)) AddRouletteChip(casinoBet_);
             UpdateCasinoVisuals(); return;
@@ -13973,7 +14167,9 @@ private:
         }
         if (HitUIElement(casinoCloseButton_.Get(), mp)) { CloseCasino(); return; }
         auto* graphics = GetSubsystem<Graphics>();
-        if (graphics && (mp.y_ < S(130) || mp.y_ > graphics->GetHeight() - S(230))) return;
+        // Верхний мёртвый пояс: раньше 130 px (толстая панель + поле ставок).
+        // Панель стала 54 px, поле скрыто — оставляем только саму панель.
+        if (graphics && (mp.y_ < S(66) || mp.y_ > graphics->GetHeight() - S(196))) return;
         Node* hit = PickMiniObject(casinoScene_, casinoCamNode_, mp);
         if (hit && !casinoSlotsMode_) {
             int zone = VarToInt(hit->GetVar("BetZone")) - 1;
