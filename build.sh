@@ -1218,8 +1218,10 @@ else
 fi
 
 # ---- 6. Компиляция нативного клиента ----
-echo "[3/3] Компиляция src/MyApp.cpp -> build/MyShooter${EXE_EXT} ($CXX)..."
-"$CXX" "$ROOT/src/MyApp.cpp" \
+echo "[3/3] Компиляция src/MyApp.cpp + src/SkinShopUI.cpp -> build/MyShooter${EXE_EXT} ($CXX)..."
+# SkinShopUI.cpp — отдельная единица трансляции: магазин/рынок/апгрейдер.
+# Собираем вместе с MyApp, иначе линковка упадёт на его символах.
+"$CXX" "$ROOT/src/MyApp.cpp" "$ROOT/src/SkinShopUI.cpp" \
     -o "$OUT" \
     -std=c++17 $CXXFLAGS \
     ${EXTRA_DEFINES[@]+"${EXTRA_DEFINES[@]}"} \

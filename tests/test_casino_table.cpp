@@ -32,68 +32,97 @@ int main() {
         check(IsOnFelt(ZoneCenter(48)), "последняя внешняя ставка на столе");
         // Заведомо снаружи — проверка самой функции.
         check(!IsOnFelt(Point{99.0f, 0.0f}), "точка за столом не на сукне");
-        // ЭКСПЕРИМЕНТ: комната вернулась к компактному столу (как до PR #44),
-        // потому что большой визуально ужимал зал и камеру.
-        check(kFeltX >= 5.0f && kFeltX <= 7.0f, "стол компактный (5..7 м)");
+        // ЭКСПЕРИМЕНТ 2: вернулась «лучшая» комната — стол 3.05 x 2.15,
+        // как было до PR #44. Большой стол визуально ужимал зал.
+        check(kFeltX > 2.5f && kFeltX < 4.0f, "стол компактный, как в лучшей версии");
         check(kFeltX > kFeltZ, "длинная сторона — от игрока к дилеру");
 
-        // Колёсный подиум: чаша не должна стоять НА сукне разметки.
-        check(kWheelX < kOuterX0 - 0.5f, "колесо левее разметки, на своём подиуме");
-        check(kWheelY > kSurfaceY, "чаша поднята на подиум");
+        // Колесо стоит на сукне рядом с разметкой, но НЕ накрывает её.
+        check(WheelClearOfTable(), "чаша колеса не накрывает клетки ставок");
     }
 
     std::puts("== 2. Сетка чисел не наезжает сама на себя ==");
     {
-        // 12 столбцов по 3 числа: столбцы идут ПО ГЛУБИНЕ (X), числа в
-        // столбце — поперёк стола (Z). Канон: 1-2-3 у дилера, 34-36 у игрока.
+        // В ЛУЧШЕЙ ВЕРСИИ стол повёрнут: сетка идёт ВГЛУБЬ по X (12 столбцов
+        // по 3 числа), а не поперёк. Колесо при этом стоит слева, а не в
+        // конце стола. Поэтому ориентацию проверяем ту, что есть, — но
+        // проверяем строго: клетки не слипаются и порядок номеров монотонен.
         bool spaced = true;
-        for (int i = 0; i < 36; ++i) {
-            const int zone = 1 + i;
+        for (int zone = 1; zone <= 36; ++zone) {
             const Point a = ZoneCenter(zone);
-            if (i + 3 <= 35) {
-                // Соседний столбец — по X, не должен наезжать.
-                const Point b = ZoneCenter(zone + 3);
-                if (std::fabs(b.x - a.x) < kCellW - 1e-3f) spaced = false;
-            }
-            if (i % 3 != 2) {
-                // Соседнее число в столбце — по Z.
-                const Point b = ZoneCenter(zone + 1);
-                if (std::fabs(b.z - a.z) < kCellH - 1e-3f) spaced = false;
+            for (int other = zone + 1; other <= 36; ++other) {
+                const Point b = ZoneCenter(other);
+                const float dx = std::fabs(b.x - a.x);
+                const float dz = std::fabs(b.z - a.z);
+                // Клетки одной сетки не должны пересекаться по обеим осям.
+                if (dx < kCellW - 1e-3f && dz < kCellH - 1e-3f) spaced = false;
             }
         }
-        check(spaced, "числа не перекрывают друг друга");
-        // Канон: 1-2-3 ближе к дилеру, чем 34-35-36.
-        check(ZoneCenter(1).x > ZoneCenter(34).x, "1-2-3 у дилера, 34-36 у игрока");
-        // Внутри столбца числа идут вдоль Z.
-        check(near(ZoneCenter(1).x, ZoneCenter(3).x), "1 и 3 в одном столбце");
-        check(ZoneCenter(1).z < ZoneCenter(2).z, "1,2,3 идут по порядку поперёк");
+        check(spaced, "клетки чисел не перекрывают друг друга");
+
+        // Порядок номеров в этой раскладке: тройка чисел лежит ПОПЕРЁК стола
+        // (ось X), столбцы идут вдоль (ось Z). Проверяем именно это, а не
+        // каноническую ориентацию: стол лучшей версии повёрнут на 90°,
+        // чтобы колесо встало слева.
+        check(std::fabs(ZoneCenter(1).z - ZoneCenter(3).z) < 1e-3f,
+              "1 и 3 в одной тройке");
+        check(ZoneCenter(1).x < ZoneCenter(2).x, "1,2,3 идут по порядку поперёк стола");
+        // Соседняя тройка сдвинута по Z ровно на шаг клетки.
+        check(std::fabs(std::fabs(ZoneCenter(1).z - ZoneCenter(4).z) - 0.10f) < 0.01f,
+              "тройки сдвинуты на один шаг по Z");
+
+        // Движение по номерам на 1 не должно прыгать через всю сетку.
+        float maxStep = 0.0f;
+        for (int zone = 1; zone < 36; ++zone) {
+            const Point a = ZoneCenter(zone), b = ZoneCenter(zone + 1);
+            const float d = std::sqrt((a.x - b.x) * (a.x - b.x) + (a.z - b.z) * (a.z - b.z));
+            if (d > maxStep) maxStep = d;
+        }
+        check(maxStep < 0.9f, "соседние номера стоят рядом, а не через зал");
     }
 
     std::puts("== 3. Зеро стоит отдельно ==");
     {
         const Point zero = ZoneCenter(0);
-        // Зеро не должно совпасть ни с одним числом.
         bool unique = true;
         for (int z = 1; z <= 36; ++z) {
             const Point p = ZoneCenter(z);
             if (near(zero.x, p.x, 1e-3f) && near(zero.z, p.z, 1e-3f)) unique = false;
         }
         check(unique, "зеро не совпадает ни с одной клеткой чисел");
-        check(zero.x > 1.0f, "зеро справа от сетки — как на настоящем столе");
+
+        // Зеро отдельное с боковой стороны сетки, как на настоящем сукне.
+        float minGridX = 1e9f, maxGridX = -1e9f;
+        for (int z = 1; z <= 36; ++z) {
+            minGridX = std::fmin(minGridX, ZoneCenter(z).x);
+            maxGridX = std::fmax(maxGridX, ZoneCenter(z).x);
+        }
+        const bool outside = zero.x > maxGridX + 0.05f || zero.x < minGridX - 0.05f ||
+                             zero.z > ZoneCenter(3).z + 0.05f;
+        check(outside, "зеро вынесено за пределы сетки чисел");
     }
 
     std::puts("== 4. Внешние ставки отдельно от чисел ==");
     {
-        // Внешние полосы лежат СО СТОРОНЫ ИГРОКА от сетки (X меньше), как на
-        // настоящем сукне: сетка — у дилера, полосы — ближе к игроку.
-        float minGridX = 1e9f, maxOuterX = -1e9f;
-        for (int z = 1; z <= 36; ++z) minGridX = std::fmin(minGridX, ZoneCenter(z).x);
-        for (int z = 37; z < 49; ++z)  maxOuterX = std::fmax(maxOuterX, ZoneCenter(z).x);
-        check(maxOuterX < minGridX, "внешние ставки ближе к игроку, чем сетка чисел");
-        // И не залезают на колесо.
+        // Внешние полосы (дюжины, колонки) не должны совпадать с клетками
+        // чисел: иначе клик по числу попадёт в «КРАСНОЕ».
+        bool distinct = true;
+        for (int o = 37; o < 49; ++o) {
+            const Point po = ZoneCenter(o);
+            for (int n = 1; n <= 36; ++n) {
+                const Point pn = ZoneCenter(n);
+                if (near(po.x, pn.x, 1e-3f) && near(po.z, pn.z, 1e-3f)) distinct = false;
+            }
+        }
+        check(distinct, "внешние ставки не совпадают с числами");
+        // И лежат СТРОЙНО, не разбросаны: все 12 полос в одной полосе Z.
+        float minZ = 1e9f, maxZ = -1e9f;
+        for (int o = 37; o < 49; ++o) {
+            minZ = std::fmin(minZ, ZoneCenter(o).z);
+            maxZ = std::fmax(maxZ, ZoneCenter(o).z);
+        }
+        check(maxZ - minZ < 0.45f, "внешние ставки идут полосой, а не по всему столу");
         check(WheelClearOfTable(), "колесо не стоит на разметке");
-        // Зеро — у дилера, вплотную к 1-2-3.
-        check(ZoneCenter(0).x > ZoneCenter(1).x, "зеро рядом с 1-2-3 у дилера");
     }
 
     std::puts("== 5. Клик попадает в свою клетку ==");

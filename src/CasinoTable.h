@@ -2,77 +2,30 @@
 
 // CasinoTable.h — единая раскладка стола рулетки.
 //
-// ЗАЧЕМ. 2D-панель и 3D-стол считали позиции клеток ДВУМЯ копиями одной
-// формулы — любая правка разводила фишки, подсветку и клик по разным местам.
-// Теперь раскладка одна: 3D-объекты, клик и бросок фишки берут клетку отсюда.
-// Модуль без Urho3D — только числа, поэтому проверяется тестом
+// ЗАЧЕМ. Жалоба: «фишки появляются только на 2D табле, а на 3D столе это не
+// фишки». Часть причины была в том, что 2D-панель и 3D-стол считали позиции
+// клеток ДВУМЯ разными копиями одной и той же формулы — в CreateCasinoScene3D
+// и во взгляде на стол. Любая правка в одной копии рассинхронизировала их:
+// фишка летела в одну клетку, а подсветка загоралась на другой.
+//
+// Теперь раскладка одна: и 3D-объекты, и клик, и бросок фишки берут клетку
+// отсюда. Модуль без Urho3D — только числа, поэтому проверяется тестом
 // (tests/test_casino_table.cpp).
-//
-// ─────────────────────────────────────────────────────────────────────────
-// ЭКСПЕРИМЕНТ: СТАРАЯ КОМНАТА (2026-12).
-// Игрок: «верни старый обзор, раньше было получше, попробуем воссоздать
-// комнату со старым казино как эксперимент». Поэтому вернулась компактная
-// раскладка: квадратный стол у дилера, колесо в центре зала, камера из +X.
-// Большой канонический стол (8.20 x 3.40, колесо на подиуме) жил в PR #44
-// и не прижился — он визуально ужал зал.
-//
-// Если захочется вернуть большой вариант — это одна правка констант ниже
-// плюс блок 7 в CreateCasinoScene3D и камера (см. комментарий у kFeltX).
-// ─────────────────────────────────────────────────────────────────────────
-//
-//        +X ← игрок                                  дилер → ...
-//   ┌─────────────────────────────────────────────────────────┐
-//   │  [внешние]  │ разметка 3 x 12 │зеро│   (колесо)         │
-//   └─────────────────────────────────────────────────────────┘
 
 namespace CasinoTable {
 
-// ── Габариты сукна ─────────────────────────────────────────────────────────
-// Старый компактный стол: 3.05 x 2.15 — камера ставится в 2.85 м и зал
-// читается «как раньше».
-constexpr float kFeltX      = 6.00f;   // длина вдоль стола (от игрока к дилеру)
-constexpr float kFeltZ      = 2.10f;   // ширина поперёк
+// Размеры стола в метрах. Стол вытянут по X (длинная сторона к игроку).
+constexpr float kFeltX      = 3.05f;
+constexpr float kFeltZ      = 2.15f;
 constexpr float kSurfaceY   = 0.99f;   // высота сукна
-constexpr float kCellY      = 0.9945f; // разметка ЛЕЖИТ на сукне (+4.5 мм), а не парит
+constexpr float kCellY      = 0.9915f; // инкрустация: +1.5 мм над сукном
 constexpr float kChipY      = 1.012f;  // высота лежащей фишки
 
-// ── Сетка чисел ────────────────────────────────────────────────────────────
-// 12 столбцов по 3 числа. Порядок канонический: 1-2-3 у дилера, 34-35-36
-// у игрока, внутри столбца — поперёк стола (ось Z).
+// Сетка чисел: 3 колонки x 12 рядов справа, зеро отдельно.
 constexpr int kCols = 3;
 constexpr int kRows = 12;
-constexpr float kCellW   = 0.215f;    // глубина клетки вдоль X
-constexpr float kCellH   = 0.185f;    // ширина клетки поперёк Z
-constexpr float kGridX0  = -0.72f;    // край сетки со стороны игрока
-constexpr float kGridX1  = kGridX0 + (float)kRows * kCellW;   // край у дилера (1.86)
-constexpr float kGridZ0  = -(float)kCols * kCellH * 0.5f;     // -0.2775
-
-// Зеро — отдельная клетка вплотную к столбцу 1-2-3, у дилера.
-constexpr float kZeroW  = kCellW;
-constexpr float kZeroH  = kCellH;
-constexpr float kZeroX  = kGridX1 + kZeroW * 0.5f;
-constexpr float kZeroZ  = 0.0f;
-
-// Внешние ставки: три полосы, со стороны игрока (X < kGridX0).
-constexpr float kOuterH    = (float)kCols * kCellH;   // 0.555 — во всю высоту сетки
-constexpr float kOuterX0   = kGridX0;                 // край у сетки
-constexpr float kOuterStep = kCellW;                  // шаг полос к игроку
-constexpr float kOuterZ0   = kGridZ0;
-
-// Колесо — в центре зала, как в старой комнате. Радиус чаши 0.87
-// (Wheel3D::kSkirtR): на компактном столе оно стоит рядом с разметкой,
-// а не на ней, и остаётся героем кадра.
-// Чаша радиусом 0.87 не должна наезжать на сетку чисел (её край -0.72):
-// центр уводим на -1.62, тогда правый край чаши - 0.75 — ровно у борта.
-constexpr float kWheelX = -1.62f;
-constexpr float kWheelZ = -0.02f;
-// Чаша стоит на своём подиуме (верх постамента 0.918), а не на сукне.
-constexpr float kPodiumTopY = 1.02f;
-constexpr float kWheelY = kPodiumTopY;
-
-// Обод стола (дерево + латунный кант) — снаружи сукна.
-constexpr float kRailWidth = 0.24f;
-constexpr float kRailY     = kSurfaceY - 0.02f;
+constexpr float kCellW = 0.32f;
+constexpr float kCellH = 0.09f;
 
 struct Point {
     float x = 0.0f;
@@ -84,58 +37,26 @@ struct Point {
 inline Point ZoneCenter(int zone) {
     Point p;
     if (zone <= 0) {
-        p.x = kZeroX;
-        p.z = kZeroZ;
+        // Зеро — отдельная клетка справа от сетки чисел.
+        p.x = 1.13f;
+        p.z = 0.72f;
         return p;
     }
     if (zone <= 36) {
         const int i = zone - 1;
-        // i / 3 — номер столбца, считая от дилера. Столбец 0 (1-2-3) у дилера,
-        // последний (34-35-36) у игрока. i % 3 — ряд поперёк стола.
-        const int colFromDealer = i / kCols;
-        p.x = kGridX1 - (float)colFromDealer * kCellW - kCellW * 0.5f;
-        p.z = kGridZ0 + (float)(i % kCols) * kCellH + kCellH * 0.5f;
+        p.x = 0.79f + (float)(i % kCols) * 0.34f;
+        p.z = 0.60f - (float)(i / kCols) * 0.10f;
         return p;
     }
-    // Внешние ставки, полосами от сетки к игроку:
-    //   37..42 — шесть стандартных пар (красное/чёрное, чёт/нечет, 1-18/19-36),
-    //            по две в три яруса,
-    //   43..45 — три дюжины,
-    //   46..48 — три колонки.
+    // Внешние ставки (дюжины, колонки, красное/чёрное, чёт/нечет).
     const int i = zone - 37;
-    if (i < 6) {
-        p.x = kOuterX0 - kOuterStep * 0.5f;
-        p.z = kOuterZ0 + ((float)(i / 2) + 0.25f + 0.5f * (float)(i % 2)) * (kOuterH / 3.0f);
-    } else if (i < 9) {
-        p.x = kOuterX0 - kOuterStep * 1.5f;
-        p.z = kOuterZ0 + (float)(i - 6) * (kOuterH / 3.0f) + (kOuterH / 6.0f);
-    } else {
-        p.x = kOuterX0 - kOuterStep * 2.5f;
-        p.z = kOuterZ0 + (float)(i - 9) * (kOuterH / 3.0f) + (kOuterH / 6.0f);
-    }
+    p.x = 0.79f + (float)(i % 3) * 0.34f;
+    p.z = -0.65f - (float)(i / 3) * 0.12f;
     return p;
 }
 
 // Высота, на которой лежит фишка на этой клетке.
 inline float ZoneChipY(int /*zone*/) { return kChipY; }
-
-// Полуразмеры клетки зоны (для отрисовки разметки и для пика).
-inline void ZoneHalfSize(int zone, float& halfX, float& halfZ) {
-    if (zone == 0) {
-        halfX = kZeroW * 0.5f;
-        halfZ = kZeroH * 0.5f;
-        return;
-    }
-    if (zone <= 36) {
-        halfX = kCellW * 0.5f;
-        halfZ = kCellH * 0.5f;
-        return;
-    }
-    // 37..42 стоят ПАРАМИ в ярусе (половина яруса), дюжины и колонки
-    // занимают весь ярус.
-    halfX = kCellW * 0.5f;
-    halfZ = (zone <= 42) ? (kOuterH / 12.0f) : (kOuterH / 6.0f);
-}
 
 // Попадает ли точка клика в клетку зоны (допуск — половина клетки).
 inline bool HitZone(int zone, float x, float z, float halfW, float halfH) {
@@ -148,11 +69,50 @@ inline bool HitZone(int zone, float x, float z, float halfW, float halfH) {
 }
 
 // Лежит ли клетка внутри сукна. Нужно, чтобы фишка не улетала за стол при
-// любом наборе ставок и чтобы клетку можно было нарисовать на сукне.
+// любом наборе ставок.
 inline bool IsOnFelt(const Point& p) {
     const float ax = p.x < 0.0f ? -p.x : p.x;
     const float az = p.z < 0.0f ? -p.z : p.z;
     return ax <= kFeltX * 0.5f && az <= kFeltZ * 0.5f;
+}
+
+// Полуразмеры клетки: разметка старой комнаты — плотная сетка 3 x 12
+// у дилера, внешние ставки полосами ниже, зеро отдельной клеткой справа.
+inline void ZoneHalfSize(int zone, float& halfX, float& halfZ) {
+    if (zone <= 0) {
+        halfX = 0.10f;
+        halfZ = 0.15f;
+        return;
+    }
+    if (zone <= 36) {
+        halfX = kCellW * 0.5f;
+        halfZ = kCellH * 0.5f;
+        return;
+    }
+    halfX = kCellW * 0.5f;
+    halfZ = 0.06f;
+}
+
+// Колесо на компактном столе стоит в центре зала, рядом с разметкой.
+// Радиус чаши (Wheel3D::kSkirtR = 0.87) не должен накрывать ни одну клетку.
+constexpr float kWheelX = -0.62f;
+constexpr float kWheelZ = -0.02f;
+constexpr float kWheelY = kSurfaceY;   // чаша стоит прямо на сукне
+constexpr float kWheelR = 0.87f;
+
+inline bool WheelClearOfTable() {
+    for (int z = 0; z < 49; ++z) {
+        const Point c = ZoneCenter(z);
+        float hx, hz;
+        ZoneHalfSize(z, hx, hz);
+        // Ближайшая точка клетки к центру колеса.
+        const float dx = (c.x - kWheelX) - hx > 0.0f ? (c.x - kWheelX) - hx
+                       : ((c.x - kWheelX) + hx < 0.0f ? -((c.x - kWheelX) + hx) : 0.0f);
+        const float dz = (c.z - kWheelZ) - hz > 0.0f ? (c.z - kWheelZ) - hz
+                       : ((c.z - kWheelZ) + hz < 0.0f ? -((c.z - kWheelZ) + hz) : 0.0f);
+        if (dx * dx + dz * dz < kWheelR * kWheelR) return false;
+    }
+    return true;
 }
 
 // Все ли 49 клеток помещаются на сукно. Проверяется тестом: если раскладку
@@ -163,27 +123,6 @@ inline int ZonesOffFelt() {
         if (!IsOnFelt(ZoneCenter(z))) ++n;
     }
     return n;
-}
-
-// Не залезает ли разметка на колесо: фишки не должны падать на чашу.
-inline bool WheelClearOfTable() {
-    const float dx = kWheelX - (kZeroX + kZeroW * 0.5f);
-    const float dz = kWheelZ - kZeroZ;
-    return (dx * dx + dz * dz) > 0.90f * 0.90f;
-}
-
-// Не пересекаются ли две зоны (проверка разметки тестом).
-inline bool ZonesOverlap(int a, int b) {
-    if (a == b) return false;
-    Point ca = ZoneCenter(a), cb = ZoneCenter(b);
-    float hax, haz, hbx, hbz;
-    ZoneHalfSize(a, hax, haz);
-    ZoneHalfSize(b, hbx, hbz);
-    const float dx = ca.x - cb.x;
-    const float dz = ca.z - cb.z;
-    const float ax = dx < 0.0f ? -dx : dx;
-    const float az = dz < 0.0f ? -dz : dz;
-    return ax < (hax + hbx) - 1e-3f && az < (haz + hbz) - 1e-3f;
 }
 
 } // namespace CasinoTable

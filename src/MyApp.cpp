@@ -115,6 +115,12 @@
 #include "KeyboardMap.h"
 #include "RouletteWheel3D.h"
 #include "CasinoTable.h"
+// Экономика скинов: магазин, рынок, апгрейдер, кейсы. Логика и баланс
+// проверены tests/test_skin_economy.cpp и test_skin_inventory.cpp; здесь
+// только состояние игрока и связь с UI.
+#include "SkinEconomy.h"
+#include "SkinInventory.h"
+#include "SkinShopUI.h"
 #include "PerfTier.h"
 #include "Feel.h"
 #include "BanyaUv.h"
@@ -1081,6 +1087,12 @@ private:
     bool casinoDisclaimerVisible_ = false;
     Casino::Bet casinoBet_{};
     int casinoBalance_ = 1000;
+    // ── Экономика скинов ──────────────────────────────────────────────────
+    // Инвентарь и панель живут всё время работы приложения: скины — общий
+    // прогресс, а не состояние одного захода в казино.
+    SkinInv::Inventory skinInv_;
+    std::unique_ptr<SkinShopUI::Panel> skinShop_;
+    bool skinShopOpen_ = false;
     int casinoLastResult_ = -1;
     int casinoPendingResult_ = -1;
     int casinoWins_ = 0;
@@ -5788,7 +5800,7 @@ private:
         int w = gfx->GetWidth();
         int h = gfx->GetHeight();
         if (w > 0 && h > 0 && (w != uiWidth_ || h != uiHeight_)) {
-            uiWidth_ = w;
+            uiWidth_ = w;            // Панель магазина пересобираем под новый размер.            RebuildSkinShopOnResize();
             uiHeight_ = h;
             uiRebuildDelay_ = 0.08f;
             pendingUiRebuild_ = true;
@@ -5803,6 +5815,23 @@ private:
                 SaveSettingsFile();
             }
         }
+    }
+
+    // Панель магазина создана под старый размер экрана — при ресайзе её
+    // нужно перестроить, иначе кнопки окажутся не там, где нарисованы.
+    void RebuildSkinShopOnResize() {
+        if (!skinShop_) return;
+        const bool wasOpen = skinShop_->IsOpen();
+        const int tab = skinShop_->Tab();
+        skinShop_.reset();
+        if (!wasOpen) return;
+        auto* ui = GetSubsystem<UI>();
+        if (!ui) return;
+        RefreshUIScale();
+        skinShop_.reset(new SkinShopUI::Panel(context_, ui->GetRoot(), font_, uiScale_));
+        skinShop_->Bind(&skinInv_, casinoBalance_);
+        skinShop_->SetTab(tab);
+        skinShop_->Show(true);
     }
 
     void SetupInput() {
@@ -6341,6 +6370,13 @@ private:
         }
 
         // ===== Нативная «Золотая рулетка» [J] (только виртуальные фишки) =====
+        // Магазин скинов: пока открыт — все клавиши его, кроме F-ряда выше.
+        if (skinShopOpen_) { HandleSkinShopKey(key); return; }
+
+        // Y — магазин / рынок / апгрейдер / кейсы. Работает и в казино, и в
+        // зале, и в меню: это общий прогресс игрока, не режим стола.
+        if (key == KEY_Y) { ToggleSkinShop(); return; }
+
         if (casinoOpen_) {
             HandleCasinoKey(key);
             return;
@@ -6598,6 +6634,18 @@ private:
 
         if (loadingScreenActive_) return;
         
+        // Магазин скинов модален: пока он открыт, клики не должны доходить
+        // ни до стола, ни до кнопок казино. Проверяем его ПЕРВЫМ.
+        if (skinShopOpen_) {
+            if (button == MOUSEB_LEFT) {
+                auto* in = GetSubsystem<Input>();
+                const IntVector2 mp = in ? in->GetMousePosition() : IntVector2(-1, -1);
+                skinShop_->HandleClick(mp.x_, mp.y_);
+                casinoBalance_ = skinShop_->Wallet();
+            }
+            return;
+        }
+
         if (casinoOpen_) {
             if (button == MOUSEB_LEFT) HandleCasinoClick();
             return;
@@ -9157,6 +9205,88 @@ private:
         if (armoryOpen_) UpdateArmoryHighlight();
     }
 
+    // ================= МАГАЗИН / РЫНОК / АПГРЕЙДЕР / КЕЙСЫ =================
+    // Открывается из казино (Y) и из панели помощи. Деньги — те же ¤, что
+    // баланс казино: игрок заработал их за столом и тратит на скины, а не
+    // на «вторую валюту, которую никто не понимает».
+    void ToggleSkinShop(int tab = -1) {
+        if (!skinShop_) {
+            RefreshUIScale();
+            auto* ui = GetSubsystem<UI>();
+            if (!ui) return;
+            skinShop_.reset(new SkinShopUI::Panel(context_, ui->GetRoot(), font_, uiScale_));
+        }
+        if (skinShopOpen_ && tab < 0) {
+            CloseSkinShop();
+            return;
+        }
+        // Кошелёк магазина = баланс казино. Панель не владеет деньгами:
+        // при закрытии забираем то, что она насчитала.
+        skinShop_->Bind(&skinInv_, casinoBalance_);
+        if (tab >= 0) skinShop_->SetTab(tab);
+        skinShop_->Show(true);
+        skinShopOpen_ = true;
+        // Скины меняют материал оружия — применяем сразу, чтобы в арсенале
+        // игрок увидел покупку без перезахода.
+        ApplyEquippedSkin();
+        SyncMouseLock();
+        PlayUISound();
+    }
+
+    void CloseSkinShop() {
+        if (!skinShopOpen_) return;
+        casinoBalance_ = skinShop_->Wallet();
+        skinShopOpen_ = false;
+        skinShop_->Show(false);
+        ApplyEquippedSkin();
+        SaveSettingsFile();
+        SyncMouseLock();
+        PlayUISound();
+    }
+
+    // Надеть скин оружия из инвентаря. Индекс совпадает с SKIN_DEFS:
+    // каталог начинается теми же десятью покрытиями.
+    void ApplyEquippedSkin() {
+        const int eq = skinInv_.Equipped(SkinInv::KIND_WEAPON);
+        if (eq >= 0 && eq < SKIN_COUNT && eq != currentSkin_) {
+            currentSkin_ = eq;
+            RefreshWeaponMaterials();
+            BuildWeaponModel(currentWeapon_);
+            if (weaponNameText_) {
+                weaponNameText_->SetText(String(WEAPON_DEFS[currentWeapon_].name) +
+                                         "  \u2022  " + String(SKIN_DEFS[currentSkin_].name));
+            }
+            if (armoryOpen_) UpdateArmoryHighlight();
+        }
+    }
+
+    // Инвентарь в settings.ini: маска владения + надетые по типам + серия
+    // кейсов. Формат — строка из 0/1, чтобы не заводить вторую схему XML
+    // ради 22 флагов.
+    void SaveSkinInventory(XMLElement& prog) {
+        String owned;
+        for (int i = 0; i < SkinInv::CatalogSize(); ++i) owned += skinInv_.Owns(i) ? "1" : "0";
+        prog.SetString("skinsOwned", owned);
+        prog.SetString("skinEquipWeapon", String(skinInv_.Equipped(SkinInv::KIND_WEAPON)));
+        prog.SetString("skinEquipChip", String(skinInv_.Equipped(SkinInv::KIND_CHIP)));
+        prog.SetString("skinEquipTile", String(skinInv_.Equipped(SkinInv::KIND_TILE)));
+    }
+
+    void LoadSkinInventory(const XMLElement& prog) {
+        if (!prog.HasAttribute("skinsOwned")) return;
+        const String owned = prog.GetAttribute("skinsOwned");
+        for (int i = 0; i < SkinInv::CatalogSize() && i < (int)owned.Length(); ++i) {
+            if (owned[i] == '1' && !skinInv_.Owns(i)) skinInv_.Grant(i);
+        }
+        const int eqW = atoi(prog.GetAttribute("skinEquipWeapon").CString());
+        const int eqC = atoi(prog.GetAttribute("skinEquipChip").CString());
+        const int eqT = atoi(prog.GetAttribute("skinEquipTile").CString());
+        if (eqW >= 0) skinInv_.Equip(eqW);
+        if (eqC >= 0) skinInv_.Equip(eqC);
+        if (eqT >= 0) skinInv_.Equip(eqT);
+        ApplyEquippedSkin();
+    }
+
     // ================= МЕНЮ АРСЕНАЛА (TAB) =================
 // NOTE: methods below are part of class MyApp (do not remove this brace pair)
     void ToggleArmory() {
@@ -9411,6 +9541,7 @@ private:
             casinoMaxWin_ = Max(0, XmlGetInt(prog, "casinoMaxWin", casinoMaxWin_));
         if (prog.HasAttribute("casinoSpins"))
             casinoSessionSpins_ = Max(0, XmlGetInt(prog, "casinoSpins", casinoSessionSpins_));
+        LoadSkinInventory(prog);
 
         if (migrateLegacy) SaveSettingsFile();
     }
@@ -9471,6 +9602,7 @@ private:
         XmlSetInt(prog, "casinoLosses",  casinoLosses_);
         XmlSetInt(prog, "casinoMaxWin",  casinoMaxWin_);
         XmlSetInt(prog, "casinoSpins",   casinoSessionSpins_);
+        SaveSkinInventory(prog);
         auto* fs = GetSubsystem<FileSystem>();
         if (!fs) return;
 
@@ -12211,65 +12343,29 @@ private:
             addObj(casinoChandelierNode_.Get(), "ChandBulb", Vector3(rx, -0.14f, rz), Vector3(0.16f, 0.26f, 0.16f), sphereModel_, neonGoldMat.Get(), Quaternion::IDENTITY, false);
         }
 
-        // 7. БОЛЬШОЙ рулеточный стол — как настоящий, по фото.
-        //    Было: почти квадратный 3.05 x 2.15, разметка коробками в центре,
-        //    колесо стояло прямо на ней. Стало: вытянутый 7.4 x 3.4, колесо
-        //    на своём подиуме у дилера, разметка ИНКРУСТИРОВАНА в сукно.
+        // 7. СТОЛ ЛУЧШЕЙ ВЕРСИИ (эксперимент 2026-12, второй заход).
+        //    Игрок: «верни всё же старую лучшую комнату». Это та раскладка,
+        //    что была до PR #44: 3.05 x 2.15, плотная сетка 3 x 12 у дилера,
+        //    колесо в центре зала. Отличие от исходника одно — разметка
+        //    ИНКРУСТИРОВАНА в сукно (1.2 мм), а не парит коробками на 8 мм.
         const float feltX = CasinoTable::kFeltX;
         const float feltZ = CasinoTable::kFeltZ;
-        const float railW = CasinoTable::kRailWidth;
-        const float feltY = CasinoTable::kSurfaceY;
+        // Обод стола задан явными размерами (TableRim 3.85 x 2.60 против
+        // сукна 3.05 x 2.15), поэтому kRailWidth из новой раскладки не нужен.
 
-        // 7a. Основание: тумба под столом + массивный бортик по периметру.
-        // Ноги — как в старой комнате: две тумбы по краям, а не один ящик.
-        addObj(nullptr, "TableBase", Vector3(-feltX * 0.30f, 0.40f, 0.0f),
-               Vector3(0.46f, 0.80f, feltZ * 0.72f), boxModel_, mahogMat);
-        addObj(nullptr, "TableBase2", Vector3(feltX * 0.30f, 0.40f, 0.0f),
-               Vector3(0.46f, 0.80f, feltZ * 0.72f), boxModel_, mahogMat);
-        addObj(nullptr, "TableBaseGold", Vector3(0.0f, 0.045f, 0.0f),
-               Vector3(feltX * 0.46f, 0.09f, feltZ * 0.58f), boxModel_, goldMat);
-        // Бортик: четыре бруса вокруг сукна. Внешний край — махагони,
-        // внутренний — латунный кант, как латунная шина на фото.
-        const float rimHalfX = feltX * 0.5f + railW;
-        const float rimHalfZ = feltZ * 0.5f + railW;
-        addObj(nullptr, "TableRailFront", Vector3(0.0f, feltY - 0.06f, -rimHalfZ),
-               Vector3(rimHalfX * 2.0f, 0.18f, railW * 2.0f), boxModel_, mahogMat);
-        addObj(nullptr, "TableRailBack", Vector3(0.0f, feltY - 0.06f, rimHalfZ),
-               Vector3(rimHalfX * 2.0f, 0.18f, railW * 2.0f), boxModel_, mahogMat);
-        addObj(nullptr, "TableRailLeft", Vector3(-rimHalfX, feltY - 0.06f, 0.0f),
-               Vector3(railW * 2.0f, 0.18f, feltZ), boxModel_, mahogMat);
-        addObj(nullptr, "TableRailRight", Vector3(rimHalfX, feltY - 0.06f, 0.0f),
-               Vector3(railW * 2.0f, 0.18f, feltZ), boxModel_, mahogMat);
-        // Латунная шина поверх борта: тонкая, не «глянцевая» — старый лак.
-        addObj(nullptr, "TableRailGoldF", Vector3(0.0f, feltY + 0.035f, -rimHalfZ),
-               Vector3(rimHalfX * 2.0f, 0.020f, railW * 1.7f), boxModel_, brassMat);
-        addObj(nullptr, "TableRailGoldB", Vector3(0.0f, feltY + 0.035f, rimHalfZ),
-               Vector3(rimHalfX * 2.0f, 0.020f, railW * 1.7f), boxModel_, brassMat);
-        addObj(nullptr, "TableRailGoldL", Vector3(-rimHalfX, feltY + 0.035f, 0.0f),
-               Vector3(railW * 1.7f, 0.020f, feltZ), boxModel_, brassMat);
-        addObj(nullptr, "TableRailGoldR", Vector3(rimHalfX, feltY + 0.035f, 0.0f),
-               Vector3(railW * 1.7f, 0.020f, feltZ), boxModel_, brassMat);
-
-        // 7b. Сукно — бархат, по канону (изумруд, матовая шерсть).
-        addObj(nullptr, "TableFelt", Vector3(0.0f, feltY - 0.03f, 0.0f),
-               Vector3(feltX, 0.06f, feltZ), boxModel_, feltInlayMat);
-        // Бортик «валиком»: на фото это мягкий скруглённый валик, а не
-        // четыре бруса. Скругление цилиндром убирает ощущение «дощатого
-        // ящика», которое игрок и назвал «досками».
-        const float rollR = CasinoTable::kRailWidth * 1.05f;
-        const float rollY = feltY + 0.030f;
-        addObj(nullptr, "TableRailRollF", Vector3(0.0f, rollY, -rimHalfZ),
-               Vector3(rollR * 2.0f, rollR * 1.05f, rollR * 2.0f), cylModel_, mahogMat,
-               Quaternion(90.0f, 0.0f, 0.0f));
-        addObj(nullptr, "TableRailRollB", Vector3(0.0f, rollY, rimHalfZ),
-               Vector3(rollR * 2.0f, rollR * 1.05f, rollR * 2.0f), cylModel_, mahogMat,
-               Quaternion(90.0f, 0.0f, 0.0f));
-        addObj(nullptr, "TableRailRollL", Vector3(-rimHalfX, rollY, 0.0f),
-               Vector3(rollR * 2.0f, rollR * 1.05f, rollR * 2.0f), cylModel_, mahogMat,
-               Quaternion(0.0f, 0.0f, 90.0f));
-        addObj(nullptr, "TableRailRollR", Vector3(rimHalfX, rollY, 0.0f),
-               Vector3(rollR * 2.0f, rollR * 1.05f, rollR * 2.0f), cylModel_, mahogMat,
-               Quaternion(0.0f, 0.0f, 90.0f));
+        // 7a. Основание — ровно как в старой комнате: две широкие ноги
+        //     с золотыми башмаками, массивный обод и золотой кант по нему.
+        addObj(nullptr, "TableLegL",     Vector3(-1.55f, 0.42f, 0.0f), Vector3(0.38f, 0.84f, 1.35f), boxModel_, mahogMat);
+        addObj(nullptr, "TableLegR",     Vector3( 1.55f, 0.42f, 0.0f), Vector3(0.38f, 0.84f, 1.35f), boxModel_, mahogMat);
+        addObj(nullptr, "TableLegGoldL", Vector3(-1.55f, 0.08f, 0.0f), Vector3(0.46f, 0.14f, 1.44f), boxModel_, goldMat);
+        addObj(nullptr, "TableLegGoldR", Vector3( 1.55f, 0.08f, 0.0f), Vector3(0.46f, 0.14f, 1.44f), boxModel_, goldMat);
+        addObj(nullptr, "TableRim",      Vector3(0.0f,   0.88f, 0.0f), Vector3(3.85f, 0.14f, 2.60f), boxModel_, mahogMat);
+        addObj(nullptr, "TableGoldTrim", Vector3(0.0f,   0.92f, 0.0f), Vector3(3.64f, 0.08f, 2.40f), boxModel_, goldMat);
+        // 7b. Сукно — вплотную к ободу, как в старой комнате: 3.52 x 2.28
+        //     при ободе 3.85 x 2.60. Никаких брёвен-поручней поверх: в
+        //     лучшей версии бортом служил сам обод с золотым кантом.
+        addObj(nullptr, "TableFelt", Vector3(0.0f, 0.955f, 0.0f),
+               Vector3(feltX + 0.47f, 0.04f, feltZ + 0.13f), boxModel_, feltInlayMat);
 
         // 7c. Разметка — ИНКРУСТАЦИЯ в сукно, а не коробки поверх.
         //     Плоские плитки стоят на 0.5 мм НАД сукном (раньше парили на 8 мм
@@ -12289,19 +12385,30 @@ private:
                        Vector3(c.x, CasinoTable::kCellY + 0.004f, c.z),
                        zone <= 36 ? 0.13f : 0.085f);
         }
-        // Золотые линии-«нити» между колонками и полосами: тонкие, как
-        // вышивка на настоящем сукне, а не рамки.
-        for (int r = 0; r <= CasinoTable::kRows; ++r) {
-            const float gx = CasinoTable::kGridX0 + (float)r * CasinoTable::kCellW;
-            addObj(nullptr, "FeltThread", Vector3(gx, CasinoTable::kCellY + 0.0006f, 0.0f),
-                   Vector3(0.006f, 0.0010f, CasinoTable::kOuterH + 0.004f),
-                   boxModel_, brassMat, Quaternion::IDENTITY, false);
-        }
-        for (int k = 0; k <= CasinoTable::kCols; ++k) {
-            const float gz = CasinoTable::kGridZ0 + (float)k * CasinoTable::kCellH;
-            addObj(nullptr, "FeltThread", Vector3(-1.20f, CasinoTable::kCellY + 0.0006f, gz),
-                   Vector3(CasinoTable::kGridX1 - (-1.20f) + CasinoTable::kCellW, 0.0010f, 0.006f),
-                   boxModel_, brassMat, Quaternion::IDENTITY, false);
+        // Линии сетки: в лучшей версии раскладка была тесной, клетки 0.32 x
+        // 0.09, и линии рисовались ПО ГРАНИЦАМ клеток, без отдельных констант.
+        // Считаем их прямо из координат клеток — так они не разъедутся с
+        // раскладкой при любой правке CasinoTable.h.
+        {
+            const CasinoTable::Point z1 = CasinoTable::ZoneCenter(1);    // 1-2-3
+            const CasinoTable::Point z34 = CasinoTable::ZoneCenter(34);  // 34-35-36
+            const float gridX0 = z1.x - 0.17f;
+            const float gridX1 = z34.x + 0.17f;
+            const float gridZ0 = CasinoTable::ZoneCenter(1).z - 0.045f;
+            const float gridZ1 = CasinoTable::ZoneCenter(3).z + 0.045f;
+            for (int r = 0; r <= 12; ++r) {
+                const float gx = gridX0 + (float)r * 0.34f;
+                addObj(nullptr, "FeltThread", Vector3(gx, CasinoTable::kCellY + 0.0006f, 0.0f),
+                       Vector3(0.006f, 0.0010f, (gridZ1 - gridZ0) + 1.30f),
+                       boxModel_, brassMat, Quaternion::IDENTITY, false);
+            }
+            for (int k = 0; k <= 3; ++k) {
+                const float gz = gridZ0 + (float)k * 0.09f;
+                addObj(nullptr, "FeltThread", Vector3((gridX0 + gridX1) * 0.5f,
+                       CasinoTable::kCellY + 0.0006f, gz),
+                       Vector3(gridX1 - gridX0, 0.0010f, 0.006f),
+                       boxModel_, brassMat, Quaternion::IDENTITY, false);
+            }
         }
 
         tableChip_ = SharedPtr<Node>(addObj(nullptr, "SelectedBetChip",
@@ -12417,20 +12524,14 @@ private:
                 TableLabel(parent, label, Vector3(cx, y + 0.0148f, cz), 0.075f);
             }
         };
-        // Лотки номиналов — на борту со стороны игрока (передний край, -X).
-        const float railX = -CasinoTable::kFeltX * 0.5f - CasinoTable::kRailWidth * 0.35f;
+        // Лотки номиналов — ряд по переднему борту (сторона игрока), как в
+        // кассе: фишки не лежат на разметке и не закрывают клетки. В лучшей
+        // версии это были простые стопки вдоль борта — возвращаем их.
         for (int cs = 0; cs < 6; ++cs) {
-            // Шесть лотков в ряд ВДОЛЬ борта игрока (ось Z), а не поперёк:
-            // на компактном столе борт короткий, поперёк они не влезают.
-            float x = railX;
-            float z = -0.75f + (float)cs * 0.30f;
+            float x = -1.14f + (float)cs * 0.26f;
+            float z = 1.02f;
             casinoChipStacks_[cs] = SharedPtr<Node>(casinoScene_->CreateChild("CasinoChipTray"));
             casinoChipStacks_[cs]->SetPosition(Vector3(x, 0.0f, z));
-            // Деревянный лоток с латунной окантовкой.
-            addObj(casinoChipStacks_[cs].Get(), "TrayBase", Vector3(0.0f, 0.925f, 0.0f),
-                   Vector3(0.44f, 0.035f, 0.30f), boxModel_, mahogMat);
-            addObj(casinoChipStacks_[cs].Get(), "TrayBrass", Vector3(0.0f, 0.943f, 0.0f),
-                   Vector3(0.40f, 0.006f, 0.26f), boxModel_, brassMat, Quaternion::IDENTITY, false);
             // Четыре фишки в столбике — как в кассе, «на выбор».
             for (int disc = 0; disc < 4; ++disc) {
                 // Подпись — только на верхней фишке столбика. Строка живёт
@@ -12481,21 +12582,13 @@ private:
 
         // 8. Настоящее 3D-колесо европейской рулетки (37 точных секторов + перегородки + дефлекторы + шарик!)
         casinoWheelHub_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoWheelHub"));
-        // Колесо — на своём подиуме у дилера (CasinoTable::kWheelX). Раньше
-        // оно стояло в центре разметки: на большом столе это перекрывало
-        // половину поля и мешало целиться мышкой.
-        // Чаша стоит на подиуме: его верх 0.918, чаша стартует оттуда.
+        // Колесо стоит прямо на сукне, слева от разметки — как в лучшей
+        // версии. Чаша радиусом 0.87 не накрывает ни одной клетки ставок
+        // (проверяет CasinoTable::WheelClearOfTable тестом).
+        // Подиума нет: чаша «утоплена» в стол, как у настоящего крупье.
         casinoWheelHub_->SetPosition(Vector3(CasinoTable::kWheelX,
                                              CasinoTable::kWheelY,
                                              CasinoTable::kWheelZ));
-        // Колесо в старой комнате стояло отдельным столом-постаментом рядом
-        // с рулеткой, а не на сукне. Возвращаем это: чаша на своём подиуме.
-        addObj(nullptr, "WheelPodium", Vector3(CasinoTable::kWheelX, 0.44f, CasinoTable::kWheelZ),
-               Vector3(0.30f, 0.88f, 0.30f), cylModel_, mahogMat);
-        addObj(nullptr, "WheelPodiumBase", Vector3(CasinoTable::kWheelX, 0.05f, CasinoTable::kWheelZ),
-               Vector3(1.05f, 0.10f, 1.05f), cylModel_, mahogMat);
-        addObj(nullptr, "WheelPodiumRim", Vector3(CasinoTable::kWheelX, 0.895f, CasinoTable::kWheelZ),
-               Vector3(1.98f, 0.045f, 1.98f), cylModel_, brassMat, Quaternion::IDENTITY, false);
 
         // ── Внешняя чаша: кольца, а НЕ сплошные диски ───────────────────────
         // ВОТ ГЛАВНАЯ ПРИЧИНА «жёлтого колеса без цифр»: раньше здесь стояли
@@ -13167,10 +13260,12 @@ private:
                             (cs == 5 || casinoBet_.amount < kChipVals[cs + 1]);
             float lift = selected ? 0.010f + 0.006f * sinf(timeAcc_ * 4.0f + (float)cs) : 0.0f;
             casinoChipStacks_[cs]->SetScale(Vector3(1.0f, selected ? 1.15f : 1.0f, 1.0f));
+            // Лотки стоят в ряд вдоль переднего борта (сторона игрока),
+            // внутри обода: сукно 2.15 по Z, обод 2.60.
             casinoChipStacks_[cs]->SetPosition(Vector3(
-                -CasinoTable::kFeltX * 0.5f - CasinoTable::kRailWidth * 0.35f,
+                -1.14f + (float)cs * 0.26f,
                 lift,
-                -0.72f + (float)cs * 0.29f));
+                1.02f));
         }
         if (casinoDollyNode_) {
             float dy = (casinoResultFlash_ > 0.0f && casinoOutcome_ > 0) ? (1.08f + fabsf(sinf(timeAcc_ * 7.0f)) * 0.16f) : 1.03f;
@@ -13751,6 +13846,7 @@ private:
         dSub->SetText("Клик по столу — ставка. A/D — номинал фишки. V — поставить выбранное.\n"
                       "U — отмена, C — очистить, SPACE — крутить. F — включить 2D-поле ставок.\n"
                       "TAB — 777, B — блэкджек (H — ещё, N — хватит, X — дабл). ПКМ — обзор зала.\n"
+                      "Y — МАГАЗИН СКИНОВ: покупка, рынок, апгрейдер, кейсы.\n"
                       "Только виртуальные фишки. Без покупки и вывода.");
         dSub->SetTextAlignment(HA_CENTER);
         dSub->SetPosition(S(26), S(38));
@@ -14047,6 +14143,27 @@ private:
         casinoCineHold_ = false;
         if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
         return true;
+    }
+
+    // Клавиши магазина. Вызывается ДО HandleCasinoKey: пока панель открыта,
+    // она перехватывает всё, кроме ESC (закрыть) и Q/E (вкладки).
+    bool HandleSkinShopKey(int key) {
+        if (!skinShopOpen_ || !skinShop_) return false;
+        if (key == KEY_ESCAPE || key == KEY_Y) { CloseSkinShop(); return true; }
+        if (key == KEY_Q) { skinShop_->CycleTab(-1); return true; }
+        if (key == KEY_E) { skinShop_->CycleTab(1); return true; }
+        if (key == KEY_C) { skinShop_->ClearSelection(); return true; }
+        if (key == KEY_7) { skinShop_->SetCaseKind(SkinInv::KIND_WEAPON); return true; }
+        if (key == KEY_8) { skinShop_->SetCaseKind(SkinInv::KIND_CHIP); return true; }
+        if (key == KEY_9) { skinShop_->SetCaseKind(SkinInv::KIND_TILE); return true; }
+        if (key == KEY_RETURN || key == KEY_SPACE) {
+            // Одна клавиша на действие текущей вкладки: купить / продать /
+            // апгрейд / открыть кейс. Как в казино, где SPACE — спин.
+            skinShop_->Activate();
+            casinoBalance_ = skinShop_->Wallet();
+            return true;
+        }
+        return true;   // остальное панель глотает
     }
 
     void HandleCasinoKey(int key) {
