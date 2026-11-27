@@ -67,6 +67,14 @@ else()
     target_compile_options(test_roulette_wheel3d PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
 endif()
 add_test(NAME RouletteWheel3D COMMAND test_roulette_wheel3d)
+add_executable(test_casino_table tests/test_casino_table.cpp)
+target_include_directories(test_casino_table PRIVATE src)
+if (WIN32)
+    target_compile_options(test_casino_table PRIVATE /O2 /W3 /EHsc /UNDEBUG)
+else()
+    target_compile_options(test_casino_table PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
+endif()
+add_test(NAME CasinoTable COMMAND test_casino_table)
 set_tests_properties(CorePhysicsAndAssets PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     ENVIRONMENT "CHIKENGUN_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Data"
