@@ -117,6 +117,8 @@
 #include "MaterialTier.h"
 #include "ArcadeGames.h"
 #include "SplashIntro.h"
+#include "MonitorLayout.h"
+#include "WindowMonitor.h"
 #include "SDLStartup.h"
 #include "SettingsParsing.h"
 
@@ -594,6 +596,10 @@ private:
     bool windowFocusLost_ = false;
     bool focusedOnce_ = false;      // окно хоть раз получало фокус (для восстановления ввода)
     float bootElapsed_ = 0.0f;      // сколько секунд идёт загрузка (сторожевой таймер)
+    float layoutWatchdog_ = 2.0f;   // сторож многомониторной раскладки окна
+    bool  settingsSanitized_ = false; // настройки экрана поправлены автоматически
+    int   savedMonitorW_ = 0;         // размер монитора из прошлой сессии
+    int   savedMonitorH_ = 0;
     float lastCrosshairGap_ = -1.0f;
     int uiWidth_ = 0;
     int uiHeight_ = 0;
@@ -1454,7 +1460,44 @@ public:
 
 
     void ApplyStartupRecovery() {
-        if (!GetArguments().Contains(String("--safe-mode"))) return;
+        // ── Автоматическое восстановление многомониторной раскладки ────────
+        // Выполняется ВСЕГДА, до оконных параметров. Причины:
+        //   * второй монитор отключили, а в settings.ini остался его индекс —
+        //     окно создаётся «в пустоте»: игра идёт, но её не видно, и
+        //     клавиатура в неё не попадает;
+        //   * полный экран с разрешением больше монитора на мультимониторе
+        //     растягивает кадр на оба экрана;
+        //   * сохранено 4K, а монитор 1080p — окно шире экрана.
+        {
+            // Полный экран с ФИКСИРОВАННЫМ разрешением — самый частый источник
+            // «растянутости»: выбрали 4K, монитор 1080p, драйвер растянул кадр
+            // (а на мультимониторе — ещё и на оба экрана). Переводим полный
+            // экран на нативное разрешение монитора: масштабировать нечего.
+            // Выбранный монитор НЕ сбрасываем — его правильность проверяет
+            // движок и сторож раскладки уже после старта.
+            if (gfxDisplayMode_ == 2 && gfxResIdx_ != 0) {
+                gfxResIdx_ = 0;
+                settingsSanitized_ = true;
+            }
+            // Сохранённый размер монитора (если есть) — страховка на старте:
+            // по нему ограничивается окно, пока Graphics ещё не поднят.
+            if (savedMonitorW_ > 0 && savedMonitorH_ > 0) {
+                if (gfxResIdx_ > 0) {
+                    static const int kResW[5] = { 0, 3840, 2560, 1920, 1600 };
+                    static const int kResH[5] = { 0, 2160, 1440, 1080,  900 };
+                    const int i = Clamp(gfxResIdx_, 0, 4);
+                    if (kResW[i] > savedMonitorW_ || kResH[i] > savedMonitorH_) {
+                        gfxResIdx_ = 0;   // запрошенное больше монитора — на АВТО
+                        settingsSanitized_ = true;
+                    }
+                }
+            }
+        }
+
+        if (!GetArguments().Contains(String("--safe-mode"))) {
+            if (settingsSanitized_) SaveSettingsFile();
+            return;
+        }
         // Explicit recovery from saved Ultra/4K settings, without deleting settings.ini.
         gfxQualityIdx_ = 0;
         gfxResIdx_ = 4; // 1600x900
@@ -1516,19 +1559,64 @@ public:
         int w = kResW[rIdx];
         int h = kResH[rIdx];
 
-        if (gfxDisplayMode_ == 2) {
+        // ── Мультимонитор на старте ────────────────────────────────────────
+        // Раньше размер окна брался ТОЛЬКО из таблицы пресетов. На сетапе
+        // «ноутбук 1920x1080 + внешний 2560x1440» выбор 4K давал окно 3840
+        // шириной, и SDL честно рисовал его поперёк обоих экранов —
+        // «растянулось на два моника». Теперь размер всегда ограничен
+        // физическим размером выбранного монитора, а позиция считается
+        // от его угла, а не от (0,0) виртуального рабочего стола.
+        MonitorLayout::Rect monitorRect{0, 0, 1920, 1080};
+        int monitorCount = 1;
+        {
+            WindowMonitor::Display display;
+            if (WindowMonitor::Query(display)) {
+                monitorCount = display.count;
+                monitorRect = display.desktop;
+            }
+        }
+        const int monitorIndex = MonitorLayout::ClampMonitor(gfxMonitorIdx_, monitorCount);
+        engineParameters_[EP_MONITOR] = monitorIndex;
+
+        // Страховка для случая, когда видео ещё не поднято и Query() вернула
+        // умолчание 1920x1080: берём размер монитора из прошлой сессии.
+        if (savedMonitorW_ > 0 && savedMonitorH_ > 0 &&
+            monitorRect.w == 1920 && monitorRect.h == 1080) {
+            monitorRect.w = savedMonitorW_;
+            monitorRect.h = savedMonitorH_;
+        }
+
+        const bool fullScreen = (gfxDisplayMode_ == 2);
+        const MonitorLayout::Rect usable =
+            MonitorLayout::FitToMonitor(monitorRect, 0, 0);
+        int winW = w, winH = h;
+        if (winW > 0 && winH > 0)
+            MonitorLayout::ClampResolutionToMonitor(winW, winH, usable);
+        else
+            MonitorLayout::ResolveWindowSize(usable, 0, 0, winW, winH);
+
+        if (fullScreen) {
             engineParameters_[EP_FULL_SCREEN] = true;
             engineParameters_[EP_BORDERLESS] = false;
-            if (w > 0) { engineParameters_[EP_WINDOW_WIDTH] = w; engineParameters_[EP_WINDOW_HEIGHT] = h; }
-        } else if (gfxDisplayMode_ == 1) {
-            engineParameters_[EP_FULL_SCREEN] = false;
-            engineParameters_[EP_BORDERLESS] = true;
-            if (w > 0) { engineParameters_[EP_WINDOW_WIDTH] = w; engineParameters_[EP_WINDOW_HEIGHT] = h; }
+            // В полноэкранном режиме размер должен совпасть с монитором ровно,
+            // иначе драйвер растянет кадр на оба экрана (растяжение по моде).
+            engineParameters_[EP_WINDOW_WIDTH] = winW;
+            engineParameters_[EP_WINDOW_HEIGHT] = winH;
         } else {
             engineParameters_[EP_FULL_SCREEN] = false;
-            engineParameters_[EP_BORDERLESS] = false;
-            engineParameters_[EP_WINDOW_WIDTH] = (w > 0) ? w : 1600;
-            engineParameters_[EP_WINDOW_HEIGHT] = (h > 0) ? h : 900;
+            engineParameters_[EP_BORDERLESS] = (gfxDisplayMode_ == 1);
+            if (winW <= 0 || winH <= 0) { winW = 1600; winH = 900; }
+            MonitorLayout::ClampResolutionToMonitor(winW, winH, usable);
+            if (winW <= 0) winW = 1600;
+            if (winH <= 0) winH = 900;
+            engineParameters_[EP_WINDOW_WIDTH] = winW;
+            engineParameters_[EP_WINDOW_HEIGHT] = winH;
+            if (!engineParameters_.Contains(EP_WINDOW_POSITION_X)) {
+                const MonitorLayout::Rect placed =
+                    MonitorLayout::CenterOnMonitor(usable, winW, winH);
+                engineParameters_[EP_WINDOW_POSITION_X] = placed.x;
+                engineParameters_[EP_WINDOW_POSITION_Y] = placed.y;
+            }
         }
     }
 
@@ -4679,6 +4767,30 @@ private:
             "SHADOW: " + String(gfxShadowIdx_ > 0 ? "on" : "off") + " normal-offset\n"
             "TRIS: " + String(ren ? ren->GetNumPrimitives() : 0) +
             "  BATCHES: " + String(ren ? ren->GetNumBatches() : 0);
+
+        // ── Строка ввода и мониторов ──────────────────────────────────────
+        // Без неё спор «клава не работает» неразрешим: издалека не видно,
+        // в фокусе окно или нет, и забрал ли движок мышь. Эти четыре флага
+        // однозначно показывают, где обрыв: фокус у WM, фокус внутри Urho3D,
+        // режим мыши и размер окна относительно монитора.
+        {
+            auto* input = GetSubsystem<Input>();
+            WindowMonitor::Display display;
+            const bool haveLayout = WindowMonitor::Query(display);
+            info += "\nINPUT: " + String(input && input->HasFocus() ? "focus" : "NO-FOCUS") +
+                    "  WM: " + String(WindowMonitor::HasFocus() ? "focus" : "NO-FOCUS") +
+                    "  MOUSE: " + String(input && input->GetMouseMode() == MM_RELATIVE ? "REL" :
+                                       (input && input->GetMouseMode() == MM_ABSOLUTE ? "ABS" : "FREE")) +
+                    (input && input->IsMouseVisible() ? "+vis" : "+hid");
+            if (haveLayout) {
+                info += "\nMONITORS: " + String(display.count) +
+                        "  on #" + String(display.current + 1) +
+                        "  screen " + String(display.desktop.w) + "x" + String(display.desktop.h) +
+                        "  window " + String(gfx->GetWidth()) + "x" + String(gfx->GetHeight());
+                if (gfx->GetWidth() > display.desktop.w + 2)
+                    info += "  ⚠ ШИРЕ ЭКРАНА";
+            }
+        }
         SetTextIfChanged(telemetryText_, info);
     }
 
@@ -5166,6 +5278,8 @@ private:
                 "  Q / E — PBR-скин     L — 3D лазер       I — осмотр оружия    TAB — арсенал\n"
                 "  F — Тир/Арена        F2 — 4K фоторежим  F3 — телеметрия      F8 — атмосфера 4K\n"
                 "  F9 — пресет графики  F7 — авто-качество (не лагает на слабом железе)\n"
+                "  F10 — выбрать монитор (окно переносится на него)  F11 — окно / без рамки\n"
+                "  Клавиатура молчит? Кликни в окно и нажми F3: строка INPUT покажет фокус, MONITORS — экран.\n"
                 "\n"
                 "ТАКТИКА, БАНЬКА СМОТРЯЩЕГО [P] И ПЕРКИ\n"
                 "  • [P] «КОЧЕТ В БАНЬКЕ»: продержись 3 минуты и разгадай загадки смотрящего (14 концовок, 57 загадок)!\n"
@@ -5478,6 +5592,12 @@ private:
         auto* input = GetSubsystem<Input>();
         auto* gfx = GetSubsystem<Graphics>();
         if (!input) return;
+
+        // SDL-фокус здесь НЕ трогаем вообще. SDL_SetWindowInputFocus/RaiseWindow
+        // внутри обработчика E_INPUTFOCUS даёт петлю событий focus -> raise ->
+        // focus, и ввод наоборот замирает. Возврат фокуса делается по клику
+        // игрока в окне и по сторожу в HandleUpdate — вне обработчика.
+
         if (gfx) {
             // Центр экрана: без этого после MM_RELATIVE курсор остаётся за краем,
             // и клики по меню уходят «мимо».
@@ -5505,7 +5625,12 @@ private:
         // Порядок важен: сначала режим, потом видимость. Раньше они переключались
         // в двух ветках подряд, и на некоторых драйверах SetMouseVisible(true)
         // сбрасывал MM_RELATIVE обратно — курсор пропадал в бою.
-        if (ShouldLockMouse()) {
+        // Забирать мышь можно только у окна, которому ОС уже отдала ввод.
+        // Если схватить курсор до получения фокуса, WM на Linux и частично
+        // на Windows оставляет захват «висящим»: и клавиши не приходят, и
+        // курсор не двигается — игра кажется мёртвой.
+        const bool canGrab = WindowMonitor::CanGrabMouse();
+        if (ShouldLockMouse() && canGrab) {
             if (input->GetMouseMode() != MM_RELATIVE)
                 input->SetMouseMode(MM_RELATIVE);
             if (input->IsMouseVisible())
@@ -5577,6 +5702,16 @@ private:
             uiRebuildDelay_ = 0.08f;
             pendingUiRebuild_ = true;
         }
+        // Игрок мог сам перетащить окно на другой монитор. Подхватываем это,
+        // иначе в настройках остаётся старый монитор, и все последующие
+        // смены разрешения уезжают не туда.
+        WindowMonitor::Display display;
+        if (WindowMonitor::Query(display) && display.count > 1) {
+            if (display.current >= 0 && display.current != gfxMonitorIdx_) {
+                gfxMonitorIdx_ = display.current;
+                SaveSettingsFile();
+            }
+        }
     }
 
     void SetupInput() {
@@ -5629,6 +5764,73 @@ private:
                     AnimateMainMenu(dt);
             }
             return;
+        }
+
+        // ── Сторож ввода ──────────────────────────────────────────────────
+        // Раз в секунду сверяем наше представление о фокусе с реальным
+        // состоянием окна. Это лечит самый неприятный сценарий: окно на вид
+        // активно, игра идёт, но SDL не получает клавиш, потому что WM уже
+        // отдал фокус другому окну (после alt-tab, смены монитора, выхода из
+        // полноэкранного режима). Именно это выглядит как «клава не работает».
+        {
+            auto* input = GetSubsystem<Input>();
+            if (input && !loadingScreenActive_) {
+                const bool realFocus = WindowMonitor::HasFocus();
+                // Фокус НЕ отбираем сами: игрок мог уйти в другое окно и
+                // вернуться кликом. Насильный захват превратил бы alt-tab в
+                // борьбу с игрой. Возврат делается по клику в окне
+                // (HandleMouseButtonDown -> WindowMonitor::EnsureFocus).
+                //
+                // Здесь только чиним рассинхрон: движок считает окно в фокусе,
+                // а SDL — нет (или наоборот). После смены монитора и выхода из
+                // полного экрана такое бывает, и тогда зажатый W увозит игрока
+                // в стену, а стрельба «залипает».
+                // Реагируем только когда SDL уверенно говорит «окна нет»
+                // (свёрнуто/скрыто). Рассинхрон по флагу фокуса сам по себе
+                // не повод что-то менять: на части WM он врёт постоянно, и
+                // активное вмешательство ломает управление, которое до этого
+                // работало.
+                if (WindowMonitor::DefinitelyUnusable()) {
+                    if (!windowFocusLost_) {
+                        windowFocusLost_ = true;
+                        isSprinting_ = false;
+                        isAiming_ = false;
+                        playerVelocity_ = Vector3::ZERO;
+                        SyncMouseLock();
+                    }
+                } else if (windowFocusLost_ && realFocus) {
+                    windowFocusLost_ = false;
+                    SyncMouseLock();
+                }
+            }
+        }
+
+        // Сторож многомониторной раскладки. Раз в 2 секунды проверяем две вещи:
+        //   1) окно не уехало целиком за пределы всех экранов (отключили
+        //      второй монитор, WM восстановил позицию из прошлой сессии);
+        //   2) окно не растянулось шире своего монитора (некоторые WM так
+        //      делают сами при maximize на стыке двух экранов).
+        // Обе ситуации выглядят для игрока одинаково: чёрный экран и «клава
+        // не работает» — окно не в фокусе и событий клавиш просто нет.
+        layoutWatchdog_ -= dt;
+        if (layoutWatchdog_ <= 0.0f) {
+            layoutWatchdog_ = 2.0f;
+            auto* gfx = GetSubsystem<Graphics>();
+            WindowMonitor::Display display;
+            if (gfx && WindowMonitor::Query(display) && display.count > 1) {
+                if (WindowMonitor::RecoverIfOffScreen()) {
+                    ShowMessage("Окно возвращено на основной монитор");
+                    pendingUiRebuild_ = true;
+                    uiRebuildDelay_ = 0.08f;
+                } else if (!gfx->GetFullscreen() && !gfx->GetBorderless() &&
+                           gfx->GetWidth() > display.desktop.w + 2) {
+                    // Окно шире монитора — прижимаем к нему, иначе половина
+                    // картинки живёт на соседнем экране.
+                    WindowMonitor::MoveToMonitor(display.current,
+                        Min(gfx->GetWidth(), display.desktop.w),
+                        Min(gfx->GetHeight(), display.desktop.h));
+                }
+            }
         }
 
         // Дебаунс ресайза окна/смены монитора: исключает дрожание на 2-х мониторах
@@ -5935,6 +6137,9 @@ private:
         if (key == KEY_F3) {
             showTelemetry_ = !showTelemetry_;
             PlayUISound();
+            ShowMessage(showTelemetry_
+                ? "Телеметрия [F3]: ВКЛ — здесь же строка INPUT (фокус, режим мыши) и MONITORS"
+                : "Телеметрия [F3]: ВЫКЛ");
             return;
         }
         if (key == KEY_F7) {
@@ -5960,11 +6165,34 @@ private:
             ShowMessage(String("Пресет графики [F9]: ") + qNames[gfxQualityIdx_]);
             return;
         }
-        if (key == KEY_F11) {
-            gfxDisplayMode_ = (gfxDisplayMode_ == 2) ? 0 : 2;
+        if (key == KEY_F10) {
+            // F10 — выбрать монитор и сразу перенести на него окно.
+            // В настройках этот пункт тоже есть, но на мультимониторе нужен
+            // быстрый способ проверить, что игра действительно на своём экране.
+            auto* gfx = GetSubsystem<Graphics>();
+            const int count = gfx ? Max(1, gfx->GetMonitorCount()) : 1;
+            gfxMonitorIdx_ = MonitorLayout::CycleMonitor(gfxMonitorIdx_, count, 1);
             ApplyDisplayMode();
             SaveSettingsFile();
             PlayUISound();
+            ShowMessage(count > 1
+                ? String("Монитор [F10]: ") + String(gfxMonitorIdx_ + 1) + "/" + String(count)
+                : String("Монитор только один"));
+            return;
+        }
+        if (key == KEY_F11) {
+            // Было: F11 из оконного режима выкидывал СРАЗУ в полный экран,
+            // и на мультимониторе картинка растягивалась по моде драйвера.
+            // Теперь F11 — это как в браузере: окно <-> без рамки на весь
+            // свой монитор, а настоящий полный экран остаётся в настройках.
+            if (gfxDisplayMode_ == 2) gfxDisplayMode_ = 0;
+            else gfxDisplayMode_ = (gfxDisplayMode_ == 0) ? 1 : 0;
+            ApplyDisplayMode();
+            SaveSettingsFile();
+            PlayUISound();
+            ShowMessage(gfxDisplayMode_ == 1
+                        ? "Режим экрана [F11]: БЕЗ РАМКИ на выбранном мониторе"
+                        : "Режим экрана [F11]: ОКОННЫЙ");
             return;
         }
         if (key == KEY_F12) {
@@ -6217,8 +6445,18 @@ private:
     void HandleMouseButtonDown(StringHash eventType, VariantMap& eventData) {
         using namespace MouseButtonDown;
         (void)eventType;
-        if (loadingScreenActive_) return;
         int button = VarToInt(eventData[P_BUTTON]);
+
+        // Клик по окну = игрок хочет играть. Возвращаем настоящий фокус ввода:
+        // на Linux/Wayland после alt-tab окно может быть активным с точки
+        // зрения WM, но SDL не получать ни клавиш, ни движения мыши.
+        if (!WindowMonitor::HasFocus()) {
+            WindowMonitor::EnsureFocus();
+            windowFocusLost_ = false;
+            SyncMouseLock();
+        }
+
+        if (loadingScreenActive_) return;
         
         if (casinoOpen_) {
             if (button == MOUSEB_LEFT) HandleCasinoClick();
@@ -8973,6 +9211,10 @@ private:
         gfxResIdx_      = Clamp(XmlGetInt(gfx, "resPreset",     gfxResIdx_),     0, 4);
         gfxDisplayMode_ = Clamp(XmlGetInt(gfx, "displayMode",   gfxDisplayMode_),0, 2);
         gfxMonitorIdx_  = Max(0, XmlGetInt(gfx, "monitor",       gfxMonitorIdx_));
+        // Размер монитора из прошлой сессии: нужен на старте, пока Graphics
+        // ещё не поднят, чтобы не создать окно шире экрана.
+        savedMonitorW_  = Max(0, XmlGetInt(gfx, "monitorW", 0));
+        savedMonitorH_  = Max(0, XmlGetInt(gfx, "monitorH", 0));
         gfxMsaaIdx_     = Clamp(XmlGetInt(gfx, "msaaIdx",       gfxMsaaIdx_),    0, 3);
         if (!gfx.HasAttribute("msaaIdx") && gfx.HasAttribute("msaa")) {
             int m = XmlGetInt(gfx, "msaa", 4);
@@ -9043,6 +9285,19 @@ private:
         XmlSetInt(gfx, "resPreset",     gfxResIdx_);
         XmlSetInt(gfx, "displayMode",   gfxDisplayMode_);
         XmlSetInt(gfx, "monitor",       gfxMonitorIdx_);
+        // Размер монитора и фактический размер окна — чтобы на следующем
+        // старте было понятно, помещается ли запрошенное разрешение в экран,
+        // ещё до создания окна (Graphics на тот момент не существует).
+        if (auto* gfxSys = GetSubsystem<Graphics>()) {
+            const IntVector2 desk = gfxSys->GetDesktopResolution(
+                Clamp(gfxMonitorIdx_, 0, Max(1, gfxSys->GetMonitorCount()) - 1));
+            if (desk.x_ > 0 && desk.y_ > 0) {
+                XmlSetInt(gfx, "monitorW", desk.x_);
+                XmlSetInt(gfx, "monitorH", desk.y_);
+            }
+            XmlSetInt(gfx, "windowW", gfxSys->GetWidth());
+            XmlSetInt(gfx, "windowH", gfxSys->GetHeight());
+        }
         XmlSetInt(gfx, "msaa",          kMsaa[Clamp(gfxMsaaIdx_, 0, 3)]);
         XmlSetInt(gfx, "msaaIdx",       gfxMsaaIdx_);
         XmlSetInt(gfx, "shadows",       gfxShadowIdx_);
@@ -9133,7 +9388,48 @@ private:
         bool resizable = (gfxDisplayMode_ == 0); // только в оконном режиме, чтобы WM 2-х мониторов не ломал borderless!
         int msaa = kMsaa[Clamp(gfxMsaaIdx_, 0, 3)];
 
+        // Размер не может превышать выбранный монитор. Здесь стояла та же
+        // дыра, что и на старте: пресет 4K на 1080p давал окно 3840x2160,
+        // и оно ложилось поперёк двух экранов.
+        // Рамка ВЫБРАННОГО монитора вместе с его смещением в виртуальных
+        // координатах: именно это смещение игнорировалось, и окно считалось
+        // от (0,0), то есть от угла первого экрана.
+        MonitorLayout::Rect monitorFrame;
+        {
+            WindowMonitor::Display display;
+            const bool haveLayout = WindowMonitor::Query(display);
+            if (haveLayout && display.current == gfxMonitorIdx_)
+                monitorFrame = display.bounds;
+            else {
+                const MonitorLayout::Rect bounds = WindowMonitor::DisplayBounds(gfxMonitorIdx_);
+                monitorFrame = bounds;
+            }
+            if (monitorFrame.w <= 0 || monitorFrame.h <= 0)
+                monitorFrame = MonitorLayout::Rect{0, 0, deskW, deskH};
+            // Рабочая область (без панелей) — для оконного режима.
+            if (!full) {
+                const MonitorLayout::Rect usable = WindowMonitor::UsableBounds(gfxMonitorIdx_);
+                if (usable.w > 0 && usable.h > 0) monitorFrame = usable;
+            }
+        }
+        deskW = monitorFrame.w;
+        deskH = monitorFrame.h;
+        MonitorLayout::ClampResolutionToMonitor(w, h, monitorFrame);
+        if (w <= 0 || h <= 0) { w = deskW; h = deskH; }
+
         gfx->SetMode(w, h, full, borderless, resizable, false, gfxVsync_, true, msaa, gfxMonitorIdx_, 0);
+
+        // Окно могло остаться на прежнем мониторе (или накрыть оба). Переносим
+        // его на выбранный: размер по размеру экрана, позиция — по центру.
+        const int target = MonitorLayout::ClampMonitor(gfxMonitorIdx_, monCount);
+        if (borderless || full) {
+            // Borderless и полный экран обязаны совпадать с монитором ровно,
+            // иначе часть кадра уходит на соседний экран.
+            WindowMonitor::MoveToMonitor(target, deskW, deskH);
+        } else {
+            WindowMonitor::MoveToMonitor(target, Min(w, deskW), Min(h, deskH));
+        }
+
         pendingUiRebuild_ = true;
         uiRebuildDelay_ = 0.08f;
         SyncMouseLock();
@@ -9667,6 +9963,13 @@ private:
         IntVector2 desk = gfx ? gfx->GetDesktopResolution(curMon) : IntVector2(1920, 1080);
         String monVal = "Монитор " + String(curMon + 1) + "/" + String(monCount) +
                         " (" + String(desk.x_ > 0 ? desk.x_ : 1920) + "×" + String(desk.y_ > 0 ? desk.y_ : 1080) + ")";
+        // Показываем реальный размер окна рядом с монитором: если окно шире
+        // экрана, игрок увидит это сразу, а не будет искать «растянутость».
+        if (gfx) {
+            const int ww = gfx->GetWidth(), wh = gfx->GetHeight();
+            if (ww > desk.x_ + 2 && desk.x_ > 0)
+                monVal += "  ⚠ ОКНО ШИРЕ ЭКРАНА " + String(ww) + "×" + String(wh);
+        }
 
         String vals[SETTINGS_ROW_COUNT];
         vals[0]  = qualNames[Clamp(gfxQualityIdx_, 0, 3)];

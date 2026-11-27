@@ -26,6 +26,16 @@ else()
     target_compile_options(test_core PRIVATE -O2 -Wall -Wextra -UNDEBUG)
 endif()
 add_test(NAME CorePhysicsAndAssets COMMAND test_core $<TARGET_FILE:gen_textures_4k>)
+
+# 3. Арифметика многомониторной раскладки: окно не должно растягиваться на
+#    два экрана и не должно теряться, когда второй монитор отключили.
+add_executable(test_monitor_layout tests/test_monitor_layout.cpp)
+if(MSVC)
+    target_compile_options(test_monitor_layout PRIVATE /O2 /W3 /EHsc /UNDEBUG)
+else()
+    target_compile_options(test_monitor_layout PRIVATE -O2 -Wall -Wextra -UNDEBUG)
+endif()
+add_test(NAME MonitorLayout COMMAND test_monitor_layout)
 set_tests_properties(CorePhysicsAndAssets PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     ENVIRONMENT "CHIKENGUN_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Data"
