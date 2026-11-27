@@ -111,6 +111,7 @@
 #include "CasinoSim.h"
 #include "CasinoAnimation.h"
 #include "CasinoAnim2.h"
+#include "CasinoCinematic.h"
 #include "PerfTier.h"
 #include "Feel.h"
 #include "BanyaUv.h"
@@ -1065,6 +1066,18 @@ private:
     float casinoSpinDur_ = 2.8f;
     float casinoResultFlash_ = 0.0f;
     float casinoCamModeBlend_ = 0.0f;
+    // ── Кинематика крупного плана рулетки ────────────────────────────────
+    // «Приближается колесо, видно как шарик крутится и что выпало, а потом
+    // полно». Время идёт непрерывно, фазы и камера считаются в
+    // CasinoCinematic.h (там же их проверяет test_casino_cine).
+    float casinoCineT_ = 0.0f;        // время кинематики
+    float casinoCineSpin_ = 2.85f;    // длительность текущего спина
+    bool  casinoCineActive_ = false;
+    // Пока показано крупное число, спин уже выплачен, но новый ставить
+    // нельзя. Отдельный флаг, потому что продлевать casinoSpinTimer_ нельзя:
+    // физика колеса приняла бы это за новый спин и шарик прыгнул обратно
+    // на трек.
+    bool  casinoCineHold_ = false;
     float casinoWheelAngle_ = 0.0f;
     float casinoWheelVel_ = 18.0f;
     float casinoBallAngle_ = 0.0f;
@@ -1087,7 +1100,7 @@ private:
     SharedPtr<Zone>       casinoZone_;
     SharedPtr<Node>       casinoCamNode_;
     SharedPtr<Light>      casinoChandelierLight_, casinoWheelSpot_, casinoNeonLightL_, casinoNeonLightR_;
-    SharedPtr<Node>       casinoChandelierNode_, casinoWheelHub_, casinoWheelDrum_, casinoWheelTurret_;
+    SharedPtr<Node>       casinoChandelierNode_, casinoWheelHub_, casinoWheelDrum_, casinoWheelTurret_, casinoPocketMarker_;
     SharedPtr<Node>       casinoBallPivot_, casinoBallNode_, casinoDollyNode_;
     SharedPtr<Node>       casinoChipStacks_[6];
     SharedPtr<Node>       casinoRoosterNode_, casinoRoosterHead_, casinoRoosterWingL_, casinoRoosterWingR_;
@@ -1103,6 +1116,18 @@ private:
     SharedPtr<BorderImage> casinoQuickRedBtn_, casinoQuickBlackBtn_, casinoQuickZeroBtn_, casinoQuickDoubleBtn_, casinoInfoBtn_, casinoDisclaimerBtn_;
     SharedPtr<BorderImage> casinoNumMinusBtn_, casinoNumPlusBtn_, casinoChipMinusBtn_, casinoChipPlusBtn_;
     SharedPtr<Text> casinoTitleText_, casinoRoflBannerText_, casinoBalanceText_, casinoStatusText_, casinoWheelText_, casinoBetText_, casinoResultText_, casinoStatsText_, casinoHistoryText_;
+    // Крупное число, которое выпало: видно только во время кинематики,
+    // крупным планом над колесом, и гаснет с возвратом камеры в зал.
+    float casinoCineFov_ = 0.0f;   // 0 = FOV не подменяется
+    bool  casinoCinePocketDone_ = false; // «щелчок» шарика в лунку уже сыгран
+    // Наводка камеры на выпавший сектор. Угол колеса за время подлёта уезжает
+    // на десятки градусов, а «скачок через 360» вообще развернул бы камеру
+    // назад, поэтому цель доводится плавно и по кратчайшей дуге.
+    float casinoCineAimDeg_ = 0.0f;
+    bool  casinoCineAimValid_ = false;
+    SharedPtr<BorderImage> casinoCineBadge_;
+    SharedPtr<Text>        casinoCineBadgeText_;
+    SharedPtr<Text>        casinoCineBadgeSub_;
 
     Arcade::PixelArcadeSim arcadeSim_;
     bool                   arcadeOpen_ = false;
@@ -11290,7 +11315,7 @@ private:
     }
 
     void AddRouletteChip(const Casino::Bet& bet) {
-        if (casinoSlotsMode_ || blackjackMode_ || casinoSpinTimer_ > 0.0f) return;
+        if (casinoSlotsMode_ || blackjackMode_ || casinoSpinTimer_ > 0.0f || casinoCineHold_) return;
         if (!rouletteRound_.Add(bet, casinoBalance_)) {
             PlayEmptyClickSound();
             if (casinoResultText_) casinoResultText_->SetText("Недостаточно фишек или лимит стола");
@@ -11400,6 +11425,9 @@ private:
         casinoWheelText_ = nullptr;
         casinoBetText_ = nullptr;
         casinoResultText_ = nullptr;
+        casinoCineBadge_ = nullptr;
+        casinoCineBadgeText_ = nullptr;
+        casinoCineBadgeSub_ = nullptr;
         casinoStatsText_ = nullptr;
         casinoHistoryText_ = nullptr;
     }
@@ -11558,6 +11586,7 @@ private:
         casinoCamNode_->SetPosition(Vector3(0.12f, 2.34f, -2.85f));
         casinoCamNode_->LookAt(Vector3(-0.08f, 1.02f, 0.10f));
         Camera* cam = casinoCamNode_->CreateComponent<Camera>();
+        casinoCineFov_ = 0.0f;
         cam->SetFov(50.0f);
         cam->SetNearClip(0.06f);
         cam->SetFarClip(80.0f);
@@ -11819,6 +11848,21 @@ private:
                    Vector3(0.055f, 0.028f, 0.055f), boxModel_, goldMat, Quaternion(0, a * 57.2958f + 45.0f, 0));
         }
 
+        // 8b. Анимированный маркер выпавшего сектора. Живёт на неподвижном
+        // хабе (не на барабане), поэтому его угол — сразу мировой. На общем
+        // виде почти невидим, в крупном плане — читаемое золотое кольцо с
+        // нужным номером ровно над лункой шарика.
+        casinoPocketMarker_ = SharedPtr<Node>(casinoWheelHub_->CreateChild("CasinoPocketMarker"));
+        casinoPocketMarker_->SetEnabled(false);
+        // Кольцо лежит на самом секторе: локальный Z — радиус 0.45, как у
+        // лунок и у шарика. Маркер вращается целиком, поэтому кольцо всегда
+        // оказывается ровно над нужным карманом.
+        addObj(casinoPocketMarker_.Get(), "PocketRing", Vector3(0.0f, 0.030f, 0.45f),
+               Vector3(0.30f, 0.012f, 0.30f), cylModel_, neonGoldMat.Get());
+        // Белая плашка-номер поверх кольца: издалека — точка, вблизи — метка.
+        addObj(casinoPocketMarker_.Get(), "PocketPlate", Vector3(0.0f, 0.040f, 0.45f),
+               Vector3(0.072f, 0.006f, 0.072f), boxModel_, ivoryBallMat.Get());
+
         // Вращающийся 37-секторный барабан рулетки!
         casinoWheelDrum_ = SharedPtr<Node>(casinoWheelHub_->CreateChild("CasinoWheelDrum"));
         casinoWheelDrum_->SetPosition(Vector3(0.0f, 0.095f, 0.0f));
@@ -12070,8 +12114,58 @@ private:
             Vector3 lp = rLook.Lerp(sLook, casinoCamModeBlend_);
             if (blackjackMode_) { cp = Vector3(3.3f, 2.8f, -2.1f); lp = Vector3(3.3f, 0.98f, 0); }
             cp = lp + Quaternion(0, miniOrbit_, 0) * (cp - lp);
+
+            // ── Крупный план рулетки ──────────────────────────────────────
+            // Наводка: цель — мировой угол выпавшего сектора, камера доводится
+            // к ней плавно, поэтому подлёт не даёт рывка при скачке колеса.
+            if (casinoCineActive_ && !casinoSlotsMode_ && !blackjackMode_) {
+                const float aimDeg = CasinoCine::WrapDeg360(casinoWheelAngle_ +
+                    Casino::WheelSectorAngleDeg(casinoBallTargetSector_));
+                if (!casinoCineAimValid_) {
+                    casinoCineAimDeg_ = aimDeg;
+                    casinoCineAimValid_ = true;
+                } else {
+                    casinoCineAimDeg_ = CasinoCine::ApproachAngleDeg(
+                        casinoCineAimDeg_, aimDeg, dt * 3.6f);
+                }
+            } else {
+                casinoCineAimValid_ = false;
+            }
+            // Камера подлетает к колесу, едет над выпавшим сектором и потом
+            // возвращается в полный вид зала. Вся кинематика — CasinoCine.
+            if (casinoCineActive_ && !casinoSlotsMode_ && !blackjackMode_) {
+                const CasinoCine::Frame cf =
+                    CasinoCine::Eval(casinoCineT_, casinoCineSpin_);
+                if (cf.finished || cf.closeUp <= 0.001f) {
+                    if (cf.finished) casinoCineActive_ = false;
+                    casinoCineFov_ = 0.0f;
+                } else {
+                    // Угол наводки уже приведён к 0..360 и сглажен выше.
+                    const float sectorRad = casinoCineAimDeg_ * 0.01745329f;
+                    CasinoCine::Camera base;
+                    base.pos = CasinoCine::MakeV3(cp.x_, cp.y_, cp.z_);
+                    base.look = CasinoCine::MakeV3(lp.x_, lp.y_, lp.z_);
+                    const CasinoCine::V3 wheel =
+                        CasinoCine::MakeV3(-0.62f, 0.99f, -0.02f);
+                    const CasinoCine::Camera mixed =
+                        CasinoCine::CameraFor(base, wheel, sectorRad, cf);
+                    cp = Vector3(mixed.pos.x, mixed.pos.y, mixed.pos.z);
+                    lp = Vector3(mixed.look.x, mixed.look.y, mixed.look.z);
+                    // Высота крупного плана (0.62 м над колесом) всегда выше
+                    // камеры зала по дуге — провалиться сквозь стол не может,
+                    // это проверено в test_casino_cine группой «Камера».
+                    // Вблизи колеса широкий угол раздувает перспективу — на
+                    // крупном плане сужаем поле зрения до 34°.
+                    casinoCineFov_ = Lerp(50.0f, 34.0f, cf.closeUp);
+                }
+            }
+
             casinoCamNode_->SetPosition(cp);
             casinoCamNode_->LookAt(lp);
+            if (Camera* cc = casinoCamNode_->GetComponent<Camera>()) {
+                const float wantFov = (casinoCineFov_ > 0.0f) ? casinoCineFov_ : 50.0f;
+                if (fabsf(cc->GetFov() - wantFov) > 0.01f) cc->SetFov(wantFov);
+            }
         }
 
         // 2. Светомузыка зала, люстра и прожектор
@@ -12085,18 +12179,41 @@ private:
             casinoWheelSpot_->GetNode()->LookAt(spotTarget);
             casinoWheelSpot_->SetBrightness((casinoResultFlash_ > 0.0f ? 3.2f : 2.35f) * pbr);
         }
+        // В крупном плане камера почти вплотную — прожектор сверху даёт
+        // жёсткий блик на хроме. Подмешиваем мягкий заполняющий свет.
+        if (casinoWheelSpot_) {
+            const float cineLift = casinoCineActive_
+                ? CasinoCine::Eval(casinoCineT_, casinoCineSpin_).closeUp : 0.0f;
+            if (cineLift > 0.01f) {
+                // Свет собираем в пятно над колесом: зал в отдалении не
+                // светится лишний раз, а номер и лунка читаются.
+                // Базовые 11 м / 56° — из CreateCasinoScene3D.
+                casinoWheelSpot_->SetRange(Lerp(11.0f, 3.4f, cineLift));
+                casinoWheelSpot_->SetFov(Lerp(56.0f, 40.0f, cineLift));
+            } else {
+                casinoWheelSpot_->SetRange(11.0f);
+                casinoWheelSpot_->SetFov(56.0f);
+            }
+        }
         if (casinoNeonLightL_) casinoNeonLightL_->SetBrightness(0.22f * pbr);
         if (casinoNeonLightR_) casinoNeonLightR_->SetBrightness(0.20f * pbr);
 
         // 3. Вращение 3D-колеса рулетки и физика хромированного шарика
         if (!casinoSlotsMode_ && casinoSpinTimer_ > 0.0f) {
             float prog = Clamp(1.0f - (casinoSpinTimer_ / Max(0.1f, casinoSpinDur_)), 0.0f, 1.0f);
-            casinoWheelVel_ = Lerp(245.0f, 34.0f, CasinoEaseOutCubic(prog));
+            // Замедление у лунки: колесо и шарик визуально тормозят в момент
+            // падения, но таймер спина идёт ровно — иначе кинематика
+            // разъедется с выплатой. Формула живёт в CasinoCinematic.h,
+            // её проверяет test_casino_cine.
+            const float progIn = casinoCineActive_
+                ? CasinoCine::TrackProgress(prog, casinoCineT_, casinoCineSpin_)
+                : prog;
+            casinoWheelVel_ = Lerp(245.0f, 34.0f, CasinoEaseOutCubic(progIn));
             casinoWheelAngle_ = fmodf(casinoWheelAngle_ + casinoWheelVel_ * dt, 360.0f);
 
             float targetSectorDeg = Casino::WheelSectorAngleDeg(casinoBallTargetSector_);
-            if (prog < 0.78f) {
-                float u = prog / 0.78f;
+            if (progIn < 0.78f) {
+                float u = progIn / 0.78f;
                 float spinsRemaining = (1.0f - CasinoEaseOutCubic(u));
                 float exactTargetWorld = casinoWheelAngle_ + targetSectorDeg;
                 // Шарик крутится в противоположную сторону по треку с подскоками перед падением в лунку
@@ -12122,6 +12239,23 @@ private:
         }
 
         if (casinoWheelDrum_) casinoWheelDrum_->SetRotation(Quaternion(0.0f, casinoWheelAngle_, 0.0f));
+
+        // Маркер выпавшего сектора: тот же мировой угол, что и у наводки
+        // камеры, поэтому кольцо всегда над шариком. Показываем только когда
+        // это видно — в крупном плане или в момент показа числа.
+        if (casinoPocketMarker_) {
+            const bool wannaShow = !casinoSlotsMode_ && !blackjackMode_ &&
+                casinoLastResult_ >= 0 &&
+                (casinoCineActive_ || casinoCineHold_);
+            casinoPocketMarker_->SetEnabled(wannaShow);
+            if (wannaShow) {
+                // Метка стоит на выпавшем секторе, как только шарик встал;
+                // пока он ещё катится, кольцо пульсирует на том же месте.
+                casinoPocketMarker_->SetRotation(Quaternion(0.0f, casinoCineAimDeg_, 0.0f));
+                const float pulse = 1.0f + 0.10f * sinf(timeAcc_ * 6.5f);
+                casinoPocketMarker_->SetScale(Vector3(pulse, 1.0f, pulse));
+            }
+        }
         if (casinoBallPivot_) casinoBallPivot_->SetRotation(Quaternion(0.0f, casinoBallAngle_, 0.0f));
 
         // 4. Живые 3D-стопки фишек (подстраиваются под размер ставки casinoBet_.amount)
@@ -12340,9 +12474,50 @@ private:
         }
     }
 
+    // ── Кинематика рулетки: плашка, число, громкость «щелчка» ────────────
+    // Камерой и фазами управляет CasinoCine в UpdateCasino3DScene, здесь —
+    // то, что видит игрок поверх кадра: крупное число выпавшего сектора.
+    void UpdateCasinoCine(float /*dt*/) {
+        if (!casinoCineBadge_) return;
+        bool show = false;
+        if (casinoCineActive_ && !casinoSlotsMode_ && !blackjackMode_ &&
+            casinoLastResult_ >= 0) {
+            const CasinoCine::Frame cf = CasinoCine::Eval(casinoCineT_, casinoCineSpin_);
+            // Плашка живёт всю выдержку и гаснет вместе с камерой, чтобы не
+            // висеть поверх полного вида зала.
+            if (cf.reveal > 0.02f) {
+                show = true;
+                const bool isRed = Casino::IsRed(casinoLastResult_);
+                const CasinoCine::BadgeColor bc =
+                    CasinoCine::ColorForNumber(casinoLastResult_, isRed);
+                const float pulse = CasinoCine::BadgePulse(cf.reveal);
+                const float a = Min(1.0f, cf.reveal * 1.6f);
+                casinoCineBadge_->SetVisible(true);
+                casinoCineBadge_->SetOpacity(a);
+                casinoCineBadge_->SetColor(Color(bc.r * 0.55f, bc.g * 0.55f,
+                                                bc.b * 0.55f, 0.92f));
+                if (casinoCineBadgeText_) {
+                    casinoCineBadgeText_->SetText(String(casinoLastResult_));
+                    casinoCineBadgeText_->SetOpacity(a);
+                    casinoCineBadgeText_->SetTextEffect(TE_STROKE);
+                    casinoCineBadgeText_->SetEffectStrokeThickness(
+                        Max(1, (int)(S(2.0f) * pulse + 0.5f)));
+                }
+                if (casinoCineBadgeSub_) {
+                    casinoCineBadgeSub_->SetText(casinoLastResult_ == 0 ? "ЗЕРО" :
+                        (isRed ? "КРАСНОЕ" : "ЧЁРНОЕ"));
+                    casinoCineBadgeSub_->SetOpacity(a);
+                }
+            }
+        }
+        if (!show) {
+            casinoCineBadge_->SetVisible(false);
+        }
+    }
+
     void UpdateCasinoVisuals() {
         if (!casinoPanel_) return;
-        const bool spinning = casinoSpinTimer_ > 0.0f;
+        const bool spinning = casinoSpinTimer_ > 0.0f || casinoCineHold_;
         const bool roulette = !casinoSlotsMode_ && !blackjackMode_;
         if (casinoDisclaimerBox_) casinoDisclaimerBox_->SetVisible(casinoDisclaimerVisible_);
         if (bettingLayout_) {
@@ -12535,6 +12710,33 @@ private:
         casinoResultText_->SetColor(Color(0.80f, 0.88f, 0.94f, 1.0f));
         StyleCrispText(casinoResultText_);
 
+        // 3b. Крупное число выпавшего сектора — только во время кинематики.
+        //     Цифра крупная, под ней цвет лунки: читается с дивана.
+        // Углом над нижним пультом: колесо в кадре по центру, плашка его не
+        // закрывает, а номер всё равно на виду.
+        const int cineH = S(178);
+        casinoCineBadge_ = casinoPanel_->CreateChild<BorderImage>();
+        casinoCineBadge_->SetPosition(S(26), sh - S(186) - S(14) - cineH - S(14));
+        casinoCineBadge_->SetSize(S(220), cineH);
+        casinoCineBadge_->SetColor(Color(0.02f, 0.04f, 0.04f, 0.86f));
+        casinoCineBadge_->SetVisible(false);
+
+        casinoCineBadgeText_ = casinoCineBadge_->CreateChild<Text>();
+        casinoCineBadgeText_->SetFont(font_, SF(84));
+        casinoCineBadgeText_->SetTextAlignment(HA_CENTER);
+        casinoCineBadgeText_->SetPosition(0, S(14));
+        casinoCineBadgeText_->SetWidth(S(220));
+        casinoCineBadgeText_->SetColor(Color(1.0f, 0.96f, 0.86f, 1.0f));
+        StyleCrispText(casinoCineBadgeText_, true);
+
+        casinoCineBadgeSub_ = casinoCineBadge_->CreateChild<Text>();
+        casinoCineBadgeSub_->SetFont(font_, SF(17));
+        casinoCineBadgeSub_->SetTextAlignment(HA_CENTER);
+        casinoCineBadgeSub_->SetPosition(0, S(126));
+        casinoCineBadgeSub_->SetWidth(S(220));
+        casinoCineBadgeSub_->SetColor(Color(0.86f, 0.92f, 0.88f, 1.0f));
+        StyleCrispText(casinoCineBadgeSub_);
+
         // 4. Нижний стеклянный пульт управления VIP-столом
         int botH = S(186);
         int botY = sh - botH - S(14);
@@ -12623,7 +12825,7 @@ private:
 
         Text* dSub = dCard->CreateChild<Text>();
         dSub->SetFont(font_, SF(17));
-        dSub->SetText("Клик — поставить фишку. A/D — номинал.\nU — отмена, C — очистить, SPACE — играть.\nF — поле, B — блэкджек, ПКМ — обзор.\n\nБлэкджек: H — ещё, N — хватит, X — дабл.\nТолько виртуальные фишки. Без покупки и вывода.");
+        dSub->SetText("Клик — поставить фишку. A/D — номинал.\nU — отмена, C — очистить, SPACE — играть.\nSPACE или клик во время показа числа — вернуть камеру.\nF — поле, B — блэкджек, ПКМ — обзор.\n\nБлэкджек: H — ещё, N — хватит, X — дабл.\nТолько виртуальные фишки. Без покупки и вывода.");
         dSub->SetTextAlignment(HA_CENTER);
         dSub->SetPosition(S(26), S(78));
         dSub->SetWidth(dw - S(52));
@@ -12674,6 +12876,15 @@ private:
             casinoSpinTimer_ = 0.0f;
             FinishCasinoSpin();
         }
+        casinoCineHold_ = false;   // вышли во время показа числа
+        // Кинематика могла остаться в полёте — гасим её, иначе при
+        // переоткрытии камера стартует «приклеенной» к колесу.
+        casinoCineActive_ = false;
+        casinoCineHold_ = false;
+        casinoCineAimValid_ = false;
+        casinoCineT_ = 0.0f;
+        casinoCineFov_ = 0.0f;
+        if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
         rouletteRound_.Clear();
         for (auto& f : casinoFlights_) { f.active=false; if (f.sprite) f.sprite->SetVisible(false); }
         casinoOutcomeActive_=false; if (casinoOutcomeText_) casinoOutcomeText_->SetVisible(false);
@@ -12700,7 +12911,7 @@ private:
             UpdateCasinoVisuals();
             return;
         }
-        if (casinoSpinTimer_ > 0.0f) return;
+        if (casinoSpinTimer_ > 0.0f || casinoCineHold_) return;
         casinoBet_.amount = std::max(1, casinoBet_.amount);
         if (!casinoSlotsMode_ && rouletteRound_.chips.empty()) {
             if (casinoResultText_) casinoResultText_->SetText("Поставьте фишки");
@@ -12755,6 +12966,14 @@ private:
             casinoBallSettled_ = false;
             casinoSpinDur_ = 2.85f;
             casinoSpinTimer_ = casinoSpinDur_;
+            // Взводим кинематику: подлёт к колесу -> слежение за шариком ->
+            // крупное число -> возврат в полный вид зала.
+            casinoCineSpin_ = casinoSpinDur_;
+            casinoCineT_ = 0.0f;
+            casinoCineActive_ = true;
+            casinoCinePocketDone_ = false;
+            casinoCineAimValid_ = false;   // наводку поймаем на первом кадре
+            if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
             PlayCasinoSound(casinoSpinSound_, 0.95f);
         }
         UpdateCasinoVisuals();
@@ -12846,12 +13065,55 @@ private:
 
     void UpdateCasino(float dt) {
         if (!casinoOpen_) return;
+        // Кинематика рулетки. Если игрок ушёл в слоты/блэкджек, гасим её:
+        // иначе камера продолжит ехать к колесу уже в другом зале.
+        if (casinoCineActive_ && (casinoSlotsMode_ || blackjackMode_)) {
+            casinoCineActive_ = false;
+            casinoCineHold_ = false;
+            casinoCineAimValid_ = false;
+            casinoCineFov_ = 0.0f;
+            if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
+        }
         UpdateCasino3DScene(dt);
         UpdateCasinoAnimations(dt);
         if (casinoSpinTimer_ > 0.0f) {
             casinoSpinTimer_ = Max(0.0f, casinoSpinTimer_ - dt);
-            if (casinoSpinTimer_ <= 0.0f) FinishCasinoSpin();
+            if (casinoSpinTimer_ <= 0.0f) {
+                // Сначала показываем, что выпало (кинематика), и только
+                // потом раздаём выплату. Иначе итог в нижнем пульте
+                // перебивает крупное число.
+                FinishCasinoSpin();
+                if (casinoCineActive_) casinoCineHold_ = true;
+            }
         }
+        if (casinoCineActive_) {
+            casinoCineT_ += dt;
+            const CasinoCine::Frame cf = CasinoCine::Eval(casinoCineT_, casinoCineSpin_);
+            // Шарик упал в лунку — отдельный короткий щелчок фишки. Именно он
+            // «закрывает» спин на слух, раньше выплаты.
+            if (cf.ballInPocket && !casinoCinePocketDone_) {
+                casinoCinePocketDone_ = true;
+                PlayCasinoSound(casinoChipSound_, 1.0f);
+            }
+            if (cf.finished) {
+                casinoCineActive_ = false;
+                casinoCineHold_ = false;
+            }
+        }
+        UpdateCasinoCine(dt);
+    }
+
+    // Пропуск выдержки крупного плана. Работает только в фазе REVEAL —
+    // посреди вращения шарика RETURN/SPACE остаются спином.
+    bool SkipCasinoReveal() {
+        if (!casinoCineActive_) return false;
+        const CasinoCine::Frame cf = CasinoCine::Eval(casinoCineT_, casinoCineSpin_);
+        if (cf.phase != CasinoCine::PH_REVEAL) return false;
+        casinoCineT_ = CasinoCine::FlyBackStart(casinoCineSpin_) + 0.001f;
+        casinoSpinTimer_ = 0.0f;
+        casinoCineHold_ = false;
+        if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
+        return true;
     }
 
     void HandleCasinoKey(int key) {
@@ -12865,7 +13127,14 @@ private:
             return;
         }
         if (key == KEY_ESCAPE || key == KEY_J) { CloseCasino(); return; }
-        if (casinoSpinTimer_ > 0.0f) return;
+        // Выдержку крупного плана можно пропустить: игрок уже увидел число,
+        // незачем держать его ещё пару секунд. Прыгаем сразу к возврату
+        // камеры; выплата не теряется — она уже начислена в FinishCasinoSpin.
+        if (casinoCineActive_ && (key == KEY_RETURN || key == KEY_SPACE) &&
+            SkipCasinoReveal()) {
+            return;
+        }
+        if (casinoSpinTimer_ > 0.0f || casinoCineHold_) return;
         if (!casinoSlotsMode_ && !blackjackMode_) {
             if (key == KEY_F) { bettingLayoutVisible_ = !bettingLayoutVisible_; UpdateCasinoVisuals(); return; }
             if (key == KEY_V) { AddRouletteChip(casinoBet_); return; }
@@ -12881,6 +13150,9 @@ private:
         }
         if (key == KEY_TAB) {
             rouletteRound_.Clear();
+            casinoCineActive_ = false;   // кинематика — только для рулетки
+            casinoCineHold_ = false;
+            if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
             casinoSlotsMode_ = !casinoSlotsMode_;
             PlayCasinoSound(casinoChipSound_, 0.75f);
             UpdateCasinoVisuals();
@@ -12936,7 +13208,10 @@ private:
             return;
         }
         if (HitUIElement(casinoCloseButton_, mp)) { CloseCasino(); return; }
-        if (casinoSpinTimer_ > 0.0f) return;
+        // Клик в любом месте во время показа числа = «уже видел», возвращаем
+        // камеру в зал. Иначе игрок жмёт кнопку спина и попадает в «Выход».
+        if (casinoCineActive_ && SkipCasinoReveal()) { PlayUISound(); return; }
+        if (casinoSpinTimer_ > 0.0f || casinoCineHold_) return;
 
         if (bettingLayout_ && bettingLayout_->IsVisible() && HitUIElement(bettingLayout_, mp)) {
             for (int z=0; z<49; ++z) if (HitUIElement(bettingCells_[z], mp)) {
@@ -12968,6 +13243,9 @@ private:
         }
         if (HitUIElement(casinoModeButton_.Get(), mp)) {
             rouletteRound_.Clear();
+            casinoCineActive_ = false;
+            casinoCineHold_ = false;
+            if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
             casinoSlotsMode_ = !casinoSlotsMode_;
             PlayCasinoSound(casinoChipSound_, 0.8f); UpdateCasinoVisuals(); return;
         }
