@@ -113,6 +113,7 @@
 #include "CasinoAnim2.h"
 #include "CasinoCinematic.h"
 #include "KeyboardMap.h"
+#include "RouletteWheel3D.h"
 #include "PerfTier.h"
 #include "Feel.h"
 #include "BanyaUv.h"
@@ -1107,6 +1108,7 @@ private:
     unsigned lastScanCode_ = 0;
     int      lastKeyCode_ = 0;
     bool     stitchedDesktopWarned_ = false;
+    int      gfxWindowStripe_ = -1;   // -1 = половин нет; 0/1 = половина склейки
     float casinoWheelAngle_ = 0.0f;
     float casinoWheelVel_ = 18.0f;
     float casinoBallAngle_ = 0.0f;
@@ -1129,6 +1131,9 @@ private:
     SharedPtr<Zone>       casinoZone_;
     SharedPtr<Node>       casinoCamNode_;
     SharedPtr<Light>      casinoChandelierLight_, casinoWheelSpot_, casinoNeonLightL_, casinoNeonLightR_;
+    // «Камни» по ободу колеса. Разгораются от скорости вращения — это и есть
+    // та самая ювелирная подсветка, которая не выглядит гирляндой.
+    Vector<SharedPtr<Node>> casinoRimJewels_;
     SharedPtr<Node>       casinoChandelierNode_, casinoWheelHub_, casinoWheelDrum_, casinoWheelTurret_, casinoPocketMarker_;
     SharedPtr<Node>       casinoBallPivot_, casinoBallNode_, casinoDollyNode_;
     SharedPtr<Node>       casinoChipStacks_[6];
@@ -6260,6 +6265,31 @@ private:
             // быстрый способ проверить, что игра действительно на своём экране.
             auto* gfx = GetSubsystem<Graphics>();
             const int count = gfx ? Max(1, gfx->GetMonitorCount()) : 1;
+
+            // Если драйвер объединил два экрана в один (Surround/Eyefinity),
+            // настоящих мониторов для SDL нет — зато есть половины. F10 в этом
+            // режиме просто переносит окно на другую половину: картинка целиком
+            // на одном физическом экране, без разрыва посередине.
+            WindowMonitor::Display stripeDisplay;
+            if (count == 1 && WindowMonitor::Query(stripeDisplay) &&
+                MonitorLayout::HStripeCount(stripeDisplay.desktop.w,
+                                            stripeDisplay.desktop.h) > 1) {
+                gfxWindowStripe_ = (gfxWindowStripe_ == 0) ? 1 : 0;
+                if (WindowMonitor::MoveToStripe(gfxWindowStripe_)) {
+                    pendingUiRebuild_ = true;
+                    uiRebuildDelay_ = 0.08f;
+                    PlayUISound();
+                    ShowMessage(String("Экраны объединены драйвером [F10]: окно на ") +
+                                (gfxWindowStripe_ == 0 ? "левой" : "правой") +
+                                " половине. Чтобы F10 видел два настоящих монитора, " +
+                                "раздели их в панели видеодрайвера.");
+                } else {
+                    gfxWindowStripe_ = (gfxWindowStripe_ == 0) ? 1 : 0;
+                }
+                return;
+            }
+
+            gfxWindowStripe_ = -1;   // нормальный мультимонитор — половин нет
             gfxMonitorIdx_ = MonitorLayout::CycleMonitor(gfxMonitorIdx_, count, 1);
             ApplyDisplayMode();
             SaveSettingsFile();
@@ -11758,6 +11788,13 @@ private:
         SharedPtr<Material> combMat        = MakePBR(Color(232, 28, 32),  0.34f, 0.04f);
         SharedPtr<Material> eyeMat         = MakePBR(Color(14, 12, 16),   0.12f, 0.15f);
         SharedPtr<Material> neonGoldMat    = MakeHDRGlow(Color(2.9f, 2.05f, 0.55f, 1.0f));
+        // Колесо как на референсе: чёрный рояльный лак с сатиновым золотом.
+        // Лак — почти зеркало (roughness 0.08), но БЕЗ свечения: пересвет на
+        // таком материале сразу превращает «дорого» в «дешёвый неон».
+        SharedPtr<Material> wheelLacquerMat =
+            MakePBR(Color(14, 15, 18), 0.07f, 0.06f, Color(0.02f, 0.02f, 0.03f));
+        SharedPtr<Material> wheelGoldMat  = MakePBR(Color(212, 168, 74), 0.24f, 0.92f);
+        SharedPtr<Material> wheelGoldDimMat = MakePBR(Color(150, 116, 52), 0.34f, 0.86f);
         SharedPtr<Material> neonCyanMat    = MakeHDRGlow(Color(0.45f, 2.6f, 2.3f, 1.0f));
         SharedPtr<Material> neonRubyMat    = MakeHDRGlow(Color(3.1f, 0.35f, 0.55f, 1.0f));
         SharedPtr<Material> neonEmeraldMat = MakeHDRGlow(Color(0.35f, 2.75f, 1.15f, 1.0f));
@@ -11900,16 +11937,28 @@ private:
         casinoWheelHub_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoWheelHub"));
         casinoWheelHub_->SetPosition(Vector3(-0.62f, 0.99f, -0.02f));
 
-        // Внешняя чаша из махагони и золотой дорожки шарика
-        addObj(casinoWheelHub_.Get(), "BowlMahog", Vector3(0.0f, 0.04f, 0.0f), Vector3(1.68f, 0.14f, 1.68f), cylModel_, mahogMat);
-        addObj(casinoWheelHub_.Get(), "BowlRimG",  Vector3(0.0f, 0.115f,0.0f), Vector3(1.56f, 0.04f, 1.56f), cylModel_, goldMat);
-        addObj(casinoWheelHub_.Get(), "BowlTrack", Vector3(0.0f, 0.09f, 0.0f), Vector3(1.44f, 0.04f, 1.44f), cylModel_, mahogMat);
+        // ── Внешняя чаша: чёрный рояльный лак + золото (как на референсе) ──
+        // Пять вложенных дисков дают профиль чаши: юбка, скат, борт с крупье,
+        // золотая дорожка шарика и обод. Высоты подобраны так, чтобы шарик
+        // визуально катился по треку (r ≈ 0.67) и падал внутрь барабана.
+        // Диаметры = 2 * радиус из RouletteWheel3D.h (там же их проверяет тест).
+        const float kD2 = 2.0f;
+        addObj(casinoWheelHub_.Get(), "BowlSkirt",  Vector3(0.0f, 0.010f, 0.0f), Vector3(Wheel3D::kSkirtR * kD2, 0.075f, Wheel3D::kSkirtR * kD2), cylModel_, wheelLacquerMat.Get());
+        addObj(casinoWheelHub_.Get(), "BowlBody",   Vector3(0.0f, 0.062f, 0.0f), Vector3(Wheel3D::kBodyR * kD2, 0.115f, Wheel3D::kBodyR * kD2), cylModel_, wheelLacquerMat.Get());
+        addObj(casinoWheelHub_.Get(), "BowlLip",    Vector3(0.0f, 0.122f, 0.0f), Vector3(Wheel3D::kLipR * kD2, 0.035f, Wheel3D::kLipR * kD2), cylModel_, wheelLacquerMat.Get());
+        // Золотой обод по краю — тонкий, чтобы не читался как пластик.
+        addObj(casinoWheelHub_.Get(), "BowlGoldRim", Vector3(0.0f, Wheel3D::kLipY, 0.0f), Vector3(Wheel3D::kGoldRimR * kD2, 0.012f, Wheel3D::kGoldRimR * kD2), cylModel_, wheelGoldMat.Get());
+        // Дорожка шарика: тот же лак, чуть темнее — видна по блику, а не по цвету.
+        addObj(casinoWheelHub_.Get(), "BallTrack",  Vector3(0.0f, Wheel3D::kTrackY, 0.0f), Vector3(Wheel3D::kTrackR * kD2, 0.028f, Wheel3D::kTrackR * kD2), cylModel_, wheelLacquerMat.Get());
+        addObj(casinoWheelHub_.Get(), "TrackInner", Vector3(0.0f, 0.124f, 0.0f), Vector3(Wheel3D::kTrackInnerR * kD2, 0.020f, Wheel3D::kTrackInnerR * kD2), cylModel_, wheelLacquerMat.Get());
 
-        // 8 ромбовидных золотых дефлекторов по внешнему треку
+        // 8 ромбовидных золотых дефлекторов по внешнему треку (как на фото:
+        // маленькие блики по борту, а не крупные «шипы»).
         for (int df = 0; df < 8; ++df) {
             float a = (float)df * (6.283185f / 8.0f);
-            addObj(casinoWheelHub_.Get(), "Deflector", Vector3(sinf(a) * 0.67f, 0.125f, cosf(a) * 0.67f),
-                   Vector3(0.055f, 0.028f, 0.055f), boxModel_, goldMat, Quaternion(0, a * 57.2958f + 45.0f, 0));
+            addObj(casinoWheelHub_.Get(), "Deflector", Vector3(sinf(a) * 0.715f, 0.140f, cosf(a) * 0.715f),
+                   Vector3(0.062f, 0.016f, 0.030f), boxModel_, wheelGoldMat.Get(),
+                   Quaternion(0, a * 57.2958f + 45.0f, 0));
         }
 
         // 8b. Анимированный маркер выпавшего сектора. Живёт на неподвижном
@@ -11921,49 +11970,128 @@ private:
         // Кольцо лежит на самом секторе: локальный Z — радиус 0.45, как у
         // лунок и у шарика. Маркер вращается целиком, поэтому кольцо всегда
         // оказывается ровно над нужным карманом.
-        addObj(casinoPocketMarker_.Get(), "PocketRing", Vector3(0.0f, 0.030f, 0.45f),
-               Vector3(0.30f, 0.012f, 0.30f), cylModel_, neonGoldMat.Get());
+        addObj(casinoPocketMarker_.Get(), "PocketRing",
+               Vector3(0.0f, 0.038f, Wheel3D::kPocketR),
+               Vector3(0.30f, 0.010f, 0.30f), cylModel_, neonGoldMat.Get());
         // Белая плашка-номер поверх кольца: издалека — точка, вблизи — метка.
-        addObj(casinoPocketMarker_.Get(), "PocketPlate", Vector3(0.0f, 0.040f, 0.45f),
-               Vector3(0.072f, 0.006f, 0.072f), boxModel_, ivoryBallMat.Get());
+        addObj(casinoPocketMarker_.Get(), "PocketPlate",
+               Vector3(0.0f, 0.046f, Wheel3D::kPocketR),
+               Vector3(0.062f, 0.006f, 0.062f), boxModel_, ivoryBallMat.Get());
+
+        // ── Ювелирный обод: 24 «камня» по борту ────────────────────────────
+        // Не гирлянда и не неон: тёплое золото, которое разгорается по мере
+        // раскрутки колеса и гаснет, когда оно стоит. Издалека читается как
+        // блики на латуни, вблизи — как инкрустация. Ровно тот эффект, ради
+        // которого на дорогих колёсах делают полированный борт.
+        casinoRimJewels_.Clear();
+        const int kJewels = 24;
+        for (int jw = 0; jw < kJewels; ++jw) {
+            const float ja = (float)jw * (360.0f / (float)kJewels);
+            float jx = 0.0f, jz = 0.0f;
+            Wheel3D::PolarToXZ(Wheel3D::kLipR - 0.028f, ja, jx, jz);
+            Node* jewel = addObj(casinoWheelHub_.Get(), "RimJewel",
+                                 Vector3(jx, Wheel3D::kLipY + 0.004f, jz),
+                                 Vector3(0.030f, 0.010f, 0.030f),
+                                 sphereModel_, wheelGoldMat.Get(),
+                                 Quaternion::IDENTITY, false);
+            casinoRimJewels_.Push(SharedPtr<Node>(jewel));
+        }
 
         // Вращающийся 37-секторный барабан рулетки!
         casinoWheelDrum_ = SharedPtr<Node>(casinoWheelHub_->CreateChild("CasinoWheelDrum"));
         casinoWheelDrum_->SetPosition(Vector3(0.0f, 0.095f, 0.0f));
         addObj(casinoWheelDrum_.Get(), "DrumPlate", Vector3(0.0f, -0.01f, 0.0f), Vector3(1.16f, 0.03f, 1.16f), cylModel_, goldMat);
 
+        // ── Кольцо лунок: как на референсе, с НОМЕРАМИ в каждом кармане ──────
+        // Раньше сектора были просто цветными брусками — отсюда и «хуйня».
+        // Теперь у каждой из 37 лунок нарисован номер: белым на красном и
+        // чёрном, тёмным на зелёном зеро. Текст лежит на небольшом наклоне
+        // (как в настоящем колесе) и вращается вместе с барабаном.
+        const float kPocketR    = Wheel3D::kPocketR;
+        const float kPocketW    = Wheel3D::kPocketW;
+        const float kPocketLen  = Wheel3D::kPocketLen;
+        SharedPtr<Material> numWhiteMat = MakePBR(Color(250, 248, 244), 0.45f, 0.0f);
+        SharedPtr<Material> numDarkMat  = MakePBR(Color(26, 26, 30),   0.45f, 0.0f);
+
         for (int s = 0; s < 37; ++s) {
-            int num = Casino::kEuropeanWheelOrder[s];
-            float angDeg = Casino::WheelSectorAngleDeg(s);
-            float angRad = angDeg * 0.01745329f;
-            Material* sMat = (num == 0) ? zeroSectorMat.Get() : (Casino::IsRed(num) ? redSectorMat.Get() : blackSectorMat.Get());
+            const int num = Casino::kEuropeanWheelOrder[s];
+            const float angDeg = Casino::WheelSectorAngleDeg(s);
+            const float angRad = angDeg * 0.01745329f;
+            Material* sMat = (num == 0) ? zeroSectorMat.Get()
+                                        : (Casino::IsRed(num) ? redSectorMat.Get() : blackSectorMat.Get());
 
-            // Цветной сектор + карман
-            Vector3 pSec(sinf(angRad) * 0.45f, 0.015f, cosf(angRad) * 0.45f);
-            addObj(casinoWheelDrum_.Get(), "WheelPocket", pSec, Vector3(0.072f, 0.026f, 0.24f), boxModel_, sMat, Quaternion(0, angDeg, 0));
+            Vector3 pSec(sinf(angRad) * kPocketR, 0.015f, cosf(angRad) * kPocketR);
+            addObj(casinoWheelDrum_.Get(), "WheelPocket", pSec,
+                   Vector3(kPocketW, 0.030f, kPocketLen), boxModel_, sMat,
+                   Quaternion(0, angDeg, 0));
 
-            // Золотая перегородка (fret) между карманами
-            float divRad = angRad + (3.14159265f / 37.0f);
-            Vector3 pDiv(sinf(divRad) * 0.45f, 0.028f, cosf(divRad) * 0.45f);
-            addObj(casinoWheelDrum_.Get(), "PocketFret", pDiv, Vector3(0.011f, 0.026f, 0.25f), boxModel_, goldMat, Quaternion(0, angDeg + (180.0f / 37.0f), 0));
+            // Номер в кармане. Текст повёрнут на 90° вокруг X, поэтому его
+            // локальная ось Y смотрит вверх, а строка идёт вдоль радиуса —
+            // при повороте на angDeg цифры читаются «от центра к борту»,
+            // ровно как на настоящем колесе.
+            {
+                Node* n = casinoWheelDrum_->CreateChild("PocketNumber");
+                const float nr = Wheel3D::kNumberR;   // ближе к внешнему краю
+                n->SetPosition(Vector3(sinf(angRad) * nr, Wheel3D::kNumberY, cosf(angRad) * nr));
+                n->SetRotation(Quaternion(90.0f, angDeg, 0.0f));
+                auto* t = n->CreateComponent<Text3D>();
+                t->SetViewMask(2u);                     // не мешает кликам по столу
+                t->SetFont(font_, 26);
+                t->SetText(String(num));
+                t->SetColor((num == 0) ? Color(0.10f, 0.34f, 0.18f, 1.0f)
+                                       : Color(1.0f, 0.99f, 0.96f, 1.0f));
+                t->SetAlignment(HA_CENTER, VA_CENTER);
+                // Тёмная подложка под цифрой делает её читаемой на красном.
+                if (num != 0) t->SetTextEffect(TE_STROKE);
+                n->SetScale(0.052f);
+            }
+
+            // Золотая перегородка (fret) между карманами — тонкая, как на фото.
+            const float divRad = angRad + (3.14159265f / 37.0f);
+            Vector3 pDiv(sinf(divRad) * kPocketR, 0.034f, cosf(divRad) * kPocketR);
+            addObj(casinoWheelDrum_.Get(), "PocketFret", pDiv,
+                   Vector3(Wheel3D::kFretW, 0.034f, kPocketLen + 0.012f), boxModel_, wheelGoldMat.Get(),
+                   Quaternion(0, angDeg + (180.0f / 37.0f), 0));
         }
 
-        // Внутренний золотой конус и 4-лучевой турет рулетки
-        addObj(casinoWheelDrum_.Get(), "WheelCone", Vector3(0.0f, 0.07f, 0.0f), Vector3(0.56f, 0.15f, 0.56f), coneModel_, goldMat);
+        // ── Внутренний конус-«воронка» и точеный турет ────────────────────
+        // Конус из двух ступеней: широкая воронка и узкая вставка. Один
+        // конус выглядел как колпак, а не как точёная деталь.
+        addObj(casinoWheelDrum_.Get(), "WheelFunnel", Vector3(0.0f, 0.075f, 0.0f), Vector3(0.62f, 0.16f, 0.62f), coneModel_, wheelGoldMat.Get());
+        addObj(casinoWheelDrum_.Get(), "FunnelCollar", Vector3(0.0f, 0.038f, 0.0f), Vector3(0.30f, 0.048f, 0.30f), cylModel_, wheelGoldMat.Get());
+        // Рёбра воронки — золотые спицы, дающие блики при вращении.
+        for (int sp = 0; sp < 8; ++sp) {
+            const float sa = (float)sp * (6.283185f / 8.0f);
+            addObj(casinoWheelDrum_.Get(), "FunnelRib",
+                   Vector3(sinf(sa) * 0.235f, 0.075f, cosf(sa) * 0.235f),
+                   Vector3(0.012f, 0.070f, 0.012f), boxModel_, wheelGoldDimMat.Get(),
+                   Quaternion(0, sa * 57.2958f, 0));
+        }
+
         casinoWheelTurret_ = SharedPtr<Node>(casinoWheelDrum_->CreateChild("WheelTurret"));
-        casinoWheelTurret_->SetPosition(Vector3(0.0f, 0.16f, 0.0f));
-        addObj(casinoWheelTurret_.Get(), "TurretSpire", Vector3(0.0f, 0.07f, 0.0f), Vector3(0.08f, 0.16f, 0.08f), coneModel_, goldMat);
-        addObj(casinoWheelTurret_.Get(), "TurretBarA",  Vector3(0.0f, 0.02f, 0.0f), Vector3(0.38f, 0.025f, 0.025f), boxModel_, goldMat);
-        addObj(casinoWheelTurret_.Get(), "TurretBarB",  Vector3(0.0f, 0.02f, 0.0f), Vector3(0.025f, 0.025f, 0.38f), boxModel_, goldMat);
+        casinoWheelTurret_->SetPosition(Vector3(0.0f, 0.145f, 0.0f));
+        // Ступенчатая башенка: три диска + шпиль, как точеный латунный турет.
+        addObj(casinoWheelTurret_.Get(), "TurretBase",  Vector3(0.0f, 0.000f, 0.0f), Vector3(0.115f, 0.030f, 0.115f), cylModel_, wheelGoldMat.Get());
+        addObj(casinoWheelTurret_.Get(), "TurretNeck",  Vector3(0.0f, 0.032f, 0.0f), Vector3(0.070f, 0.045f, 0.070f), cylModel_, wheelGoldMat.Get());
+        addObj(casinoWheelTurret_.Get(), "TurretHead",  Vector3(0.0f, 0.072f, 0.0f), Vector3(0.090f, 0.038f, 0.090f), cylModel_, wheelGoldMat.Get());
+        addObj(casinoWheelTurret_.Get(), "TurretSpire", Vector3(0.0f, 0.118f, 0.0f), Vector3(0.040f, 0.062f, 0.040f), coneModel_, wheelGoldMat.Get());
+        // Четыре луча-ручки: вращать колесо руками (декоративно, но читаемо).
+        addObj(casinoWheelTurret_.Get(), "TurretBarA",  Vector3(0.0f, 0.030f, 0.0f), Vector3(0.44f, 0.020f, 0.020f), boxModel_, wheelGoldMat.Get());
+        addObj(casinoWheelTurret_.Get(), "TurretBarB",  Vector3(0.0f, 0.030f, 0.0f), Vector3(0.020f, 0.020f, 0.44f), boxModel_, wheelGoldMat.Get());
         for (int tk = 0; tk < 4; ++tk) {
-            float ta = (float)tk * 1.570796f;
-            addObj(casinoWheelTurret_.Get(), "TurretKnob", Vector3(sinf(ta) * 0.19f, 0.02f, cosf(ta) * 0.19f), Vector3(0.055f, 0.055f, 0.055f), sphereModel_, goldMat);
+            const float ta = (float)tk * 1.570796f;
+            addObj(casinoWheelTurret_.Get(), "TurretKnob",
+                   Vector3(sinf(ta) * 0.215f, 0.030f, cosf(ta) * 0.215f),
+                   Vector3(0.048f, 0.048f, 0.048f), sphereModel_, wheelGoldMat.Get());
         }
 
         // Физичный 3D хромированный шарик рулетки
         casinoBallPivot_ = SharedPtr<Node>(casinoWheelHub_->CreateChild("CasinoBallPivot"));
-        casinoBallPivot_->SetPosition(Vector3(0.0f, 0.115f, 0.0f));
-        casinoBallNode_ = SharedPtr<Node>(addObj(casinoBallPivot_.Get(), "CasinoBall3D", Vector3(0.0f, 0.015f, 0.45f), Vector3(0.056f, 0.056f, 0.056f), sphereModel_, ivoryBallMat.Get()));
+        casinoBallPivot_->SetPosition(Vector3(0.0f, Wheel3D::kBallTrackY, 0.0f));
+        casinoBallNode_ = SharedPtr<Node>(addObj(casinoBallPivot_.Get(), "CasinoBall3D",
+            Vector3(0.0f, Wheel3D::kBallPocketY - Wheel3D::kBallTrackY, Wheel3D::kBallPocketRadius),
+            Vector3(Wheel3D::kBallR * 2.0f, Wheel3D::kBallR * 2.0f, Wheel3D::kBallR * 2.0f),
+            sphereModel_, ivoryBallMat.Get()));
 
         // 9. 3D Кочет-Крупье «Дон Чикено» за столом (чёрный смокинг, красная бабочка, монокль и зелёный козырёк!)
         casinoRoosterNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoCroupier"));
@@ -12282,27 +12410,54 @@ private:
                 float exactTargetWorld = casinoWheelAngle_ + targetSectorDeg;
                 // Шарик крутится в противоположную сторону по треку с подскоками перед падением в лунку
                 casinoBallAngle_ = exactTargetWorld - spinsRemaining * 1620.0f;
-                float rTrack = Lerp(0.70f, 0.45f, Clamp((u - 0.35f) / 0.65f, 0.0f, 1.0f));
-                float bounceY = 0.032f;
+                // Радиусы — из RouletteWheel3D.h: шарик идёт по дорожке
+                // (0.66) и падает в лунку (0.455). Высота считается от дна
+                // кармана, поэтому «подскок» читается как удар о перегородку.
+                const float drop = Wheel3D::kBallTrackRadius - Wheel3D::kBallPocketRadius;
+                float rTrack = Wheel3D::kBallTrackRadius - drop * Clamp((u - 0.35f) / 0.65f, 0.0f, 1.0f);
+                float bounceY = Wheel3D::kBallPocketY + 0.010f;
                 if (u > 0.42f) {
                     float bt = (u - 0.42f) / 0.58f;
                     bounceY += fabsf(sinf(bt * 15.708f)) * (1.0f - bt) * 0.075f;
                 }
-                if (casinoBallNode_) casinoBallNode_->SetPosition(Vector3(0.0f, bounceY, rTrack));
+                if (casinoBallNode_) casinoBallNode_->SetPosition(
+                    Vector3(0.0f, bounceY - Wheel3D::kBallTrackY, rTrack));
             } else {
                 casinoBallSettled_ = true;
                 casinoBallAngle_ = casinoWheelAngle_ + targetSectorDeg;
-                if (casinoBallNode_) casinoBallNode_->SetPosition(Vector3(0.0f, 0.015f, 0.45f));
+                if (casinoBallNode_) casinoBallNode_->SetPosition(
+                    Vector3(0.0f, Wheel3D::kBallPocketY - Wheel3D::kBallTrackY,
+                            Wheel3D::kBallPocketRadius));
             }
         } else {
             casinoWheelVel_ = Lerp(casinoWheelVel_, 18.0f, Clamp(dt * 2.5f, 0.0f, 1.0f));
             casinoWheelAngle_ = fmodf(casinoWheelAngle_ + casinoWheelVel_ * dt, 360.0f);
             float targetSectorDeg = Casino::WheelSectorAngleDeg(casinoBallTargetSector_);
             casinoBallAngle_ = casinoWheelAngle_ + targetSectorDeg;
-            if (casinoBallNode_) casinoBallNode_->SetPosition(Vector3(0.0f, 0.015f, 0.45f));
+            if (casinoBallNode_) casinoBallNode_->SetPosition(
+                Vector3(0.0f, Wheel3D::kBallPocketY - Wheel3D::kBallTrackY,
+                        Wheel3D::kBallPocketRadius));
         }
 
         if (casinoWheelDrum_) casinoWheelDrum_->SetRotation(Quaternion(0.0f, casinoWheelAngle_, 0.0f));
+
+        // ── Ювелирная подсветка обода ──────────────────────────────────────
+        // Яркость привязана к СКОРОСТИ колеса, а не к времени: стоит колесо —
+        // борт спокойный, раскрутилось — камни разгораются, и по ним видно
+        // замедление перед падением шарика. Плюс лёгкая волна по кругу,
+        // чтобы огоньки не мигали синхронно (это и выглядит дешёво).
+        if (!casinoRimJewels_.Empty()) {
+            const float spinSpeed = Clamp((casinoWheelVel_ - 20.0f) / 220.0f, 0.0f, 1.0f);
+            const float base = 0.35f + 0.65f * spinSpeed;
+            for (unsigned jw = 0; jw < (unsigned)casinoRimJewels_.Size(); ++jw) {
+                Node* jewel = casinoRimJewels_[jw];
+                if (!jewel) continue;
+                // Волна бежит по ободу со скоростью, пропорциональной спину.
+                const float wave = 0.5f + 0.5f * sinf((float)jw * 0.62f - timeAcc_ * (2.0f + 9.0f * spinSpeed));
+                const float s = 0.82f + 0.30f * base * wave;
+                jewel->SetScale(Vector3(0.030f * s, 0.010f * (0.7f + 0.6f * base), 0.030f * s));
+            }
+        }
 
         // Маркер выпавшего сектора: тот же мировой угол, что и у наводки
         // камеры, поэтому кольцо всегда над шариком. Показываем только когда

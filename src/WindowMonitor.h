@@ -131,6 +131,41 @@ inline void MoveToMonitor(int index, int wantW, int wantH) {
     if (wx < target.x || wy < target.y) SDL_SetWindowPosition(win, placed.x, placed.y);
 }
 
+// Поставить окно на половину «склеенного» дисплея (Surround/Eyefinity).
+// stripe = 0 — левая половина, 1 — правая. Если экран один и не склеен
+// (половин нет), функция ничего не делает: обычный монитор не трогаем.
+inline bool MoveToStripe(int stripe) {
+    SDL_Window* win = MainWindow();
+    if (!win) return false;
+    const int count = SDL_GetNumVideoDisplays();
+    if (count <= 0) return false;
+    const int disp = SDL_GetWindowDisplayIndex(win);
+    const int display = disp >= 0 ? disp : 0;
+
+    Rect frame = DisplayBounds(display);
+    if (frame.w <= 0 || frame.h <= 0) {
+        SDL_DisplayMode mode;
+        if (SDL_GetDesktopDisplayMode(display, &mode) != 0) return false;
+        frame = Rect{0, 0, mode.w, mode.h};
+    }
+    const int stripes = MonitorLayout::HStripeCount(frame.w, frame.h);
+    if (stripes <= 1) return false;   // не склеенный экран — делить нечего
+
+    SDL_SetWindowGrab(win, SDL_FALSE);
+    SDL_SetRelativeMouseMode(SDL_FALSE);
+
+    int w = 0, h = 0;
+    SDL_GetWindowSize(win, &w, &h);
+    const MonitorLayout::Rect placed =
+        MonitorLayout::FitWindowToStripe(frame, stripe, stripes, w, h);
+    if (!MonitorLayout::IsValidSize(placed.w, placed.h)) return false;
+
+    // Сначала снимаем «на весь экран», иначе WM проигнорирует размер.
+    SDL_SetWindowSize(win, placed.w, placed.h);
+    SDL_SetWindowPosition(win, placed.x, placed.y);
+    return true;
+}
+
 // Возврат «потерянного» окна: если оно целиком вне всех мониторов (например,
 // второй экран отключили, а координаты остались), ставим на основной.
 inline bool RecoverIfOffScreen() {
@@ -224,6 +259,7 @@ inline bool Query(Display&) { return false; }
 inline Rect DisplayBounds(int) { return Rect(); }
 inline Rect UsableBounds(int) { return Rect(); }
 inline void MoveToMonitor(int, int, int) {}
+inline bool MoveToStripe(int) { return false; }
 inline bool RecoverIfOffScreen() { return false; }
 inline bool CanGrabMouse() { return true; }
 inline bool HasFocus() { return true; }

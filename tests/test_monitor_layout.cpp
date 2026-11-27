@@ -171,6 +171,56 @@ int main() {
         check(StitchedHint()[0] != '\0', "подсказка игроку не пустая");
     }
 
+    // ── Половины склеенного экрана ────────────────────────────────────────
+    // «Видит два моника как 1, 3480 пикселей» — значит окно можно поставить
+    // на левую или правую половину этого одного «дисплея». Проверяем, что
+    // половины не перекрываются, вместе дают целое и окно в них помещается.
+    std::puts("== Половины склеенного экрана ==");
+    {
+        const Rect stitched{0, 0, 3480, 1080};
+        const Rect left  = StripeOf(stitched, 0, 2);
+        const Rect right = StripeOf(stitched, 1, 2);
+        check(left.x == 0 && left.w == 1740, "левая половина 0..1740");
+        check(right.x == 1740 && right.w == 1740, "правая половина 1740..3480");
+        check(left.w + right.w == stitched.w, "половины вместе дают всю ширину");
+        check(left.x + left.w == right.x, "половины стыкуются без разрыва");
+        check(left.h == stitched.h && right.h == stitched.h, "высота сохраняется");
+
+        // Нечётная ширина: остаток уходит правой, ничего не теряется.
+        const Rect odd{0, 0, 3839, 1080};
+        const Rect ol = StripeOf(odd, 0, 2), orr = StripeOf(odd, 1, 2);
+        check(ol.w + orr.w == 3839, "нечётная ширина делится без потерь");
+        check(ol.w == orr.w || orr.w == ol.w + 1, "разница не больше пикселя");
+
+        // Смещённый дисплей (второй экран справа от первого).
+        const Rect offset{1920, 0, 3480, 1080};
+        const Rect offL = StripeOf(offset, 0, 2);
+        check(offL.x == 1920 && offL.w == 1740, "смещение дисплея учитывается");
+
+        // Обычный монитор: половин нет, StripeOf возвращает его же.
+        check(HStripeCount(1920, 1080) == 1, "1920x1080 — без половин");
+        check(HStripeCount(3480, 1080) == 2, "3480x1080 — две половины");
+        check(HStripeCount(3840, 1080) == 2, "3840x1080 — две половины");
+        const Rect normal = StripeOf(Rect{0, 0, 1920, 1080}, 0, 1);
+        check(normal.w == 1920, "для одного монитора половин нет");
+
+        // Окно в половине: не шире половины и внутри неё.
+        const Rect win = FitWindowToStripe(stitched, 0, 2, 1920, 1080);
+        check(win.w <= 1740, "окно не шире половины");
+        check(win.x >= 0 && win.x + win.w <= 1740, "окно целиком в левой половине");
+        check(win.h <= 1080, "окно не выше экрана");
+        const Rect winR = FitWindowToStripe(stitched, 1, 2, 1920, 1080);
+        check(winR.x >= 1740 && winR.x + winR.w <= 3480, "правая половина: окно внутри");
+        // Запрос 0x0 — «во всю половину».
+        const Rect full = FitWindowToStripe(stitched, 1, 2, 0, 0);
+        check(full.w == 1740 && full.x == 1740, "0x0 -> вся правая половина");
+        // Номер половины за пределами — прижимается, а не вылетает.
+        const Rect clampHi = StripeOf(stitched, 9, 2);
+        const Rect clampLo = StripeOf(stitched, -3, 2);
+        check(clampHi.x == 1740, "номер половины сверху прижат");
+        check(clampLo.x == 0, "номер половины снизу прижат");
+    }
+
     std::printf("\nITOGO: %d proydeno, %d provaleno\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
