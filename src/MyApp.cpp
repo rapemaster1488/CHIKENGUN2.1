@@ -1073,6 +1073,11 @@ private:
     float casinoCineT_ = 0.0f;        // время кинематики
     float casinoCineSpin_ = 2.85f;    // длительность текущего спина
     bool  casinoCineActive_ = false;
+    // Пока показано крупное число, спин уже выплачен, но новый ставить
+    // нельзя. Отдельный флаг, потому что продлевать casinoSpinTimer_ нельзя:
+    // физика колеса приняла бы это за новый спин и шарик прыгнул обратно
+    // на трек.
+    bool  casinoCineHold_ = false;
     float casinoWheelAngle_ = 0.0f;
     float casinoWheelVel_ = 18.0f;
     float casinoBallAngle_ = 0.0f;
@@ -11305,7 +11310,7 @@ private:
     }
 
     void AddRouletteChip(const Casino::Bet& bet) {
-        if (casinoSlotsMode_ || blackjackMode_ || casinoSpinTimer_ > 0.0f) return;
+        if (casinoSlotsMode_ || blackjackMode_ || casinoSpinTimer_ > 0.0f || casinoCineHold_) return;
         if (!rouletteRound_.Add(bet, casinoBalance_)) {
             PlayEmptyClickSound();
             if (casinoResultText_) casinoResultText_->SetText("Недостаточно фишек или лимит стола");
@@ -12475,7 +12480,7 @@ private:
 
     void UpdateCasinoVisuals() {
         if (!casinoPanel_) return;
-        const bool spinning = casinoSpinTimer_ > 0.0f;
+        const bool spinning = casinoSpinTimer_ > 0.0f || casinoCineHold_;
         const bool roulette = !casinoSlotsMode_ && !blackjackMode_;
         if (casinoDisclaimerBox_) casinoDisclaimerBox_->SetVisible(casinoDisclaimerVisible_);
         if (bettingLayout_) {
@@ -12834,9 +12839,11 @@ private:
             casinoSpinTimer_ = 0.0f;
             FinishCasinoSpin();
         }
+        casinoCineHold_ = false;   // вышли во время показа числа
         // Кинематика могла остаться в полёте — гасим её, иначе при
         // переоткрытии камера стартует «приклеенной» к колесу.
         casinoCineActive_ = false;
+        casinoCineHold_ = false;
         casinoCineT_ = 0.0f;
         casinoCineFov_ = 0.0f;
         if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
@@ -12866,7 +12873,7 @@ private:
             UpdateCasinoVisuals();
             return;
         }
-        if (casinoSpinTimer_ > 0.0f) return;
+        if (casinoSpinTimer_ > 0.0f || casinoCineHold_) return;
         casinoBet_.amount = std::max(1, casinoBet_.amount);
         if (!casinoSlotsMode_ && rouletteRound_.chips.empty()) {
             if (casinoResultText_) casinoResultText_->SetText("Поставьте фишки");
@@ -13023,6 +13030,7 @@ private:
         // иначе камера продолжит ехать к колесу уже в другом зале.
         if (casinoCineActive_ && (casinoSlotsMode_ || blackjackMode_)) {
             casinoCineActive_ = false;
+            casinoCineHold_ = false;
             casinoCineFov_ = 0.0f;
             if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
         }
@@ -13035,7 +13043,7 @@ private:
                 // потом раздаём выплату. Иначе итог в нижнем пульте
                 // перебивает крупное число.
                 FinishCasinoSpin();
-                if (casinoCineActive_) casinoSpinTimer_ = CasinoCine::Timing::kRevealHold;
+                if (casinoCineActive_) casinoCineHold_ = true;
             }
         }
         if (casinoCineActive_) {
@@ -13047,7 +13055,10 @@ private:
                 casinoCinePocketDone_ = true;
                 PlayCasinoSound(casinoChipSound_, 1.0f);
             }
-            if (cf.finished) casinoCineActive_ = false;
+            if (cf.finished) {
+                casinoCineActive_ = false;
+                casinoCineHold_ = false;
+            }
         }
         UpdateCasinoCine(dt);
     }
@@ -13060,6 +13071,7 @@ private:
         if (cf.phase != CasinoCine::PH_REVEAL) return false;
         casinoCineT_ = CasinoCine::FlyBackStart(casinoCineSpin_) + 0.001f;
         casinoSpinTimer_ = 0.0f;
+        casinoCineHold_ = false;
         if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
         return true;
     }
@@ -13082,7 +13094,7 @@ private:
             SkipCasinoReveal()) {
             return;
         }
-        if (casinoSpinTimer_ > 0.0f) return;
+        if (casinoSpinTimer_ > 0.0f || casinoCineHold_) return;
         if (!casinoSlotsMode_ && !blackjackMode_) {
             if (key == KEY_F) { bettingLayoutVisible_ = !bettingLayoutVisible_; UpdateCasinoVisuals(); return; }
             if (key == KEY_V) { AddRouletteChip(casinoBet_); return; }
@@ -13099,6 +13111,7 @@ private:
         if (key == KEY_TAB) {
             rouletteRound_.Clear();
             casinoCineActive_ = false;   // кинематика — только для рулетки
+            casinoCineHold_ = false;
             if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
             casinoSlotsMode_ = !casinoSlotsMode_;
             PlayCasinoSound(casinoChipSound_, 0.75f);
@@ -13158,7 +13171,7 @@ private:
         // Клик в любом месте во время показа числа = «уже видел», возвращаем
         // камеру в зал. Иначе игрок жмёт кнопку спина и попадает в «Выход».
         if (casinoCineActive_ && SkipCasinoReveal()) { PlayUISound(); return; }
-        if (casinoSpinTimer_ > 0.0f) return;
+        if (casinoSpinTimer_ > 0.0f || casinoCineHold_) return;
 
         if (bettingLayout_ && bettingLayout_->IsVisible() && HitUIElement(bettingLayout_, mp)) {
             for (int z=0; z<49; ++z) if (HitUIElement(bettingCells_[z], mp)) {
@@ -13191,6 +13204,7 @@ private:
         if (HitUIElement(casinoModeButton_.Get(), mp)) {
             rouletteRound_.Clear();
             casinoCineActive_ = false;
+            casinoCineHold_ = false;
             if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
             casinoSlotsMode_ = !casinoSlotsMode_;
             PlayCasinoSound(casinoChipSound_, 0.8f); UpdateCasinoVisuals(); return;
