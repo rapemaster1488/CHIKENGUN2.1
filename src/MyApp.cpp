@@ -1100,7 +1100,7 @@ private:
     SharedPtr<Zone>       casinoZone_;
     SharedPtr<Node>       casinoCamNode_;
     SharedPtr<Light>      casinoChandelierLight_, casinoWheelSpot_, casinoNeonLightL_, casinoNeonLightR_;
-    SharedPtr<Node>       casinoChandelierNode_, casinoWheelHub_, casinoWheelDrum_, casinoWheelTurret_;
+    SharedPtr<Node>       casinoChandelierNode_, casinoWheelHub_, casinoWheelDrum_, casinoWheelTurret_, casinoPocketMarker_;
     SharedPtr<Node>       casinoBallPivot_, casinoBallNode_, casinoDollyNode_;
     SharedPtr<Node>       casinoChipStacks_[6];
     SharedPtr<Node>       casinoRoosterNode_, casinoRoosterHead_, casinoRoosterWingL_, casinoRoosterWingR_;
@@ -11848,6 +11848,21 @@ private:
                    Vector3(0.055f, 0.028f, 0.055f), boxModel_, goldMat, Quaternion(0, a * 57.2958f + 45.0f, 0));
         }
 
+        // 8b. Анимированный маркер выпавшего сектора. Живёт на неподвижном
+        // хабе (не на барабане), поэтому его угол — сразу мировой. На общем
+        // виде почти невидим, в крупном плане — читаемое золотое кольцо с
+        // нужным номером ровно над лункой шарика.
+        casinoPocketMarker_ = SharedPtr<Node>(casinoWheelHub_->CreateChild("CasinoPocketMarker"));
+        casinoPocketMarker_->SetEnabled(false);
+        // Кольцо лежит на самом секторе: локальный Z — радиус 0.45, как у
+        // лунок и у шарика. Маркер вращается целиком, поэтому кольцо всегда
+        // оказывается ровно над нужным карманом.
+        addObj(casinoPocketMarker_.Get(), "PocketRing", Vector3(0.0f, 0.030f, 0.45f),
+               Vector3(0.30f, 0.012f, 0.30f), cylModel_, neonGoldMat.Get());
+        // Белая плашка-номер поверх кольца: издалека — точка, вблизи — метка.
+        addObj(casinoPocketMarker_.Get(), "PocketPlate", Vector3(0.0f, 0.040f, 0.45f),
+               Vector3(0.072f, 0.006f, 0.072f), boxModel_, ivoryBallMat.Get());
+
         // Вращающийся 37-секторный барабан рулетки!
         casinoWheelDrum_ = SharedPtr<Node>(casinoWheelHub_->CreateChild("CasinoWheelDrum"));
         casinoWheelDrum_->SetPosition(Vector3(0.0f, 0.095f, 0.0f));
@@ -12233,6 +12248,23 @@ private:
         }
 
         if (casinoWheelDrum_) casinoWheelDrum_->SetRotation(Quaternion(0.0f, casinoWheelAngle_, 0.0f));
+
+        // Маркер выпавшего сектора: тот же мировой угол, что и у наводки
+        // камеры, поэтому кольцо всегда над шариком. Показываем только когда
+        // это видно — в крупном плане или в момент показа числа.
+        if (casinoPocketMarker_) {
+            const bool wannaShow = !casinoSlotsMode_ && !blackjackMode_ &&
+                casinoLastResult_ >= 0 &&
+                (casinoCineActive_ || casinoCineHold_);
+            casinoPocketMarker_->SetEnabled(wannaShow);
+            if (wannaShow) {
+                // Метка стоит на выпавшем секторе, как только шарик встал;
+                // пока он ещё катится, кольцо пульсирует на том же месте.
+                casinoPocketMarker_->SetRotation(Quaternion(0.0f, casinoCineAimDeg_, 0.0f));
+                const float pulse = 1.0f + 0.10f * sinf(timeAcc_ * 6.5f);
+                casinoPocketMarker_->SetScale(Vector3(pulse, 1.0f, pulse));
+            }
+        }
         if (casinoBallPivot_) casinoBallPivot_->SetRotation(Quaternion(0.0f, casinoBallAngle_, 0.0f));
 
         // 4. Живые 3D-стопки фишек (подстраиваются под размер ставки casinoBet_.amount)
