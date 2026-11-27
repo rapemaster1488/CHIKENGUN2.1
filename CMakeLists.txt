@@ -36,6 +36,17 @@ else()
     target_compile_options(test_monitor_layout PRIVATE -O2 -Wall -Wextra -UNDEBUG)
 endif()
 add_test(NAME MonitorLayout COMMAND test_monitor_layout)
+
+# 4. Кинематика крупного плана рулетки: подлёт -> слежение за шариком ->
+#    крупное число -> возврат в полный вид. Проверяется без Urho3D и без GPU,
+#    поэтому тайминги можно править, не запуская игру.
+add_executable(test_casino_cine tests/test_casino_cine.cpp)
+if(MSVC)
+    target_compile_options(test_casino_cine PRIVATE /O2 /W3 /EHsc /UNDEBUG)
+else()
+    target_compile_options(test_casino_cine PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
+endif()
+add_test(NAME CasinoCinematic COMMAND test_casino_cine)
 set_tests_properties(CorePhysicsAndAssets PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     ENVIRONMENT "CHIKENGUN_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Data"
