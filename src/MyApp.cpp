@@ -1073,8 +1073,6 @@ private:
     float casinoCineT_ = 0.0f;        // время кинематики
     float casinoCineSpin_ = 2.85f;    // длительность текущего спина
     bool  casinoCineActive_ = false;
-    float casinoCineSlowMo_ = 1.0f;   // 1 = норма, <1 = замедление у лунки
-    float casinoPocketPulse_ = 0.0f;  // вспышка сектора в момент падения шарика
     float casinoWheelAngle_ = 0.0f;
     float casinoWheelVel_ = 18.0f;
     float casinoBallAngle_ = 0.0f;
