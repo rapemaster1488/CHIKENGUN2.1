@@ -12203,20 +12203,11 @@ private:
             float prog = Clamp(1.0f - (casinoSpinTimer_ / Max(0.1f, casinoSpinDur_)), 0.0f, 1.0f);
             // Замедление у лунки: колесо и шарик визуально тормозят в момент
             // падения, но таймер спина идёт ровно — иначе кинематика
-            // разъедется с физикой. progIn медленнее там, где slowMo < 1.
-            float progIn = prog;
-            if (casinoCineActive_) {
-                const float slowT = casinoCineSpin_ * CasinoCine::Timing::kBallDropAt;
-                const float d = casinoCineT_ - slowT;
-                if (d > -0.25f && d < 0.85f) {
-                    // −0.25..0 — уже тормозим, 0..0.85 — плавно отпускаем.
-                    const float k = (d < 0.0f) ? (1.0f - (d + 0.25f) / 0.25f) : (1.0f - d / 0.85f);
-                    // progIn — «внутреннее» время спина; в зоне падения оно
-                    // отстаёт от реального, а после не догоняет рывком.
-                    progIn = prog - 0.055f * Clamp(k, 0.0f, 1.0f);
-                }
-            }
-            progIn = Clamp(progIn, 0.0f, 1.0f);
+            // разъедется с выплатой. Формула живёт в CasinoCinematic.h,
+            // её проверяет test_casino_cine.
+            const float progIn = casinoCineActive_
+                ? CasinoCine::TrackProgress(prog, casinoCineT_, casinoCineSpin_)
+                : prog;
             casinoWheelVel_ = Lerp(245.0f, 34.0f, CasinoEaseOutCubic(progIn));
             casinoWheelAngle_ = fmodf(casinoWheelAngle_ + casinoWheelVel_ * dt, 360.0f);
 

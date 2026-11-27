@@ -221,6 +221,33 @@ int main() {
         check(a >= 0.0f && a < 360.0f, "угол наводки остаётся в 0..360");
     }
 
+    // ── 12. Замедление у лунки: визуальное время отстаёт, но не ломается ────
+    std::puts("== 12. Замедление колеса у лунки ==");
+    {
+        const float spinDur = 2.85f;
+        const float dropAt = spinDur * Timing::kBallDropAt;
+        // Вне окна падения визуальный прогресс равен реальному.
+        check(near(TrackProgress(0.10f, 0.2f, spinDur), 0.10f), "до падения прогресс не тормозится");
+        check(near(TrackProgress(0.95f, spinDur + 1.0f, spinDur), 0.95f), "после падения прогресс догоняет");
+        // В окне падения — отстаёт, и отстаёт немного.
+        const float inWindow = TrackProgress(0.72f, dropAt, spinDur);
+        check(inWindow < 0.72f, "у лунки колесо притормаживает");
+        check(inWindow > 0.72f - 0.08f, "но не останавливается");
+        // Монотонность: отставание не даёт «прыжков назад» по времени.
+        float prev = -1.0f;
+        bool monotonic = true;
+        for (int i = 0; i < 400; ++i) {
+            const float t = (float)i * (spinDur + 0.5f) / 399.0f;
+            const float prog = Clamp01(t / spinDur);
+            const float v = TrackProgress(prog, t, spinDur);
+            if (v < prev - 1e-4f) monotonic = false;
+            prev = v;
+        }
+        check(monotonic, "визуальный прогресс не идёт назад");
+        check(TrackProgress(0.5f, 0.1f, 0.0f) >= 0.0f && TrackProgress(0.5f, 0.1f, 0.0f) <= 1.0f,
+              "вырожденная длительность спина не ломает прогресс");
+    }
+
     std::printf("\nITOGO: %d proydeno, %d provaleno\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
