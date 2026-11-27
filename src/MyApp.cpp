@@ -11846,8 +11846,8 @@ private:
                 bool hidden = side && i == 1 && blackjackActive_;
                 const auto& card = side ? blackjackDealer_[i] : blackjackPlayer_[i];
                 Node* n = blackjackCards_->CreateChild("Card");
-                n->SetPosition(Vector3(-1.10f - 0.11f + i * 0.22f, 1.006f + i * 0.002f,
-                                       -3.05f + (side ? 0.35f : -0.35f)));
+                n->SetPosition(Vector3(3.30f - 0.11f + i * 0.22f, 1.006f + i * 0.002f,
+                                       0.0f + (side ? 0.35f : -0.35f)));
                 const int oldCount = side ? shownDealerCards_ : shownPlayerCards_;
                 const bool reveal = side && i==1 && shownDealerHidden_ && !hidden;
                 if (i >= oldCount || reveal) {
@@ -11945,13 +11945,13 @@ private:
         // РЕГРЕССИЯ PR #44: зал вырос до 22 x 18, камера отъехала на 6 м, и
         // старый туман 8.5..24 начинал съедать ДАЛЬНИЙ КОНЕЦ стола (9.4 м от
         // камеры) — стол выглядел «замыленным». Отодвигаем туман за стол.
-        casinoZone_->SetFogStart(15.0f);
-        casinoZone_->SetFogEnd(38.0f);
+        casinoZone_->SetFogStart(8.5f);
+        casinoZone_->SetFogEnd(24.0f);
 
         // 2. Камера VIP-зала (плавный перелёт между 3D Рулеткой и 3D Автоматом 777)
         casinoCamNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoCamera"));
-        casinoCamNode_->SetPosition(Vector3(-3.55f, 2.34f, -1.48f));
-        casinoCamNode_->LookAt(Vector3(0.95f, 1.04f, 0.05f));
+        casinoCamNode_->SetPosition(Vector3(0.14f, 2.34f, -2.85f));
+        casinoCamNode_->LookAt(Vector3(-0.08f, 1.04f, 0.12f));
         Camera* cam = casinoCamNode_->CreateComponent<Camera>();
         casinoCineFov_ = 0.0f;
         cam->SetFov(50.0f);
@@ -12150,7 +12150,7 @@ private:
         };
 
         // 5. Архитектура VIP-зала: мраморный пол Nero Portoro, подиум, стены красного дерева, золотые колонны
-        addObj(nullptr, "CasinoFloorMarble", Vector3(0.0f, -0.10f, 0.0f), Vector3(22.0f, 0.20f, 22.0f), boxModel_, marbleMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoFloorMarble", Vector3(0.0f, -0.10f, 0.0f), Vector3(18.0f, 0.20f, 18.0f), boxModel_, marbleMat, Quaternion::IDENTITY, false);
         // Ковёр под столом обязан быть больше стола: стол вырос до 7.4 x 3.4,
         // старый ковёр 6.4 x 4.6 оказался бы уже стола и торчал из-под ножек.
         // Ковёр — свой клон сукна с тайлингом под его размер, иначе одна
@@ -12164,16 +12164,16 @@ private:
             carpetMat->SetShaderParameter("MatSpecColor", Vector4(0.30f, 0.45f, 0.36f, 24.0f));
             tintedMatStore_.Push(carpetMat);
         }
-        addObj(nullptr, "CasinoCarpetBorder",Vector3(-0.10f, 0.008f, 0.15f), Vector3(9.6f, 0.02f, 6.9f),  boxModel_, brassMat,   Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoCarpetFelt",  Vector3(-0.10f, 0.014f, 0.15f), Vector3(9.3f, 0.02f, 6.6f),  boxModel_, carpetMat ? carpetMat.Get() : feltMat,   Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoCarpetBorder",Vector3(-0.10f, 0.008f, 0.15f), Vector3(6.6f, 0.02f, 4.6f),  boxModel_, brassMat,   Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoCarpetFelt",  Vector3(-0.10f, 0.014f, 0.15f), Vector3(6.3f, 0.02f, 4.3f),  boxModel_, carpetMat ? carpetMat.Get() : feltMat,   Quaternion::IDENTITY, false);
 
         // Стены и золотой плинтус
         // Зал расширен под новый стол (8.2 x 3.4 + борта): стены 22 x 16,
         // потолок выше, иначе камера зала упирается в потолок, а стол — в стену.
-        addObj(nullptr, "CasinoBackWall",    Vector3(0.0f, 2.8f, 7.2f),  Vector3(22.0f, 5.6f, 0.28f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoLeftWall",    Vector3(-8.6f,2.8f, 0.2f),  Vector3(0.28f, 5.6f, 18.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoRightWall",   Vector3(8.6f, 2.8f, 0.2f),  Vector3(0.28f, 5.6f, 18.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
-        addObj(nullptr, "CasinoCeiling",     Vector3(0.0f, 5.60f,0.2f),  Vector3(22.0f, 0.24f,18.0f), boxModel_, marbleMat,Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoBackWall",    Vector3(0.0f, 2.4f, 5.2f),  Vector3(17.5f, 5.0f, 0.28f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoLeftWall",    Vector3(-6.4f,2.4f, 0.2f),  Vector3(0.28f, 5.0f, 14.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoRightWall",   Vector3(6.4f, 2.4f, 0.2f),  Vector3(0.28f, 5.0f, 14.0f), boxModel_, mahogMat, Quaternion::IDENTITY, false);
+        addObj(nullptr, "CasinoCeiling",     Vector3(0.0f, 4.85f,0.2f),  Vector3(17.5f, 0.24f,14.0f), boxModel_, marbleMat,Quaternion::IDENTITY, false);
         addObj(nullptr, "CasinoBackTrim",    Vector3(0.0f, 0.18f, 5.02f),Vector3(17.0f, 0.36f, 0.12f), boxModel_, goldMat,  Quaternion::IDENTITY, false);
 
         // 8 золотых каннелированных колонн по периметру зала + неоновые полосы
@@ -12221,8 +12221,11 @@ private:
         const float feltY = CasinoTable::kSurfaceY;
 
         // 7a. Основание: тумба под столом + массивный бортик по периметру.
-        addObj(nullptr, "TableBase", Vector3(0.0f, 0.40f, 0.0f),
-               Vector3(feltX * 0.42f, 0.80f, feltZ * 0.52f), boxModel_, mahogMat);
+        // Ноги — как в старой комнате: две тумбы по краям, а не один ящик.
+        addObj(nullptr, "TableBase", Vector3(-feltX * 0.30f, 0.40f, 0.0f),
+               Vector3(0.46f, 0.80f, feltZ * 0.72f), boxModel_, mahogMat);
+        addObj(nullptr, "TableBase2", Vector3(feltX * 0.30f, 0.40f, 0.0f),
+               Vector3(0.46f, 0.80f, feltZ * 0.72f), boxModel_, mahogMat);
         addObj(nullptr, "TableBaseGold", Vector3(0.0f, 0.045f, 0.0f),
                Vector3(feltX * 0.46f, 0.09f, feltZ * 0.58f), boxModel_, goldMat);
         // Бортик: четыре бруса вокруг сукна. Внешний край — махагони,
@@ -12308,7 +12311,7 @@ private:
         // Dedicated blackjack table beside the roulette: timber base, brass rail, felt.
         // Блэкджек — отдельный круглый стол в зале у правой стены. Раньше он
         // стоял вплотную к рулетке и декорации слипались в кучу.
-        const float bjX = -1.10f, bjZ = -3.05f;
+        const float bjX = 3.30f, bjZ = 0.0f;
         addObj(nullptr, "BlackjackBase", Vector3(bjX, 0.45f, bjZ), Vector3(1.5f, 0.9f, 1.5f), cylModel_, mahogMat);
         addObj(nullptr, "BlackjackRail", Vector3(bjX, 0.94f, bjZ), Vector3(2.05f, 0.12f, 2.05f), cylModel_, brassMat);
         addObj(nullptr, "BlackjackFelt", Vector3(bjX, 0.985f, bjZ), Vector3(1.90f, 0.04f, 1.90f), cylModel_, feltInlayMat);
@@ -12414,12 +12417,13 @@ private:
                 TableLabel(parent, label, Vector3(cx, y + 0.0148f, cz), 0.075f);
             }
         };
-        const float railZ = CasinoTable::kFeltZ * 0.5f + CasinoTable::kRailWidth * 0.5f;
+        // Лотки номиналов — на борту со стороны игрока (передний край, -X).
+        const float railX = -CasinoTable::kFeltX * 0.5f - CasinoTable::kRailWidth * 0.35f;
         for (int cs = 0; cs < 6; ++cs) {
-            // Лотки идут вдоль переднего борта (сторона игрока, -X),
-            // по шесть штук в ряд, симметрично по Z.
-            float x = -1.62f + (float)cs * 0.54f;
-            float z = -railZ;
+            // Шесть лотков в ряд ВДОЛЬ борта игрока (ось Z), а не поперёк:
+            // на компактном столе борт короткий, поперёк они не влезают.
+            float x = railX;
+            float z = -0.75f + (float)cs * 0.30f;
             casinoChipStacks_[cs] = SharedPtr<Node>(casinoScene_->CreateChild("CasinoChipTray"));
             casinoChipStacks_[cs]->SetPosition(Vector3(x, 0.0f, z));
             // Деревянный лоток с латунной окантовкой.
@@ -12480,15 +12484,18 @@ private:
         // Колесо — на своём подиуме у дилера (CasinoTable::kWheelX). Раньше
         // оно стояло в центре разметки: на большом столе это перекрывало
         // половину поля и мешало целиться мышкой.
+        // Чаша стоит на подиуме: его верх 0.918, чаша стартует оттуда.
         casinoWheelHub_->SetPosition(Vector3(CasinoTable::kWheelX,
                                              CasinoTable::kWheelY,
                                              CasinoTable::kWheelZ));
-        // Подиум под колесом: низкий махагони-постамент с латунным кантом,
-        // чтобы чаша не «плавала» на сукне.
-        addObj(nullptr, "WheelPodium", Vector3(CasinoTable::kWheelX, 0.955f, CasinoTable::kWheelZ),
-               Vector3(1.90f, 0.075f, 1.90f), cylModel_, mahogMat);
-        addObj(nullptr, "WheelPodiumRim", Vector3(CasinoTable::kWheelX, 1.000f, CasinoTable::kWheelZ),
-               Vector3(1.94f, 0.012f, 1.94f), cylModel_, brassMat, Quaternion::IDENTITY, false);
+        // Колесо в старой комнате стояло отдельным столом-постаментом рядом
+        // с рулеткой, а не на сукне. Возвращаем это: чаша на своём подиуме.
+        addObj(nullptr, "WheelPodium", Vector3(CasinoTable::kWheelX, 0.44f, CasinoTable::kWheelZ),
+               Vector3(0.30f, 0.88f, 0.30f), cylModel_, mahogMat);
+        addObj(nullptr, "WheelPodiumBase", Vector3(CasinoTable::kWheelX, 0.05f, CasinoTable::kWheelZ),
+               Vector3(1.05f, 0.10f, 1.05f), cylModel_, mahogMat);
+        addObj(nullptr, "WheelPodiumRim", Vector3(CasinoTable::kWheelX, 0.895f, CasinoTable::kWheelZ),
+               Vector3(1.98f, 0.045f, 1.98f), cylModel_, brassMat, Quaternion::IDENTITY, false);
 
         // ── Внешняя чаша: кольца, а НЕ сплошные диски ───────────────────────
         // ВОТ ГЛАВНАЯ ПРИЧИНА «жёлтого колеса без цифр»: раньше здесь стояли
@@ -12784,8 +12791,8 @@ private:
 
         // 10. Гигантский 3D Игровой Автомат «ROOSTER ROYAL 777» слева у витрины (для [TAB])
         casinoSlotMachineNode_ = SharedPtr<Node>(casinoScene_->CreateChild("CasinoSlot777"));
-        casinoSlotMachineNode_->SetPosition(Vector3(-1.05f, 0.0f, 3.35f));
-        casinoSlotMachineNode_->SetRotation(Quaternion(0.0f, -28.0f, 0.0f));
+        casinoSlotMachineNode_->SetPosition(Vector3(-3.35f, 0.0f, 0.65f));
+        casinoSlotMachineNode_->SetRotation(Quaternion(0.0f, 44.0f, 0.0f));
 
         // Пьедестал, туловище махагони, золотые колонны и витрина барабанов
         addObj(casinoSlotMachineNode_.Get(), "SlotPedestal", Vector3(0.0f, 0.46f, 0.0f),  Vector3(1.75f, 0.92f, 1.15f), boxModel_, mahogMat);
@@ -12957,22 +12964,22 @@ private:
             // Камера — со стороны игрока, стол вытянут в +X. Раньше она стояла
             // вплотную (2.85 м) к квадратному столу; теперь отодвинута так,
             // чтобы в кадр влезли и разметка, и колесо на подиуме у дилера.
-            // РЕГРЕССИЯ PR #44: я отъехал на 6 м и поднял камеру до 3 м —
-            // стол 8.2 м длиной ужался в узкую щель, и «всё стало плохо».
-            // Камера снова низкая и близкая: в кадре сукно + разметка,
-            // колесо читается на дальнем плане.
-            Vector3 rCam(-3.55f + sinf(timeAcc_ * 0.45f) * 0.09f,
-                         ballSuspense ? 2.12f : 2.34f,
-                         ballSuspense ? -1.25f : -1.48f);
-            Vector3 rLook(0.95f, 1.04f, 0.05f);
-            Vector3 sCam(-1.05f + sinf(timeAcc_ * 0.50f) * 0.05f,
-                         slotSuspense ? 1.70f : 1.86f,
-                         slotSuspense ? 1.30f : 1.55f);
-            Vector3 sLook(-1.05f, 1.62f, 3.30f);
+            // СТАРЫЙ ОБЗОР (эксперимент 2026-12). Игрок: «верни старый обзор».
+            // Камера стоит со стороны дилера, в 2.85 м от стола, и смотрит
+            // навстречу игроку — именно этот ракурс был до PR #44 и читался
+            // лучше: колесо крупным планом слева, разметка уходит вглубь.
+            Vector3 rCam(0.14f + sinf(timeAcc_ * 0.45f) * 0.08f,
+                         ballSuspense ? 2.02f : 2.34f,
+                         ballSuspense ? -2.30f : -2.85f);
+            Vector3 rLook(-0.08f, 1.04f, 0.12f);
+            Vector3 sCam(-1.62f + sinf(timeAcc_ * 0.50f) * 0.04f,
+                         slotSuspense ? 1.62f : 1.72f,
+                         slotSuspense ? -0.95f : -1.25f);
+            Vector3 sLook(-3.35f, 1.64f, 0.58f);
 
             Vector3 cp = rCam.Lerp(sCam, casinoCamModeBlend_);
             Vector3 lp = rLook.Lerp(sLook, casinoCamModeBlend_);
-            if (blackjackMode_) { cp = Vector3(-1.10f, 2.55f, -4.75f); lp = Vector3(-1.10f, 1.00f, -3.05f); }
+            if (blackjackMode_) { cp = Vector3(3.30f, 2.80f, -2.10f); lp = Vector3(3.30f, 0.98f, 0.0f); }
             cp = lp + Quaternion(0, miniOrbit_, 0) * (cp - lp);
 
             // ── Крупный план рулетки ──────────────────────────────────────
@@ -13161,9 +13168,9 @@ private:
             float lift = selected ? 0.010f + 0.006f * sinf(timeAcc_ * 4.0f + (float)cs) : 0.0f;
             casinoChipStacks_[cs]->SetScale(Vector3(1.0f, selected ? 1.15f : 1.0f, 1.0f));
             casinoChipStacks_[cs]->SetPosition(Vector3(
-                -1.62f + (float)cs * 0.54f,
+                -CasinoTable::kFeltX * 0.5f - CasinoTable::kRailWidth * 0.35f,
                 lift,
-                -(CasinoTable::kFeltZ * 0.5f + CasinoTable::kRailWidth * 0.5f)));
+                -0.72f + (float)cs * 0.29f));
         }
         if (casinoDollyNode_) {
             float dy = (casinoResultFlash_ > 0.0f && casinoOutcome_ > 0) ? (1.08f + fabsf(sinf(timeAcc_ * 7.0f)) * 0.16f) : 1.03f;
