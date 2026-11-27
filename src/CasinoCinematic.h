@@ -145,6 +145,29 @@ inline Frame Eval(float t, float spinDuration) {
     return f;
 }
 
+// ── Наводка на сектор ───────────────────────────────────────────────────────
+// Колесо за время подлёта уезжает на десятки градусов, а «переход через 360»
+// при наивной интерполяции развернул бы камеру назад. Доводим угол по
+// кратчайшей дуге с ограниченной скоростью.
+inline float WrapDeg360(float deg) {
+    deg = std::fmod(deg, 360.0f);
+    if (deg < 0.0f) deg += 360.0f;
+    return deg;
+}
+
+inline float ShortestDeltaDeg(float from, float to) {
+    float d = WrapDeg360(to) - WrapDeg360(from);
+    if (d > 180.0f) d -= 360.0f;
+    if (d < -180.0f) d += 360.0f;
+    return d;
+}
+
+// rate — доля оставшегося пути за кадр (0..1). Возвращает новый угол 0..360.
+inline float ApproachAngleDeg(float current, float target, float rate) {
+    const float k = Clamp01(rate);
+    return WrapDeg360(current + ShortestDeltaDeg(current, target) * k);
+}
+
 // ── Камера ──────────────────────────────────────────────────────────────────
 struct Camera {
     V3 pos;

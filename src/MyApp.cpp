@@ -1120,6 +1120,11 @@ private:
     // крупным планом над колесом, и гаснет с возвратом камеры в зал.
     float casinoCineFov_ = 0.0f;   // 0 = FOV не подменяется
     bool  casinoCinePocketDone_ = false; // «щелчок» шарика в лунку уже сыгран
+    // Наводка камеры на выпавший сектор. Угол колеса за время подлёта уезжает
+    // на десятки градусов, а «скачок через 360» вообще развернул бы камеру
+    // назад, поэтому цель доводится плавно и по кратчайшей дуге.
+    float casinoCineAimDeg_ = 0.0f;
+    bool  casinoCineAimValid_ = false;
     SharedPtr<BorderImage> casinoCineBadge_;
     SharedPtr<Text>        casinoCineBadgeText_;
     SharedPtr<Text>        casinoCineBadgeSub_;
@@ -12096,6 +12101,21 @@ private:
             cp = lp + Quaternion(0, miniOrbit_, 0) * (cp - lp);
 
             // ── Крупный план рулетки ──────────────────────────────────────
+            // Наводка: цель — мировой угол выпавшего сектора, камера доводится
+            // к ней плавно, поэтому подлёт не даёт рывка при скачке колеса.
+            if (casinoCineActive_ && !casinoSlotsMode_ && !blackjackMode_) {
+                const float aimDeg = CasinoCine::WrapDeg360(casinoWheelAngle_ +
+                    Casino::WheelSectorAngleDeg(casinoBallTargetSector_));
+                if (!casinoCineAimValid_) {
+                    casinoCineAimDeg_ = aimDeg;
+                    casinoCineAimValid_ = true;
+                } else {
+                    casinoCineAimDeg_ = CasinoCine::ApproachAngleDeg(
+                        casinoCineAimDeg_, aimDeg, dt * 3.6f);
+                }
+            } else {
+                casinoCineAimValid_ = false;
+            }
             // Камера подлетает к колесу, едет над выпавшим сектором и потом
             // возвращается в полный вид зала. Вся кинематика — CasinoCine.
             if (casinoCineActive_ && !casinoSlotsMode_ && !blackjackMode_) {
@@ -12105,14 +12125,8 @@ private:
                     if (cf.finished) casinoCineActive_ = false;
                     casinoCineFov_ = 0.0f;
                 } else {
-                    // Мировой угол ВЫПАВШЕГО сектора. casinoBallAngle_ может
-                    // быть отрицательным (шарик догоняет колесо с другой
-                    // стороны) — перед переводом в радианы приводим к 0..360,
-                    // иначе камера уедет в противоположный сектор.
-                    float worldDeg = fmodf(casinoWheelAngle_ +
-                        Casino::WheelSectorAngleDeg(casinoBallTargetSector_), 360.0f);
-                    if (worldDeg < 0.0f) worldDeg += 360.0f;
-                    const float sectorRad = worldDeg * 0.01745329f;
+                    // Угол наводки уже приведён к 0..360 и сглажен выше.
+                    const float sectorRad = casinoCineAimDeg_ * 0.01745329f;
                     CasinoCine::Camera base;
                     base.pos = CasinoCine::MakeV3(cp.x_, cp.y_, cp.z_);
                     base.look = CasinoCine::MakeV3(lp.x_, lp.y_, lp.z_);
@@ -12844,6 +12858,7 @@ private:
         // переоткрытии камера стартует «приклеенной» к колесу.
         casinoCineActive_ = false;
         casinoCineHold_ = false;
+        casinoCineAimValid_ = false;
         casinoCineT_ = 0.0f;
         casinoCineFov_ = 0.0f;
         if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
@@ -12934,6 +12949,7 @@ private:
             casinoCineT_ = 0.0f;
             casinoCineActive_ = true;
             casinoCinePocketDone_ = false;
+            casinoCineAimValid_ = false;   // наводку поймаем на первом кадре
             if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
             PlayCasinoSound(casinoSpinSound_, 0.95f);
         }
@@ -13031,6 +13047,7 @@ private:
         if (casinoCineActive_ && (casinoSlotsMode_ || blackjackMode_)) {
             casinoCineActive_ = false;
             casinoCineHold_ = false;
+            casinoCineAimValid_ = false;
             casinoCineFov_ = 0.0f;
             if (casinoCineBadge_) casinoCineBadge_->SetVisible(false);
         }

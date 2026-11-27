@@ -198,6 +198,29 @@ int main() {
         check(near(jf.reveal, 1.0f, 0.02f), "пропуск выдержки не теряет номер сразу");
     }
 
+    // ── 11. Наводка на сектор: без разворота через 360 ─────────────────────
+    std::puts("== 11. Наводка камеры по кратчайшей дуге ==");
+    {
+        check(near(WrapDeg360(370.0f), 10.0f), "370 -> 10");
+        check(near(WrapDeg360(-10.0f), 350.0f), "-10 -> 350");
+        check(near(ShortestDeltaDeg(350.0f, 10.0f), 20.0f), "с 350 на 10 — вперёд на 20");
+        check(near(ShortestDeltaDeg(10.0f, 350.0f), -20.0f), "с 10 на 350 — назад на 20");
+        check(std::fabs(ShortestDeltaDeg(0.0f, 180.0f)) <= 180.0f, "полуоборот не переворачивается");
+
+        // Сглаживание: один шаг не перескакивает цель и не даёт разворота.
+        float a = 350.0f;
+        float maxStep = 0.0f;
+        for (int i = 0; i < 240; ++i) {
+            const float prev = a;
+            a = ApproachAngleDeg(a, 10.0f, 0.06f);
+            maxStep = std::max(maxStep, std::fabs(ShortestDeltaDeg(prev, a)));
+        }
+        check(maxStep < 4.0f, "наводка идёт без рывков");
+        check(ShortestDeltaDeg(a, 10.0f) > -1.0f && ShortestDeltaDeg(a, 10.0f) < 1.0f,
+              "наводка доезжает до цели через 360");
+        check(a >= 0.0f && a < 360.0f, "угол наводки остаётся в 0..360");
+    }
+
     std::printf("\nITOGO: %d proydeno, %d provaleno\n", g_pass, g_fail);
     return g_fail == 0 ? 0 : 1;
 }
