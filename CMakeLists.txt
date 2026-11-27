@@ -75,6 +75,27 @@ else()
     target_compile_options(test_casino_table PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
 endif()
 add_test(NAME CasinoTable COMMAND test_casino_table)
+
+# Экономика скинов: баланс (цены, шансы, EV) и транзакции (покупка, продажа,
+# апгрейд, кейсы). Оба модуля без Urho3D, поэтому тесты собираются отдельно
+# и не требуют движка.
+add_executable(test_skin_economy tests/test_skin_economy.cpp)
+target_include_directories(test_skin_economy PRIVATE src)
+if (WIN32)
+    target_compile_options(test_skin_economy PRIVATE /O2 /W3 /EHsc /UNDEBUG)
+else()
+    target_compile_options(test_skin_economy PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
+endif()
+add_test(NAME SkinEconomy COMMAND test_skin_economy)
+
+add_executable(test_skin_inventory tests/test_skin_inventory.cpp)
+target_include_directories(test_skin_inventory PRIVATE src)
+if (WIN32)
+    target_compile_options(test_skin_inventory PRIVATE /O2 /W3 /EHsc /UNDEBUG)
+else()
+    target_compile_options(test_skin_inventory PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
+endif()
+add_test(NAME SkinInventory COMMAND test_skin_inventory)
 set_tests_properties(CorePhysicsAndAssets PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     ENVIRONMENT "CHIKENGUN_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Data"
@@ -317,10 +338,10 @@ if(BUILD_GAME)
 
         # На Windows URHO3D_DEFINE_APPLICATION_MAIN создаёт WinMain (если не задан URHO3D_WIN32_CONSOLE)
         if(WIN32)
-            add_executable(MyShooter WIN32 src/MyApp.cpp)
+            add_executable(MyShooter WIN32 src/MyApp.cpp src/SkinShopUI.cpp)
             target_compile_definitions(MyShooter PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
         else()
-            add_executable(MyShooter src/MyApp.cpp)
+            add_executable(MyShooter src/MyApp.cpp src/SkinShopUI.cpp)
         endif()
 
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
