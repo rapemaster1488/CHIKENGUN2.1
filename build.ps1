@@ -38,7 +38,7 @@ if ($TestsOnly) {
     Invoke-Checked { cmake -S $Root -B $BuildDir -DBUILD_GAME=OFF -DTEX_SIZE=$TexSize } "CMake configure failed"
     # ctest гоняет ВСЕ зарегистрированные тесты, поэтому собрать надо все их
     # цели, а не только test_core: иначе ctest падает на отсутствующем exe.
-    Invoke-Checked { cmake --build $BuildDir --config Release --parallel $Jobs --target gen_textures_4k test_core test_monitor_layout test_casino_cine test_keyboard_map test_roulette_wheel3d } "CMake build failed"
+    Invoke-Checked { cmake --build $BuildDir --config Release --parallel $Jobs --target gen_textures_4k test_core test_monitor_layout test_casino_cine test_keyboard_map test_roulette_wheel3d test_casino_table } "CMake build failed"
     Invoke-Checked { ctest --test-dir $BuildDir -C Release --output-on-failure } "CTest failed"
     exit 0
 }
