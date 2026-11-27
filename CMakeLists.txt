@@ -47,6 +47,16 @@ else()
     target_compile_options(test_casino_cine PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
 endif()
 add_test(NAME CasinoCinematic COMMAND test_casino_cine)
+
+# 5. Раскладко-независимые клавиши: русская раскладка не должна съедать
+#    управление (симптом «работает только ESC/SPACE/ENTER»).
+add_executable(test_keyboard_map tests/test_keyboard_map.cpp)
+if(MSVC)
+    target_compile_options(test_keyboard_map PRIVATE /O2 /W3 /EHsc /UNDEBUG)
+else()
+    target_compile_options(test_keyboard_map PRIVATE -O2 -Wall -Wextra -Werror -UNDEBUG)
+endif()
+add_test(NAME KeyboardMap COMMAND test_keyboard_map)
 set_tests_properties(CorePhysicsAndAssets PROPERTIES
     WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
     ENVIRONMENT "CHIKENGUN_DATA_DIR=${CMAKE_CURRENT_SOURCE_DIR}/Data"
